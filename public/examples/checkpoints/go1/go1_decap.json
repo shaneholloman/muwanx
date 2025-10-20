@@ -1,4 +1,5 @@
 {
+    "_comment": "Go1 Decap policy using composable atomic observations (total: 42 dims)",
     "onnx": {
         "meta": {
             "in_keys": [
@@ -21,8 +22,35 @@
     "obs_config": {
         "obs_history": [
             {
-                "name": "DecapObs",
-                "joint_names": "isaac"
+                "name": "ProjectedGravity",
+                "joint_name": "floating_base_joint",
+                "history_steps": 1,
+                "_comment": "3 dims: gravity in base frame"
+            },
+            {
+                "name": "SimpleVelocityCommand",
+                "scale": [2.0, 2.0, 0.25],
+                "_comment": "3 dims: velocity commands scaled"
+            },
+            {
+                "name": "JointPositions",
+                "joint_names": "isaac",
+                "subtract_default": true,
+                "scale": 1.0,
+                "history_steps": 1,
+                "_comment": "12 dims: joint positions relative to default"
+            },
+            {
+                "name": "JointVelocities",
+                "joint_names": "isaac",
+                "scale": 0.05,
+                "history_steps": 1,
+                "_comment": "12 dims: joint velocities scaled"
+            },
+            {
+                "name": "PreviousActions",
+                "history_steps": 1,
+                "_comment": "12 dims: previous actions"
             }
         ]
     },

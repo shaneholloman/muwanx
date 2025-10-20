@@ -27,9 +27,12 @@
       "id": "3",
       "name": "G1",
       "model_xml": "unitree_g1/scene.xml",
-      "asset_meta": null,
-      "default_policy": null,
-      "policies": []
+      "asset_meta": "./examples/checkpoints/unitree_g1/asset_meta.json",
+      "default_policy": "basic",
+      "policies": [
+        { "id": "loco", "name": "Walk", "path": "./examples/checkpoints/unitree_g1/g1_velocity.json", "ui_controls": [] },
+        { "id": "balance", "name": "One Leg", "path": "./examples/checkpoints/unitree_g1/single_foot_balance.json", "ui_controls": [] }
+      ]
     }
   ]
 }
