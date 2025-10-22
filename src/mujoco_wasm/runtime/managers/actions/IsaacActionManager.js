@@ -206,7 +206,7 @@ export class IsaacActionManager extends BaseManager {
     }
 
     dispose() {
-        this.this.mjModel = null;
+        this.mjModel = null;
         this.mjData = null;
         this.assetMeta = null;
     }
