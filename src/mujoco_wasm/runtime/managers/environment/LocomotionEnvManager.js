@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BaseManager } from '../BaseManager.js';
-import { DragStateManager } from '../../../examples/utils/DragStateManager.js';
+import { DragStateManager } from '../../utils/DragStateManager.js';
 import { getPosition, getQuaternion, toMujocoPos } from '../../utils/mujocoScene.js';
 
 export class LocomotionEnvManager extends BaseManager {

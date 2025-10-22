@@ -315,7 +315,13 @@
 </template>
 
 <script>
-import { MujocoRuntime, GoCommandManager, IsaacActionManager, PassiveActionManager, TrajectoryActionManager, ConfigObservationManager, LocomotionEnvManager } from '@/mujoco_wasm/examples/main.js';
+import { MujocoRuntime } from '@/mujoco_wasm/runtime/MujocoRuntime.js';
+import { GoCommandManager } from '@/mujoco_wasm/runtime/managers/commands/GoCommandManager.js';
+import { IsaacActionManager } from '@/mujoco_wasm/runtime/managers/actions/IsaacActionManager.js';
+import { PassiveActionManager } from '@/mujoco_wasm/runtime/managers/actions/PassiveActionManager.js';
+import { TrajectoryActionManager } from '@/mujoco_wasm/runtime/managers/actions/TrajectoryActionManager.js';
+import { ConfigObservationManager } from '@/mujoco_wasm/runtime/managers/observations/ConfigObservationManager.js';
+import { LocomotionEnvManager } from '@/mujoco_wasm/runtime/managers/environment/LocomotionEnvManager.js';
 import loadMujoco from '@/mujoco_wasm/dist/mujoco_wasm.js';
 import { markRaw, nextTick } from 'vue';
 

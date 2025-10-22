@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Reflector } from '../../examples/utils/Reflector.js';
+import { Reflector } from './Reflector.js';
 import { mujocoAssetCollector } from '../../utils/mujocoAssetCollector.js';
 
 const SCENE_BASE_URL = './examples/scenes';

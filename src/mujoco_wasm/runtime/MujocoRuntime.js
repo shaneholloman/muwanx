@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { downloadExampleScenesFolder, getPosition, getQuaternion, loadSceneFromURL } from './utils/mujocoScene.js';
-import { ONNXModule } from '../examples/onnxHelper.js';
+import { ONNXModule } from './utils/onnxHelper.js';
 import { TrajectoryActionManager } from './managers/actions/TrajectoryActionManager.js';
 
 const DEFAULT_CONTAINER_ID = 'mujoco-container';
