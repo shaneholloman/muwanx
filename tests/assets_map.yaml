@@ -1,5 +1,4 @@
 testCases:
-
   - name: unitree_go2
     model_xml: public/examples/scenes/unitree_go2/scene.xml
     assets:

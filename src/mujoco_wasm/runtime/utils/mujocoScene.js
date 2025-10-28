@@ -7,145 +7,145 @@ const BINARY_EXTENSIONS = ['.png', '.stl', '.skn', '.mjb', '.msh', '.npy'];
 const sceneDownloadPromises = new Map();
 
 function isBinaryAsset(path) {
-    const lower = path.toLowerCase();
-    return BINARY_EXTENSIONS.some(ext => lower.endsWith(ext));
+  const lower = path.toLowerCase();
+  return BINARY_EXTENSIONS.some(ext => lower.endsWith(ext));
 }
 
 function ensureWorkingDirectories(mujoco, segments) {
-    if (!segments.length) {
-        return;
+  if (!segments.length) {
+    return;
+  }
+  let working = '/working';
+  for (const segment of segments) {
+    working += `/${segment}`;
+    if (!mujoco.FS.analyzePath(working).exists) {
+      mujoco.FS.mkdir(working);
     }
-    let working = '/working';
-    for (const segment of segments) {
-        working += `/${segment}`;
-        if (!mujoco.FS.analyzePath(working).exists) {
-            mujoco.FS.mkdir(working);
-        }
-    }
+  }
 }
 
 function normalizePathSegments(path) {
-    if (!path) {
-        return '';
+  if (!path) {
+    return '';
+  }
+  const parts = path.split('/');
+  const resolved = [];
+  for (const part of parts) {
+    if (!part || part === '.') {
+      continue;
     }
-    const parts = path.split('/');
-    const resolved = [];
-    for (const part of parts) {
-        if (!part || part === '.') {
-            continue;
-        }
-        if (part === '..') {
-            if (resolved.length) {
-                resolved.pop();
-            }
-            continue;
-        }
-        resolved.push(part);
+    if (part === '..') {
+      if (resolved.length) {
+        resolved.pop();
+      }
+      continue;
     }
-    return resolved.join('/');
+    resolved.push(part);
+  }
+  return resolved.join('/');
 }
 
 function resolveAssetPath(xmlDirectory, assetPath) {
-    if (!assetPath) {
-        return null;
-    }
+  if (!assetPath) {
+    return null;
+  }
 
-    let cleaned = assetPath.trim();
-    if (!cleaned) {
-        return null;
-    }
+  let cleaned = assetPath.trim();
+  if (!cleaned) {
+    return null;
+  }
 
-    cleaned = cleaned.replace(/^(\.\/)+/, '');
-    cleaned = cleaned.replace(/^public\//, '');
-    if (cleaned.startsWith('/')) {
-        cleaned = cleaned.slice(1);
-    }
+  cleaned = cleaned.replace(/^(\.\/)+/, '');
+  cleaned = cleaned.replace(/^public\//, '');
+  if (cleaned.startsWith('/')) {
+    cleaned = cleaned.slice(1);
+  }
 
-    const normalized = normalizePathSegments(cleaned);
-    if (normalized.startsWith('examples/')) {
-        return normalized;
-    }
+  const normalized = normalizePathSegments(cleaned);
+  if (normalized.startsWith('examples/')) {
+    return normalized;
+  }
 
-    const joined = normalizePathSegments(`${xmlDirectory}/${cleaned}`);
-    return joined || normalized || null;
+  const joined = normalizePathSegments(`${xmlDirectory}/${cleaned}`);
+  return joined || normalized || null;
 }
 
 // Create texture supporting both RGBA and RGB formats with caching
 function createBaseTexture(mjModel, texId) {
-    if (!mjModel || texId < 0) {
-        return null;
-    }
+  if (!mjModel || texId < 0) {
+    return null;
+  }
 
-    const width = mjModel.tex_width ? mjModel.tex_width[texId] : 0;
-    const height = mjModel.tex_height ? mjModel.tex_height[texId] : 0;
-    if (!width || !height) {
-        return null;
-    }
+  const width = mjModel.tex_width ? mjModel.tex_width[texId] : 0;
+  const height = mjModel.tex_height ? mjModel.tex_height[texId] : 0;
+  if (!width || !height) {
+    return null;
+  }
 
-    const texAdr = mjModel.tex_adr ? mjModel.tex_adr[texId] : 0;
-    const pixelCount = width * height;
+  const texAdr = mjModel.tex_adr ? mjModel.tex_adr[texId] : 0;
+  const pixelCount = width * height;
 
-    let textureData = new Uint8Array(pixelCount * 4);
-    let hasValidData = false;
+  let textureData = new Uint8Array(pixelCount * 4);
+  let hasValidData = false;
 
-    // Try RGBA format first
-    if (mjModel.tex_rgba && mjModel.tex_rgba.length >= (texAdr + pixelCount) * 4) {
-        const rgbaSource = mjModel.tex_rgba.subarray(texAdr * 4, (texAdr + pixelCount) * 4);
-        textureData.set(rgbaSource);
-        hasValidData = true;
+  // Try RGBA format first
+  if (mjModel.tex_rgba && mjModel.tex_rgba.length >= (texAdr + pixelCount) * 4) {
+    const rgbaSource = mjModel.tex_rgba.subarray(texAdr * 4, (texAdr + pixelCount) * 4);
+    textureData.set(rgbaSource);
+    hasValidData = true;
+  }
+  // Try RGB format
+  else if (mjModel.tex_rgb && mjModel.tex_rgb.length >= (texAdr + pixelCount) * 3) {
+    const rgbSource = mjModel.tex_rgb.subarray(texAdr * 3, (texAdr + pixelCount) * 3);
+    for (let src = 0, dst = 0; src < rgbSource.length; src += 3, dst += 4) {
+      textureData[dst + 0] = rgbSource[src + 0];
+      textureData[dst + 1] = rgbSource[src + 1];
+      textureData[dst + 2] = rgbSource[src + 2];
+      textureData[dst + 3] = 255;
     }
-    // Try RGB format
-    else if (mjModel.tex_rgb && mjModel.tex_rgb.length >= (texAdr + pixelCount) * 3) {
-        const rgbSource = mjModel.tex_rgb.subarray(texAdr * 3, (texAdr + pixelCount) * 3);
-        for (let src = 0, dst = 0; src < rgbSource.length; src += 3, dst += 4) {
-            textureData[dst + 0] = rgbSource[src + 0];
-            textureData[dst + 1] = rgbSource[src + 1];
-            textureData[dst + 2] = rgbSource[src + 2];
-            textureData[dst + 3] = 255;
-        }
-        hasValidData = true;
+    hasValidData = true;
+  }
+  // Fallback for legacy offset-based format
+  else if (mjModel.tex_rgb) {
+    const offset = texAdr;
+    const rgbArray = mjModel.tex_rgb;
+    if (rgbArray.length >= offset + (pixelCount * 3)) {
+      for (let p = 0; p < pixelCount; p++) {
+        textureData[(p * 4) + 0] = rgbArray[offset + ((p * 3) + 0)];
+        textureData[(p * 4) + 1] = rgbArray[offset + ((p * 3) + 1)];
+        textureData[(p * 4) + 2] = rgbArray[offset + ((p * 3) + 2)];
+        textureData[(p * 4) + 3] = 255;
+      }
+      hasValidData = true;
     }
-    // Fallback for legacy offset-based format
-    else if (mjModel.tex_rgb) {
-        const offset = texAdr;
-        const rgbArray = mjModel.tex_rgb;
-        if (rgbArray.length >= offset + (pixelCount * 3)) {
-            for (let p = 0; p < pixelCount; p++) {
-                textureData[(p * 4) + 0] = rgbArray[offset + ((p * 3) + 0)];
-                textureData[(p * 4) + 1] = rgbArray[offset + ((p * 3) + 1)];
-                textureData[(p * 4) + 2] = rgbArray[offset + ((p * 3) + 2)];
-                textureData[(p * 4) + 3] = 255;
-            }
-            hasValidData = true;
-        }
-    }
+  }
 
-    if (!hasValidData) {
-        return null;
-    }
+  if (!hasValidData) {
+    return null;
+  }
 
-    const texture = new THREE.DataTexture(textureData, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
-    texture.needsUpdate = true;
-    texture.flipY = false;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(1, 1);
-    texture.anisotropy = 4;
-    return texture;
+  const texture = new THREE.DataTexture(textureData, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+  texture.needsUpdate = true;
+  texture.flipY = false;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(1, 1);
+  texture.anisotropy = 4;
+  return texture;
 }
 
 function getBaseTexture(textureCache, mjModel, texId) {
-    if (texId < 0) {
-        return null;
-    }
-    if (textureCache.has(texId)) {
-        return textureCache.get(texId);
-    }
-    const baseTexture = createBaseTexture(mjModel, texId);
-    if (baseTexture) {
-        textureCache.set(texId, baseTexture);
-    }
-    return baseTexture;
+  if (texId < 0) {
+    return null;
+  }
+  if (textureCache.has(texId)) {
+    return textureCache.get(texId);
+  }
+  const baseTexture = createBaseTexture(mjModel, texId);
+  if (baseTexture) {
+    textureCache.set(texId, baseTexture);
+  }
+  return baseTexture;
 }
 
 export async function loadSceneFromURL(mujoco, filename, parent) {
@@ -481,151 +481,151 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
 }
 
 export function getPosition(buffer, index, target, swizzle = true) {
-    if (swizzle) {
-        return target.set(
-            buffer[(index * 3) + 0],
-            buffer[(index * 3) + 2],
-            -buffer[(index * 3) + 1]);
-    }
+  if (swizzle) {
     return target.set(
-        buffer[(index * 3) + 0],
-        buffer[(index * 3) + 1],
-        buffer[(index * 3) + 2]);
+      buffer[(index * 3) + 0],
+      buffer[(index * 3) + 2],
+      -buffer[(index * 3) + 1]);
+  }
+  return target.set(
+    buffer[(index * 3) + 0],
+    buffer[(index * 3) + 1],
+    buffer[(index * 3) + 2]);
 }
 
 export function getQuaternion(buffer, index, target, swizzle = true) {
-    if (swizzle) {
-        return target.set(
-            -buffer[(index * 4) + 1],
-            -buffer[(index * 4) + 3],
-            buffer[(index * 4) + 2],
-            -buffer[(index * 4) + 0]);
-    }
+  if (swizzle) {
     return target.set(
-        buffer[(index * 4) + 0],
-        buffer[(index * 4) + 1],
-        buffer[(index * 4) + 2],
-        buffer[(index * 4) + 3]);
+      -buffer[(index * 4) + 1],
+      -buffer[(index * 4) + 3],
+      buffer[(index * 4) + 2],
+      -buffer[(index * 4) + 0]);
+  }
+  return target.set(
+    buffer[(index * 4) + 0],
+    buffer[(index * 4) + 1],
+    buffer[(index * 4) + 2],
+    buffer[(index * 4) + 3]);
 }
 
 export function toMujocoPos(target) {
-    return target.set(target.x, -target.z, target.y);
+  return target.set(target.x, -target.z, target.y);
 }
 
 export async function downloadExampleScenesFolder(mujoco, scenePath) {
-    if (!scenePath) {
-        return;
-    }
+  if (!scenePath) {
+    return;
+  }
 
-    const normalizedPath = scenePath.replace(/^[./]+/, '');
-    const pathParts = normalizedPath.split('/');
+  const normalizedPath = scenePath.replace(/^[./]+/, '');
+  const pathParts = normalizedPath.split('/');
 
-    const xmlDirectory = pathParts.slice(0, -1).join('/');
-    if (!xmlDirectory) {
-        return;
-    }
+  const xmlDirectory = pathParts.slice(0, -1).join('/');
+  if (!xmlDirectory) {
+    return;
+  }
 
-    const cacheKey = xmlDirectory;
-    if (sceneDownloadPromises.has(cacheKey)) {
-        return sceneDownloadPromises.get(cacheKey);
-    }
+  const cacheKey = xmlDirectory;
+  if (sceneDownloadPromises.has(cacheKey)) {
+    return sceneDownloadPromises.get(cacheKey);
+  }
 
-    const downloadPromise = (async () => {
-        let manifest;
-        try {
-            manifest = await mujocoAssetCollector.analyzeScene(scenePath, SCENE_BASE_URL);
-
-            if (!Array.isArray(manifest)) {
-                throw new Error(`Asset collector returned invalid result (not an array): ${typeof manifest}`);
-            }
-
-            if (manifest.length === 0) {
-                throw new Error('No assets found by collector');
-            }
-
-        } catch (error) {
-            // Fallback to index.json if asset collector fails
-            try {
-                const manifestResponse = await fetch(`${SCENE_BASE_URL}/${xmlDirectory}/index.json`);
-                if (!manifestResponse.ok) {
-                    throw new Error(`Failed to load scene manifest for ${xmlDirectory}: ${manifestResponse.status}`);
-                }
-                manifest = await manifestResponse.json();
-                if (!Array.isArray(manifest)) {
-                    throw new Error(`Invalid scene manifest for ${xmlDirectory}`);
-                }
-            } catch (fallbackError) {
-                throw new Error(`Both asset analysis and index.json fallback failed: ${fallbackError.message}`);
-            }
-        }
-
-        // Filter external URLs and process local assets
-        const localAssets = manifest
-            .filter(asset =>
-                typeof asset === 'string' &&
-                !asset.startsWith('http://') &&
-                !asset.startsWith('https://')
-            )
-            .map(originalPath => {
-                const normalizedPath = resolveAssetPath(xmlDirectory, originalPath);
-                if (!normalizedPath) {
-                    console.warn(`[downloadExampleScenesFolder] Skipping asset with unresolved path: ${originalPath}`);
-                    return null;
-                }
-                return { originalPath, normalizedPath };
-            })
-            .filter(Boolean);
-
-        const seenPaths = new Set();
-        const uniqueAssets = [];
-        for (const asset of localAssets) {
-            if (seenPaths.has(asset.normalizedPath)) {
-                continue;
-            }
-            seenPaths.add(asset.normalizedPath);
-            uniqueAssets.push(asset);
-        }
-
-        const requests = uniqueAssets.map(({ normalizedPath }) => {
-            const fullPath = `${SCENE_BASE_URL}/${normalizedPath}`;
-            return fetch(fullPath);
-        });
-
-        const responses = await Promise.all(requests);
-
-        for (let i = 0; i < responses.length; i++) {
-            const response = responses[i];
-            const { originalPath, normalizedPath } = uniqueAssets[i];
-
-            if (!response.ok) {
-                console.warn(`[downloadExampleScenesFolder] Failed to fetch scene asset ${originalPath}: ${response.status}`);
-                continue;
-            }
-
-            const assetPath = normalizedPath;
-            const segments = assetPath.split('/');
-            ensureWorkingDirectories(mujoco, segments.slice(0, -1));
-
-            const targetPath = `/working/${assetPath}`;
-            try {
-                if (isBinaryAsset(normalizedPath) || isBinaryAsset(originalPath)) {
-                    const arrayBuffer = await response.arrayBuffer();
-                    mujoco.FS.writeFile(targetPath, new Uint8Array(arrayBuffer));
-                } else {
-                    const textContent = await response.text();
-                    mujoco.FS.writeFile(targetPath, textContent);
-                }
-            } catch (error) {
-                console.warn(`[downloadExampleScenesFolder] Failed to write asset ${targetPath}:`, error.message);
-            }
-        }
-    })();
-
-    sceneDownloadPromises.set(xmlDirectory, downloadPromise);
+  const downloadPromise = (async () => {
+    let manifest;
     try {
-        await downloadPromise;
+      manifest = await mujocoAssetCollector.analyzeScene(scenePath, SCENE_BASE_URL);
+
+      if (!Array.isArray(manifest)) {
+        throw new Error(`Asset collector returned invalid result (not an array): ${typeof manifest}`);
+      }
+
+      if (manifest.length === 0) {
+        throw new Error('No assets found by collector');
+      }
+
     } catch (error) {
-        sceneDownloadPromises.delete(xmlDirectory);
-        throw error;
+      // Fallback to index.json if asset collector fails
+      try {
+        const manifestResponse = await fetch(`${SCENE_BASE_URL}/${xmlDirectory}/index.json`);
+        if (!manifestResponse.ok) {
+          throw new Error(`Failed to load scene manifest for ${xmlDirectory}: ${manifestResponse.status}`);
+        }
+        manifest = await manifestResponse.json();
+        if (!Array.isArray(manifest)) {
+          throw new Error(`Invalid scene manifest for ${xmlDirectory}`);
+        }
+      } catch (fallbackError) {
+        throw new Error(`Both asset analysis and index.json fallback failed: ${fallbackError.message}`);
+      }
     }
+
+    // Filter external URLs and process local assets
+    const localAssets = manifest
+      .filter(asset =>
+        typeof asset === 'string' &&
+        !asset.startsWith('http://') &&
+        !asset.startsWith('https://')
+      )
+      .map(originalPath => {
+        const normalizedPath = resolveAssetPath(xmlDirectory, originalPath);
+        if (!normalizedPath) {
+          console.warn(`[downloadExampleScenesFolder] Skipping asset with unresolved path: ${originalPath}`);
+          return null;
+        }
+        return { originalPath, normalizedPath };
+      })
+      .filter(Boolean);
+
+    const seenPaths = new Set();
+    const uniqueAssets = [];
+    for (const asset of localAssets) {
+      if (seenPaths.has(asset.normalizedPath)) {
+        continue;
+      }
+      seenPaths.add(asset.normalizedPath);
+      uniqueAssets.push(asset);
+    }
+
+    const requests = uniqueAssets.map(({ normalizedPath }) => {
+      const fullPath = `${SCENE_BASE_URL}/${normalizedPath}`;
+      return fetch(fullPath);
+    });
+
+    const responses = await Promise.all(requests);
+
+    for (let i = 0; i < responses.length; i++) {
+      const response = responses[i];
+      const { originalPath, normalizedPath } = uniqueAssets[i];
+
+      if (!response.ok) {
+        console.warn(`[downloadExampleScenesFolder] Failed to fetch scene asset ${originalPath}: ${response.status}`);
+        continue;
+      }
+
+      const assetPath = normalizedPath;
+      const segments = assetPath.split('/');
+      ensureWorkingDirectories(mujoco, segments.slice(0, -1));
+
+      const targetPath = `/working/${assetPath}`;
+      try {
+        if (isBinaryAsset(normalizedPath) || isBinaryAsset(originalPath)) {
+          const arrayBuffer = await response.arrayBuffer();
+          mujoco.FS.writeFile(targetPath, new Uint8Array(arrayBuffer));
+        } else {
+          const textContent = await response.text();
+          mujoco.FS.writeFile(targetPath, textContent);
+        }
+      } catch (error) {
+        console.warn(`[downloadExampleScenesFolder] Failed to write asset ${targetPath}:`, error.message);
+      }
+    }
+  })();
+
+  sceneDownloadPromises.set(xmlDirectory, downloadPromise);
+  try {
+    await downloadPromise;
+  } catch (error) {
+    sceneDownloadPromises.delete(xmlDirectory);
+    throw error;
+  }
 }
