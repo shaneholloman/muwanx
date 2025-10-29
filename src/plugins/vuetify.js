@@ -15,6 +15,14 @@ import { createVuetify } from 'vuetify'
 export default createVuetify({
   theme: {
     defaultTheme: 'light',
+    themes: {
+      light: {
+        colors: {
+          primary: '#596fa2ff',
+          secondary: '#b5bbc4ff',
+        },
+      },
+    },
   },
   defaults: {
     VSlider: {
@@ -23,9 +31,23 @@ export default createVuetify({
     VCheckbox: {
       color: 'primary',
     },
+    VRadio: {
+      color: 'primary',
+    },
+    VSwitch: {
+      color: 'primary',
+    },
+    VBtn: {
+      color: 'primary',
+    },
+    VProgressLinear: {
+      color: 'primary',
+    },
+    VProgressCircular: {
+      color: 'primary',
+    },
     VImg: {
       eager: true,
     },
-
   }
 })

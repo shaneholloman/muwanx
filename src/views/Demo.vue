@@ -17,157 +17,132 @@
     </v-btn>
 
     <v-card class="control-card" :elevation="isMobile ? 0 : 2">
-      <!-- Model/Task tabs with click handler -->
-      <v-tabs v-model="task" bg-color="primary" @update:modelValue="updateTaskCallback()"
-        :density="isMobile ? 'compact' : 'default'" class="tabs-container">
-        <v-tab v-for="task in config.tasks" :key="task.id" :value="task.id" :class="{ 'mobile-tab': isMobile }"
-          @click="handleTaskTabClick(task.id)">
-          {{ task.name }}
-        </v-tab>
-      </v-tabs>
+      <!-- Scene selection -->
+      <v-card-text :class="{ 'mobile-padding': isMobile }">
+        <v-select
+          v-model="task"
+          :items="taskItems"
+          item-title="name"
+          item-value="id"
+          label="Scene"
+          density="compact"
+          variant="outlined"
+          hide-details
+          @update:modelValue="updateTaskCallback()"
+        />
+      </v-card-text>
 
-      <v-tabs-window v-model="task">
-        <v-tabs-window-item v-for="task in config.tasks" :key="task.id" :value="task.id">
-          <template v-if="task.policies?.length">
-            <!-- Policy tabs with click handler -->
-            <v-tabs v-model="policy" bg-color="primary" @update:modelValue="updatePolicyCallback()"
-              :density="isMobile ? 'compact' : 'default'">
-              <v-tab v-for="policy in task.policies" :key="policy.id" :value="policy.id"
-                :class="{ 'mobile-tab': isMobile }" @click="handlePolicyTabClick(policy.id)">
-                {{ policy.name }}
-              </v-tab>
-            </v-tabs>
+      <!-- Policy selection (only if available) -->
+      <v-card-text v-if="selectedTask && selectedTask.policies && selectedTask.policies.length"
+        :class="{ 'mobile-padding': isMobile }">
+        <v-select
+          v-model="policy"
+          :items="policyItems"
+          item-title="name"
+          item-value="id"
+          label="Policy"
+          density="compact"
+          variant="outlined"
+          hide-details
+          @update:modelValue="updatePolicyCallback()"
+        />
+      </v-card-text>
 
-            <!-- Policy-specific contents -->
-            <v-tabs-window v-model="policy">
-              <v-tabs-window-item v-for="policy in task.policies" :key="policy.id" :value="policy.id">
-                <!-- Command Controls Group -->
-                <v-card-text :class="{ 'mobile-padding': isMobile }">
-                  <div class="control-section-title">Target Controls</div>
+      <!-- No policy message -->
+      <v-card-text v-else :class="{ 'mobile-padding': isMobile }" class="no-policy-message">
+        <div class="control-section-title">Policy</div>
+        <div class="force-description">No policies.</div>
+      </v-card-text>
 
-                  <!-- Setpoint checkbox -->
-                  <v-checkbox v-if="policy.ui_controls && policy.ui_controls.includes('setpoint')"
-                    :disabled="compliant_mode" v-model="use_setpoint" @update:modelValue="updateUseSetpointCallback()"
-                    :density="isMobile ? 'compact' : 'default'" hide-details class="mobile-checkbox">
-                    <template v-slot:label>
-                      <div class="checkbox-label">
-                        <span class="label-text">Use Setpoint</span>
-                        <span class="label-description">
-                          <span v-if="use_setpoint">
-                            Drag the red sphere to command target positions
-                          </span>
-                          <span v-else>
-                            Slide to command target velocities
-                          </span>
-                        </span>
-                      </div>
-                    </template>
-                  </v-checkbox>
+      <!-- Policy-specific contents for selected policy -->
+      <template v-if="selectedPolicy">
+        <!-- Command Controls Group -->
+        <v-card-text :class="{ 'mobile-padding': isMobile }">
+          <div class="control-section-title">Target</div>
 
-                  <!-- Velocity slider -->
-                  <div class="slider-section">
-                    <div class="slider-label">Slide to set command velocity</div>
-                    <v-slider
-                      :disabled="use_setpoint && policy.ui_controls && policy.ui_controls.includes('setpoint') && compliant_mode"
-                      v-model="command_vel_x" :min="-0.5" :max="1.5" :step="0.1" :thumb-size="isMobile ? 20 : 16"
-                      :track-size="isMobile ? 6 : 4" hide-details @update:modelValue="updateCommandVelXCallback()"
-                      class="mobile-slider">
-                      <template v-slot:append>
-                        <div class="slider-value">{{ command_vel_x }}</div>
-                      </template>
-                    </v-slider>
-                  </div>
-                </v-card-text>
-
-                <v-card-text v-if="policy.ui_controls && policy.ui_controls.includes('trajectory_playback')"
-                  :class="{ 'mobile-padding': isMobile }">
-                  <div class="control-section-title">Trajectory Playback</div>
-
-                  <v-btn-toggle v-model="trajectoryPlaybackState" mandatory class="mb-3">
-                    <v-btn @click="playTrajectory" value="play" :size="isMobile ? 'default' : 'small'"
-                      prepend-icon="mdi-play">
-                      Play
-                    </v-btn>
-                    <v-btn @click="stopTrajectory" value="stop" :size="isMobile ? 'default' : 'small'"
-                      prepend-icon="mdi-stop">
-                      Stop
-                    </v-btn>
-                    <v-btn @click="resetTrajectory" value="reset" :size="isMobile ? 'default' : 'small'"
-                      prepend-icon="mdi-refresh">
-                      Reset
-                    </v-btn>
-                  </v-btn-toggle>
-
-                  <v-checkbox v-model="trajectoryLoop" @update:modelValue="updateTrajectoryLoop" label="Loop playback"
-                    :density="isMobile ? 'compact' : 'default'" hide-details>
-                  </v-checkbox>
-                </v-card-text>
-
-                <!-- Stiffness Controls Group -->
-                <v-divider v-if="policy.ui_controls && policy.ui_controls.includes('stiffness')"></v-divider>
-                <v-card-text v-if="policy.ui_controls && policy.ui_controls.includes('stiffness')"
-                  :class="{ 'mobile-padding': isMobile }">
-                  <div class="control-section-title">Stiffness Controls</div>
-
-                  <v-checkbox v-model="compliant_mode" @update:modelValue="updateCompliantModeCallback()"
-                    :density="isMobile ? 'compact' : 'default'" hide-details class="mobile-checkbox">
-                    <template v-slot:label>
-                      <div class="checkbox-label">
-                        <span class="label-text">Compliant Mode</span>
-                        <span class="label-description">
-                          <span v-if="compliant_mode">
-                            Stiffness is set to 0
-                          </span>
-                          <span v-else>
-                            Slide to set stiffness
-                          </span>
-                        </span>
-                      </div>
-                    </template>
-                  </v-checkbox>
-
-                  <div class="slider-section">
-                    <v-slider :disabled="compliant_mode" v-model="facet_kp" :min="0" :max="24" :step="1"
-                      :thumb-size="isMobile ? 20 : 16" :track-size="isMobile ? 6 : 4" hide-details
-                      @update:modelValue="updateFacetKpCallback()" class="mobile-slider">
-                      <template v-slot:append>
-                        <div class="slider-value">{{ facet_kp }}</div>
-                      </template>
-                    </v-slider>
-                  </div>
-                </v-card-text>
-              </v-tabs-window-item>
-            </v-tabs-window>
-          </template>
-          <v-card-text v-else :class="{ 'mobile-padding': isMobile }" class="no-policy-message">
-            <div class="control-section-title">Policy Controls</div>
-            <div class="force-description">
-              No policy is configured for this task.
-            </div>
-          </v-card-text>
-
-          <!-- Force Controls Group -->
-          <v-divider></v-divider>
-          <v-card-text :class="{ 'mobile-padding': isMobile, 'pb-2': !isMobile }">
-            <div class="control-section-title">Force Controls</div>
-            <div class="force-description">
-              Drag on the robot to apply force
-            </div>
-            <template v-if="task.name === 'Go2'">
-              <v-btn @click="StartImpulse" color="primary" block :size="isMobile ? 'large' : 'default'"
-                class="impulse-button">
-                Impulse
-              </v-btn>
-              <div class="force-description">
-                Click the button to apply an impulse
+          <!-- Setpoint checkbox -->
+          <v-checkbox v-if="selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('setpoint')"
+            :disabled="compliant_mode" v-model="use_setpoint" @update:modelValue="updateUseSetpointCallback()"
+            density="compact" hide-details class="mobile-checkbox">
+            <template v-slot:label>
+              <div class="checkbox-label">
+                <span class="label-text">Use Setpoint</span>
               </div>
             </template>
-          </v-card-text>
-        </v-tabs-window-item>
-      </v-tabs-window>
+          </v-checkbox>
+
+          <!-- Velocity slider -->
+          <div class="slider-section">
+            <div class="slider-label">Command velocity</div>
+            <v-slider
+              :disabled="use_setpoint && selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('setpoint') && compliant_mode"
+              v-model="command_vel_x" :min="-0.5" :max="1.5" :step="0.1" :thumb-size="isMobile ? 18 : 14"
+              :track-size="isMobile ? 5 : 3" hide-details @update:modelValue="updateCommandVelXCallback()"
+              class="mobile-slider"
+            >
+              <template v-slot:append>
+                <div class="slider-value">{{ command_vel_x }}</div>
+              </template>
+            </v-slider>
+          </div>
+        </v-card-text>
+
+        <v-card-text v-if="selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('trajectory_playback')"
+          :class="{ 'mobile-padding': isMobile }">
+          <div class="control-section-title">Playback</div>
+
+          <v-btn-toggle v-model="trajectoryPlaybackState" mandatory class="mb-1">
+            <v-btn @click="playTrajectory" value="play" :size="isMobile ? 'default' : 'small'" prepend-icon="mdi-play">Play</v-btn>
+            <v-btn @click="stopTrajectory" value="stop" :size="isMobile ? 'default' : 'small'" prepend-icon="mdi-stop">Stop</v-btn>
+            <v-btn @click="resetTrajectory" value="reset" :size="isMobile ? 'default' : 'small'" prepend-icon="mdi-refresh">Reset</v-btn>
+          </v-btn-toggle>
+
+          <v-checkbox v-model="trajectoryLoop" @update:modelValue="updateTrajectoryLoop" label="Loop"
+            density="compact" hide-details />
+        </v-card-text>
+
+        <!-- Stiffness Controls Group -->
+        <v-divider v-if="selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('stiffness')"></v-divider>
+        <v-card-text v-if="selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('stiffness')"
+          :class="{ 'mobile-padding': isMobile }">
+          <div class="control-section-title">Stiffness</div>
+
+          <v-checkbox v-model="compliant_mode" @update:modelValue="updateCompliantModeCallback()"
+            density="compact" hide-details class="mobile-checkbox">
+            <template v-slot:label>
+              <div class="checkbox-label">
+                <span class="label-text">Compliant Mode</span>
+              </div>
+            </template>
+          </v-checkbox>
+
+          <div class="slider-section">
+            <v-slider :disabled="compliant_mode" v-model="facet_kp" :min="0" :max="24" :step="1"
+              :thumb-size="isMobile ? 18 : 14" :track-size="isMobile ? 5 : 3" hide-details
+              @update:modelValue="updateFacetKpCallback()" class="mobile-slider">
+              <template v-slot:append>
+                <div class="slider-value">{{ facet_kp }}</div>
+              </template>
+            </v-slider>
+          </div>
+        </v-card-text>
+      </template>
+
+      <!-- Force Controls Group -->
+      <v-divider></v-divider>
+      <v-card-text :class="{ 'mobile-padding': isMobile, 'pb-2': !isMobile }">
+        <div class="control-section-title">Force</div>
+        <div class="force-description">Drag robot to apply force</div>
+        <template v-if="selectedTask && selectedTask.name === 'Go2'">
+          <v-btn @click="StartImpulse" color="primary" block :size="isMobile ? 'default' : 'small'" class="impulse-button">
+            Impulse
+          </v-btn>
+
+        </template>
+      </v-card-text>
 
       <!-- Reset button -->
-      <v-btn @click="reset" block text :size="isMobile ? 'large' : 'default'" class="reset-button">
+      <v-btn @click="reset" block text :size="isMobile ? 'default' : 'small'" class="reset-button">
         Reset
       </v-btn>
     </v-card>
@@ -233,7 +208,7 @@
   </div>
 
   <!-- Help Button -->
-  <div class="help-button-container" :class="helpButtonClasses">
+  <div class="help-button-container" v-if="!isMobile || isPanelCollapsed">
     <v-btn @click="showHelpDialog = true" icon size="small" variant="text" class="help-btn"
       title="Keyboard Shortcuts (?)">
       <v-icon color="white">mdi-help</v-icon>
@@ -354,15 +329,18 @@ export default {
     trajectoryLoop: false,
   }),
   computed: {
-    helpButtonClasses() {
-      const classes = [];
-      if (this.isMobile) {
-        classes.push('help-button--mobile');
-      }
-      if (this.uiHidden) {
-        classes.push('help-button--interactive');
-      }
-      return classes;
+    selectedTask() {
+      return this.config?.tasks?.find?.(t => t.id === this.task) || null;
+    },
+    selectedPolicy() {
+      if (!this.selectedTask || !this.selectedTask.policies) return null;
+      return this.selectedTask.policies.find(p => p.id === this.policy) || null;
+    },
+    taskItems() {
+      return this.config?.tasks || [];
+    },
+    policyItems() {
+      return this.selectedTask?.policies || [];
     },
   },
   methods: {
@@ -786,18 +764,6 @@ export default {
     handleResize() {
       this.checkMobileDevice();
     },
-    handleTaskTabClick(clickedTaskId) {
-      // If clicking the same task tab that's already active
-      if (this.task === clickedTaskId) {
-        this.reloadDefaultPolicyAndResetSimulation();
-      }
-    },
-    handlePolicyTabClick(clickedPolicyId) {
-      // If clicking the same policy tab that's already active
-      if (this.policy === clickedPolicyId) {
-        this.resetSimulation();
-      }
-    },
     navigateScene(direction) {
       if (!this.config.tasks || this.config.tasks.length === 0) return;
 
@@ -896,188 +862,119 @@ export default {
 </script>
 
 <style scoped>
+/* Canvas container */
 .mujoco-container {
+  position: fixed;
+  inset: 0;
   width: 100%;
   height: 100vh;
-  position: fixed;
-  top: 0;
-  left: 0;
   z-index: 1;
 }
 
-/* Control Panel Styles */
+/* Control panel */
 .control-panel {
   position: fixed;
   top: 20px;
   right: 20px;
-  width: 400px;
+  width: 260px;
   z-index: 1000;
-  transition: all 0.3s ease;
 }
 
-/* Mobile Control Panel */
+.control-card {
+  background: var(--ui-surface);
+  backdrop-filter: saturate(120%) blur(6px);
+  border: 1px solid var(--ui-border);
+  box-shadow: var(--ui-shadow);
+  border-radius: 8px !important; /* sharper corners */
+}
+
+/* removed old tabs styles */
+
+.control-card {
+  font-size: 0.8rem; /* base size inside panel */
+}
+
+.mobile-padding { padding: 6px 10px !important; }
+.control-card :deep(.v-card-text) { padding: 6px 10px !important; }
+
+.control-section-title {
+  margin: 4px 0 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ui-text);
+  opacity: 0.85;
+}
+
+.checkbox-label .label-text {
+  font-size: 1rem;
+  font-weight: 400; /* not bold */
+  color: var(--ui-text);
+}
+
+.checkbox-label .label-description { display: none; }
+
+.slider-section { margin-top: 4px; }
+
+.slider-label {
+  font-size: 0.72rem;
+  color: var(--ui-muted);
+  margin-bottom: 4px;
+}
+
+.slider-value {
+  min-width: 32px;
+  font-size: 0.72rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-muted);
+}
+
+.force-description {
+  font-size: 0.72rem;
+  color: var(--ui-muted);
+}
+
+.impulse-button,
+.reset-button {
+  border: 1px solid var(--ui-border);
+}
+
+/* No policy state */
+.no-policy-message {
+  color: var(--ui-muted);
+}
+
+/* Mobile: bottom sheet */
 @media (max-width: 768px) {
   .control-panel {
-    position: fixed;
     top: auto;
     bottom: 0;
     left: 0;
     right: 0;
     width: 100%;
-    max-height: 70vh;
-    transform: translateY(0);
-    border-radius: 16px 16px 0 0;
-    background: white;
-    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+    padding: 6px 10px 10px;
   }
 
-  .control-panel.panel-collapsed {
-    transform: translateY(calc(100% - 36px));
-    /* Show only the model controls */
+  .panel-toggle {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(100% + 8px);
+    background: primary !important;
+    border: 1px solid var(--ui-border) !important;
+    box-shadow: var(--ui-shadow) !important;
   }
-}
 
-@media (max-width: 480px) {
-  .control-panel {
-    max-height: 80vh;
-  }
-
-  .control-panel.panel-collapsed {
-    transform: translateY(calc(100% - 36px));
+  .panel-collapsed .control-card {
+    display: none;
   }
 }
 
-.panel-toggle {
-  position: absolute;
-  top: -50px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1001;
-}
-
-.control-card {
-  transition: transform 0.2s;
-  overflow-y: auto;
-  max-height: 100%;
-}
-
-@media (max-width: 768px) {
-  .control-card {
-    border-radius: 16px 16px 0 0;
-    box-shadow: none;
-  }
-}
-
-.control-card:hover {
-  transform: translateY(-2px);
-}
-
-@media (max-width: 768px) {
-  .control-card:hover {
-    transform: none;
-  }
-}
-
-/* Tab Styles */
-.tabs-container {
-  border-radius: 8px 8px 0 0;
-}
-
-:deep(.v-tab .v-btn__content) {
-  text-transform: none;
-}
-
-:deep(.v-tab) {
-  min-width: auto !important;
-}
-
-/* Content Styles */
-.mobile-padding {
-  padding: 12px 16px !important;
-}
-
-.control-section-title {
-  font-weight: 600;
-  font-size: 0.95rem;
-  margin-bottom: 12px;
-  color: rgba(0, 0, 0, 0.87);
-}
-
-.checkbox-label {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-}
-
-.label-text {
-  font-weight: 500;
-  margin-bottom: 4px;
-}
-
-.label-description {
-  font-size: 0.75rem;
-  color: rgba(0, 0, 0, 0.6);
-  line-height: 1.3;
-}
-
-.mobile-checkbox {
-  margin-bottom: 8px;
-}
-
-/* Slider Styles */
-.slider-section {
-  margin-top: 12px;
-}
-
-.no-policy-message {
-  padding-top: 16px !important;
-  padding-bottom: 16px !important;
-}
-
-.slider-label {
-  font-size: 0.75rem;
-  color: rgba(0, 0, 0, 0.6);
-  margin-bottom: 8px;
-}
-
-.mobile-slider {
-  margin-bottom: 8px;
-}
-
-.slider-value {
-  font-size: 0.75rem;
-  font-weight: 500;
-  min-width: 40px;
-  text-align: center;
-}
-
-/* Force Controls */
-.force-description {
-  font-size: 0.75rem;
-  color: rgba(0, 0, 0, 0.6);
-  margin-bottom: 12px;
-  text-align: center;
-}
-
-.impulse-button {
-  margin: 8px 0;
-}
-
-.reset-button {
-  border-top: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 0;
-}
-
-@media (max-width: 768px) {
-  .reset-button {
-    padding: 16px;
-  }
-}
-
-/* Dialog Styles */
+/* Dialogs */
 .dialog-content {
   text-align: center;
-  padding: 10px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1087,37 +984,27 @@ export default {
 
 @media (max-width: 768px) {
   .dialog-content {
-    /* Full height for mobile fullscreen dialogs */
-    min-height: 60vh;
-    height: 60vh;
-    padding: 10px;
-    justify-content: center;
+    min-height: 50vh;
   }
-
-  /* Center the card title on mobile */
   .status-dialog-card .v-card-title {
     text-align: center !important;
     justify-content: center !important;
   }
-
-  /* Style for mobile dialog title positioned above progress bar */
   .mobile-dialog-title {
     text-align: left;
-    font-size: 1.25rem;
-    font-weight: 500;
-    margin-bottom: 16px;
-    color: rgba(0, 0, 0, 0.87);
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 12px;
   }
 }
 
 .loading-text,
 .error-text {
-  justify-content: center;
   font-size: 0.95rem;
   line-height: 1.5;
 }
 
-/* Warning Content Styles */
+/* Warnings */
 .warning-content-inline {
   text-align: center;
   display: flex;
@@ -1129,11 +1016,10 @@ export default {
 .warning-message {
   font-size: 0.95rem;
   line-height: 1.6;
-  color: rgba(0, 0, 0, 0.87);
   white-space: pre-line;
 }
 
-/* Notice Styles */
+/* Notice */
 .notice-container {
   position: fixed;
   bottom: 12px;
@@ -1150,24 +1036,13 @@ export default {
   }
 }
 
-
 .notice-content {
-  background: transparent;
-  color: rgba(255, 255, 255, 0.6);
-  /* more transparent */
-  padding: 8px 12px;
-  border-radius: 4px;
-  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
   font-weight: 500;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  white-space: nowrap;
-}
-
-@media (max-width: 480px) {
-  .notice-content {
-    font-size: 12px;
-    padding: 6px 10px;
-  }
+  backdrop-filter: blur(2px);
 }
 
 .notice-link {
@@ -1179,7 +1054,7 @@ export default {
   text-decoration: underline;
 }
 
-/* Help Button Styles */
+/* Help button */
 .help-button-container {
   position: fixed;
   bottom: 20px;
@@ -1188,14 +1063,7 @@ export default {
   transition: bottom 0.2s ease;
 }
 
-.help-button-container.help-button--mobile {
-  bottom: 90px;
-  right: 16px;
-}
-
-.help-button-container.help-button--interactive {
-  bottom: 20px !important;
-}
+/* removed variant classes; help button shows only when panel collapsed */
 
 .help-btn {
   background: transparent !important;
@@ -1213,21 +1081,21 @@ export default {
   }
 }
 
-/* Help Dialog Content Styles */
+/* Help dialog */
 .help-content {
-  padding: 20px !important;
+  padding: 16px !important;
 }
 
 .shortcut-section {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .shortcut-item {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .shortcut-key {
@@ -1236,61 +1104,45 @@ export default {
 
 .shortcut-key kbd {
   display: inline-block;
-  padding: 6px 12px;
-  font-family: 'Courier New', monospace;
-  font-size: 14px;
+  padding: 6px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
   font-weight: 600;
-  color: #333;
-  background: linear-gradient(180deg, #f5f5f5 0%, #e0e0e0 100%);
-  border: 1px solid #bbb;
-  border-radius: 4px;
-  box-shadow: 0 2px 0 #999, 0 3px 2px rgba(0, 0, 0, 0.2);
-  text-shadow: 0 1px 0 #fff;
+  color: var(--ui-text);
+  background: #f6f7f8;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
 }
 
 .shortcut-key kbd.clickable-key {
   cursor: pointer;
-  transition: all 0.15s ease;
   user-select: none;
-}
-
-.shortcut-key kbd.clickable-key:hover {
-  background: linear-gradient(180deg, #e8e8e8 0%, #d0d0d0 100%);
-  transform: translateY(1px);
-  box-shadow: 0 1px 0 #999, 0 2px 1px rgba(0, 0, 0, 0.2);
-}
-
-.shortcut-key kbd.clickable-key:active {
-  background: linear-gradient(180deg, #d0d0d0 0%, #c0c0c0 100%);
-  transform: translateY(2px);
-  box-shadow: 0 0 0 #999, 0 1px 1px rgba(0, 0, 0, 0.2);
 }
 
 .shortcut-description {
   flex: 1;
   font-size: 14px;
-  color: rgba(0, 0, 0, 0.87);
+  color: var(--ui-muted);
 }
 
-.fade-enter-active,
-
+/* Transition overlay */
 .transition-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
+  gap: 10px;
   z-index: 2000;
   backdrop-filter: blur(2px);
 }
 
 .transition-text {
-  color: #fff;
-  font-size: 1rem;
-  letter-spacing: 0.02em;
+  color: white;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
 }
 </style>
 
