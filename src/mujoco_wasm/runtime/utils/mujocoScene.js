@@ -70,10 +70,15 @@ function resolveAssetPath(xmlDirectory, assetPath) {
   return joined || normalized || null;
 }
 
-// Create texture supporting both RGBA and RGB formats with caching
-function createBaseTexture(mjModel, texId) {
+function createBaseTexture(mujoco, mjModel, texId) {
   if (!mjModel || texId < 0) {
     return null;
+  }
+
+  const type = mjModel.tex_type ? mjModel.tex_type[texId] : mujoco.mjtTexture.mjTEXTURE_2D.value;  // Default to 2D
+  if (type !== mujoco.mjtTexture.mjTEXTURE_2D.value) {
+    console.warn(`Cubemap or other texture types not yet supported for texId: ${texId}`);
+    return null;  // Non-2D textures are not handled here
   }
 
   const width = mjModel.tex_width ? mjModel.tex_width[texId] : 0;
@@ -85,38 +90,57 @@ function createBaseTexture(mjModel, texId) {
   const texAdr = mjModel.tex_adr ? mjModel.tex_adr[texId] : 0;
   const pixelCount = width * height;
 
+  // Per MuJoCo docs, textures are packed into tex_data with per-texture
+  // start address (tex_adr) and channel count (tex_nchannel).
+  const nchannel = mjModel.tex_nchannel ? mjModel.tex_nchannel[texId] : 0;
+  const srcByteCount = pixelCount * nchannel;
+
   let textureData = new Uint8Array(pixelCount * 4);
   let hasValidData = false;
-
-  // Try RGBA format first
-  if (mjModel.tex_rgba && mjModel.tex_rgba.length >= (texAdr + pixelCount) * 4) {
-    const rgbaSource = mjModel.tex_rgba.subarray(texAdr * 4, (texAdr + pixelCount) * 4);
-    textureData.set(rgbaSource);
-    hasValidData = true;
-  }
-  // Try RGB format
-  else if (mjModel.tex_rgb && mjModel.tex_rgb.length >= (texAdr + pixelCount) * 3) {
-    const rgbSource = mjModel.tex_rgb.subarray(texAdr * 3, (texAdr + pixelCount) * 3);
-    for (let src = 0, dst = 0; src < rgbSource.length; src += 3, dst += 4) {
-      textureData[dst + 0] = rgbSource[src + 0];
-      textureData[dst + 1] = rgbSource[src + 1];
-      textureData[dst + 2] = rgbSource[src + 2];
-      textureData[dst + 3] = 255;
-    }
-    hasValidData = true;
-  }
-  // Fallback for legacy offset-based format
-  else if (mjModel.tex_rgb) {
-    const offset = texAdr;
-    const rgbArray = mjModel.tex_rgb;
-    if (rgbArray.length >= offset + (pixelCount * 3)) {
-      for (let p = 0; p < pixelCount; p++) {
-        textureData[(p * 4) + 0] = rgbArray[offset + ((p * 3) + 0)];
-        textureData[(p * 4) + 1] = rgbArray[offset + ((p * 3) + 1)];
-        textureData[(p * 4) + 2] = rgbArray[offset + ((p * 3) + 2)];
-        textureData[(p * 4) + 3] = 255;
+  if (mjModel.tex_data && nchannel >= 1 && nchannel <= 4 && mjModel.tex_data.length >= texAdr + srcByteCount) {
+    const src = mjModel.tex_data.subarray(texAdr, texAdr + srcByteCount);
+    // Expand 1/2/3/4 channels to RGBA
+    switch (nchannel) {
+      case 1: { // L
+        for (let i = 0, d = 0; i < src.length; i += 1, d += 4) {
+          const l = src[i];
+          textureData[d + 0] = l;
+          textureData[d + 1] = l;
+          textureData[d + 2] = l;
+          textureData[d + 3] = 1;
+        }
+        hasValidData = true;
+        break;
       }
-      hasValidData = true;
+      case 2: { // L+A
+        for (let i = 0, d = 0; i < src.length; i += 2, d += 4) {
+          const l = src[i + 0];
+          const a = src[i + 1];
+          textureData[d + 0] = l;
+          textureData[d + 1] = l;
+          textureData[d + 2] = l;
+          textureData[d + 3] = a;
+        }
+        hasValidData = true;
+        break;
+      }
+      case 3: { // R+G+B
+        for (let i = 0, d = 0; i < src.length; i += 3, d += 4) {
+          textureData[d + 0] = src[i + 0];
+          textureData[d + 1] = src[i + 1];
+          textureData[d + 2] = src[i + 2];
+          textureData[d + 3] = 1;
+        }
+        hasValidData = true;
+        break;
+      }
+      case 4: { // R+G+B+A
+        textureData.set(src);
+        hasValidData = true;
+        break;
+      }
+      default:
+        hasValidData = false;
     }
   }
 
@@ -129,23 +153,19 @@ function createBaseTexture(mjModel, texId) {
   texture.flipY = false;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(1, 1);
-  texture.anisotropy = 4;
+  texture.anisotropy = 4;  // Or set dynamically via renderer.capabilities.getMaxAnisotropy()
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.generateMipmaps = true;
+  // Respect MuJoCo tex_colorspace when available
+  if (mjModel.tex_colorspace) {
+    const cs = mjModel.tex_colorspace[texId];
+    // mjCOLORSPACE_SRGB -> sRGB encoding; LINEAR/AUTO -> keep default
+    if (cs === mujoco.mjtColorSpace.mjCOLORSPACE_SRGB.value && 'sRGBEncoding' in THREE) {
+      texture.encoding = THREE.sRGBEncoding;
+    }
+  }
   return texture;
-}
-
-function getBaseTexture(textureCache, mjModel, texId) {
-  if (texId < 0) {
-    return null;
-  }
-  if (textureCache.has(texId)) {
-    return textureCache.get(texId);
-  }
-  const baseTexture = createBaseTexture(mjModel, texId);
-  if (baseTexture) {
-    textureCache.set(texId, baseTexture);
-  }
-  return baseTexture;
 }
 
 export async function loadSceneFromURL(mujoco, filename, parent) {
@@ -177,7 +197,8 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
   }
   let newModel = null;
   try {
-    newModel = mujoco.MjModel.loadFromXML(modelPath); // The error happens here when visualizing bimanual
+    // TODO: The error happens here when visualizing bimanual and soccer models in MyoSuite
+    newModel = mujoco.MjModel.loadFromXML(modelPath);
   } catch (err) {
     throw new Error(`Failed to load MjModel from ${modelPath}: ${err?.message || err}`);
   }
@@ -212,14 +233,17 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
   mujocoRoot.name = 'MuJoCo Root';
   parent.scene.add(mujocoRoot);
 
+  /** @type {Object.<number, THREE.Group>} */
   let bodies = {};
+  /** @type {Object.<number, THREE.BufferGeometry>} */
   let meshes = {};
+  /** @type {THREE.Light[]} */
   let lights = [];
 
-  const textureCache = new Map();
   let material = new THREE.MeshPhysicalMaterial();
   material.color = new THREE.Color(1, 1, 1);
 
+  // MuJoCo => Three.js
   for (let g = 0; g < mjModel.ngeom; g++) {
     if (!(mjModel.geom_group[g] < 3)) { continue; }
 
@@ -243,16 +267,29 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
       bodies[b].name = textDecoder.decode(name_buffer);
 
       bodies[b].bodyID = b;
-
-      if (bodies[b].name === 'base') {
-        parent.pelvis_body_id = b;
-      }
       bodies[b].has_custom_mesh = false;
     }
 
-    let geometry = new THREE.SphereGeometry(size[0] * 0.5);
+    let geometry = undefined;
     if (type === mujoco.mjtGeom.mjGEOM_PLANE.value) {
-      // Handled later
+      let width, height;
+      if (size[0] === 0) { width = 100; } else { width = size[0] * 2.0; }
+      if (size[1] === 0) { height = 100; } else { height = size[1] * 2.0; }
+
+      // Use simple plane geometry
+      geometry = new THREE.PlaneGeometry(width, height);
+      geometry.rotateX(-Math.PI / 2);
+
+      // Use reflective plane for ground if needed
+      // const reflectorOptions = { clipBias: 0.003 };
+      // let mesh;
+      // mesh = new Reflector(new THREE.PlaneGeometry(width, height), reflectorOptions);
+      // mesh.rotateX(-Math.PI / 2);
+      // mesh.castShadow = g === 0 ? false : true;
+      // mesh.receiveShadow = type !== 7;
+      // mesh.bodyID = b;
+      // bodies[b].add(mesh);
+      // getPosition(mjModel.geom_pos, g, mesh.position);\
     } else if (type === mujoco.mjtGeom.mjGEOM_HFIELD.value) {
       // Not implemented
     } else if (type === mujoco.mjtGeom.mjGEOM_SPHERE.value) {
@@ -308,102 +345,63 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
     }
 
     // Process geometry color and texture
-    let texture;
     let color = [
-      mjModel.geom_rgba[(g * 4) + 0],
-      mjModel.geom_rgba[(g * 4) + 1],
-      mjModel.geom_rgba[(g * 4) + 2],
-      mjModel.geom_rgba[(g * 4) + 3]
+      mjModel.geom_rgba[g * 4 + 0],
+      mjModel.geom_rgba[g * 4 + 1],
+      mjModel.geom_rgba[g * 4 + 2],
+      mjModel.geom_rgba[g * 4 + 3],
     ];
-
-    if (mjModel.geom_matid[g] !== -1) {
+    let texture = null;
+    let alphaMap = null;
+    if (mjModel.geom_matid[g] != -1) {
       let matId = mjModel.geom_matid[g];
       color = [
-        mjModel.mat_rgba[(matId * 4) + 0],
-        mjModel.mat_rgba[(matId * 4) + 1],
-        mjModel.mat_rgba[(matId * 4) + 2],
-        mjModel.mat_rgba[(matId * 4) + 3]
+        mjModel.mat_rgba[matId * 4 + 0],
+        mjModel.mat_rgba[matId * 4 + 1],
+        mjModel.mat_rgba[matId * 4 + 2],
+        mjModel.mat_rgba[matId * 4 + 3],
       ];
 
-      texture = undefined;
-      let texId = mjModel.mat_texid[matId];
-      if (texId !== -1) {
-        texture = getBaseTexture(textureCache, mjModel, texId);
+      const role = mujoco.mjtTextureRole.mjTEXROLE_RGB.value;
+      let texId = mjModel.mat_texid[matId * mujoco.mjtTextureRole.mjNTEXROLE.value + role];
+      if (texId != -1) {
+        texture = createBaseTexture(mujoco, mjModel, texId);
         if (texture) {
-          texture = texture.clone();
-          texture.needsUpdate = true;
-
-          // Legacy texture repeat settings
-          if (texId === 2) {
-            texture.repeat = new THREE.Vector2(50, 50);
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-          } else {
-            texture.repeat = new THREE.Vector2(1, 1);
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-          }
+          // Set repeat from mat_texrepeat (per API)
+          const repeatX = mjModel.mat_texrepeat ? mjModel.mat_texrepeat[matId * 2 + 0] : 1;
+          const repeatY = mjModel.mat_texrepeat ? mjModel.mat_texrepeat[matId * 2 + 1] : 1;
+          texture.repeat.set(repeatX, repeatY);
+          texture.wrapS = repeatX > 1 ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+          texture.wrapT = repeatY > 1 ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
         }
       }
     }
 
-    // Create or reuse material based on color and texture changes
-    if (material.color.r !== color[0] ||
-      material.color.g !== color[1] ||
-      material.color.b !== color[2] ||
-      material.opacity !== color[3] ||
-      material.map !== texture) {
-      const materialConfig = {
-        color: new THREE.Color(color[0], color[1], color[2]),
-        transparent: color[3] < 1.0,
-        opacity: color[3],
-      };
-      if (mjModel.geom_matid[g] !== -1) {
-        const matIndex = mjModel.geom_matid[g];
-        const specularIntensity = mjModel.mat_specular[matIndex] * 0.5;
-        const reflectivity = mjModel.mat_reflectance[matIndex];
-        const roughness = 1.0 - mjModel.mat_shininess[matIndex];
-        materialConfig.specularIntensity = specularIntensity;
-        materialConfig.reflectivity = reflectivity;
-        materialConfig.roughness = roughness;
-        materialConfig.metalness = 0.1;
-      }
-      if (texture) {
-        materialConfig.map = texture;
-      }
-      material = new THREE.MeshPhysicalMaterial(materialConfig);
-    }
+    const materialProps = {
+      color: new THREE.Color(color[0], color[1], color[2]),
+      transparent: color[3] < 1.0,
+      opacity: color[3],
+      map: texture,
+      alphaMap: alphaMap,
+    };
+    material = new THREE.MeshPhysicalMaterial(materialProps);
 
-    let mesh;
-    if (type === mujoco.mjtGeom.mjGEOM_PLANE.value) {
-      // Determine plane size with backward compatibility
-      let planeWidth = 100;
-      let planeHeight = 100;
+    let mesh = new THREE.Mesh(geometry, material);
 
-      // if (size[0] && size[0] < 50) {
-      //   planeWidth = size[0] * 2;
-      //   planeHeight = (size[1] || size[0]) * 2;
-      // }
-
-      const reflectorOptions = { clipBias: 0.003 };
-      if (texture) {
-        reflectorOptions.texture = texture;
-      }
-      mesh = new Reflector(new THREE.PlaneGeometry(planeWidth, planeHeight), reflectorOptions);
-      mesh.rotateX(-Math.PI / 2);
-    } else {
-      mesh = new THREE.Mesh(geometry, material);
-    }
-
-    mesh.castShadow = g === 0 ? false : true;
-    mesh.receiveShadow = type !== 7;
+    mesh.castShadow = g == 0 ? false : true;
+    mesh.receiveShadow = type != 7;
     mesh.bodyID = b;
     bodies[b].add(mesh);
     getPosition(mjModel.geom_pos, g, mesh.position);
-    if (type !== 0) { getQuaternion(mjModel.geom_quat, g, mesh.quaternion); }
-    if (type === 4) { mesh.scale.set(size[0], size[2], size[1]); }
+    if (type != 0) {
+      getQuaternion(mjModel.geom_quat, g, mesh.quaternion);
+    }
+    if (type == 4) {
+      mesh.scale.set(size[0], size[2], size[1]);
+    } // Stretch the Ellipsoid
   }
 
+  // Tendons
   let tendonMat = new THREE.MeshPhongMaterial();
   tendonMat.color = new THREE.Color(0.8, 0.3, 0.3);
   mujocoRoot.cylinders = new THREE.InstancedMesh(
@@ -411,15 +409,17 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
     tendonMat, 1023);
   mujocoRoot.cylinders.receiveShadow = true;
   mujocoRoot.cylinders.castShadow = true;
+  mujocoRoot.cylinders.count = 0; // Hide by default
   mujocoRoot.add(mujocoRoot.cylinders);
   mujocoRoot.spheres = new THREE.InstancedMesh(
     new THREE.SphereGeometry(1, 10, 10),
     tendonMat, 1023);
   mujocoRoot.spheres.receiveShadow = true;
   mujocoRoot.spheres.castShadow = true;
+  mujocoRoot.spheres.count = 0; // Hide by default
   mujocoRoot.add(mujocoRoot.spheres);
 
-  // Light setup
+  // Lights
   if (mjModel.nlight > 0 && mjModel.light_directional && mjModel.light_attenuation) {
     for (let l = 0; l < mjModel.nlight; l++) {
       let light = new THREE.SpotLight();

@@ -298,7 +298,7 @@ export class MuJoCoAssetCollector {
 
     // For non-include files, add common asset directories
     if (tag !== 'include') {
-      const commonDirs = ['assets', 'meshes', 'textures'];
+      const commonDirs = ['', 'assets', 'meshes', 'textures'];
       for (const commonDir of commonDirs) {
         if (baseDir) {
           order.push(this._normalizePath(this._joinPath(baseDir, commonDir)));
