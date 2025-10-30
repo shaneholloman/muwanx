@@ -1,8 +1,8 @@
 /**
- * MuJoCo Asset Analyzer
+ * MuJoCo Asset Collector
  *
- * This component analyzes MuJoCo XML files to detect all referenced assets
- * (meshes, textures, includes, etc.) similar to the Python generate_index.py script.
+ * This component analyzes MuJoCo XML files to detect all referenced assets.
+ * (meshes, textures, includes, etc.)
  *
  * Usage:
  *   const collector = new MuJoCoAssetCollector();

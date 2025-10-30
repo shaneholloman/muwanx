@@ -17,16 +17,55 @@
     </v-btn>
 
     <v-card class="control-card" :elevation="isMobile ? 0 : 2">
-      <!-- Project title (shown only when project_name exists) -->
-      <v-card-title v-if="config && config.project_name" class="control-card-title">
-        <template v-if="config.project_link">
-          <a :href="config.project_link" target="_blank" rel="noopener" class="project-title-link">
-            {{ config.project_name }}
-          </a>
-        </template>
-        <template v-else>
-          <span class="project-title-text">{{ config.project_name }}</span>
-        </template>
+      <!-- Project title with dropdown -->
+      <v-card-title class="control-card-title">
+        <v-menu
+          v-model="routeMenu"
+          :close-on-content-click="true"
+          transition="fade-transition"
+          location="bottom start"
+        >
+          <template #activator="{ props }">
+            <div class="project-title-activator">
+              <template v-if="config && config.project_name">
+                <template v-if="config.project_link">
+                  <a :href="config.project_link" target="_blank" rel="noopener" class="project-title-link">
+                    {{ config.project_name }}
+                  </a>
+                </template>
+                <template v-else>
+                  <span class="project-title-text">{{ config.project_name }}</span>
+                </template>
+              </template>
+              <template v-else>
+                <span class="project-title-text">{{ currentProjectLabel }}</span>
+              </template>
+              <v-btn v-bind="props" icon size="small" variant="text" density="compact" class="project-title-caret-btn">
+                <v-icon size="20" class="project-title-caret">mdi-chevron-down</v-icon>
+              </v-btn>
+            </div>
+          </template>
+          <v-list
+            id="route-listbox"
+            class="dropdown-list"
+            density="compact"
+            :style="{ minWidth: '192px', maxHeight: '280px', overflowY: 'auto' }"
+          >
+            <v-list-item
+              v-for="(r, i) in routeItems"
+              :key="r.name || i"
+              :class="{ selected: r.name === $route.name }"
+              role="option"
+              :aria-selected="String(r.name === $route.name)"
+              @click="goToRoute(r)"
+            >
+              <v-list-item-title>{{ r.title }}</v-list-item-title>
+              <template #append>
+                <v-icon v-if="r.name === $route.name" icon="mdi-check" size="small" color="primary"></v-icon>
+              </template>
+            </v-list-item>
+          </v-list>
+        </v-menu>
       </v-card-title>
       <!-- Scene selection (segmented dropdown) -->
       <v-card-text :class="{ 'mobile-padding': isMobile }">
@@ -258,7 +297,7 @@
   <!-- Help Button -->
   <div class="help-button-container" v-if="!isMobile || isPanelCollapsed">
     <v-btn @click="showHelpDialog = true" icon size="small" variant="text" class="help-btn"
-      title="Keyboard Shortcuts (?)">
+      title="Help Button (?)">
       <v-icon color="white">mdi-help</v-icon>
     </v-btn>
   </div>
@@ -267,13 +306,14 @@
   <v-dialog v-model="showHelpDialog" :max-width="isMobile ? '90vw' : '500px'" scrollable>
     <v-card>
       <v-card-title class="d-flex justify-space-between align-center">
-        <span>Keyboard Shortcuts</span>
+        <span>Help</span>
         <v-btn icon size="small" @click="showHelpDialog = false">
           <v-icon>mdi-close</v-icon>
         </v-btn>
       </v-card-title>
       <v-divider></v-divider>
       <v-card-text class="help-content">
+        <div class="help-title">Keyboard Shortcuts</div>
         <div class="shortcut-section">
           <div class="shortcut-item">
             <div class="shortcut-key">
@@ -349,6 +389,7 @@ export default {
     // segmented dropdown menus state
     sceneMenu: false,
     policyMenu: false,
+    routeMenu: false,
     config: { tasks: [] },
     task: null,
     policy: null,
@@ -394,8 +435,76 @@ export default {
     policyItems() {
       return this.selectedTask?.policies || [];
     },
+    currentProjectLabel() {
+      // Prefer config project_name if available, else fall back to route name
+      return this.config?.project_name || this.$route?.name || '—';
+    },
+    routeItems() {
+      // Build list from router records; use route name as title
+      const routes = (this.$router?.getRoutes?.() || []).filter(r => r.name && r.path);
+      // Deduplicate by name in case of aliases
+      const seen = new Set();
+      const items = [];
+      for (const r of routes) {
+        const key = String(r.name);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push({ name: r.name, path: r.path, title: key });
+      }
+      return items;
+    },
+  },
+  watch: {
+    // Keep URL query in sync with current scene/policy selection
+    task() {
+      this.syncUrlWithSelection();
+    },
+    policy() {
+      this.syncUrlWithSelection();
+    },
   },
   methods: {
+    // Update the route query to reflect current scene and policy
+    syncUrlWithSelection() {
+      try {
+        const sceneName = this.selectedTask?.name || null;
+        const policyName = this.selectedPolicy?.name || null;
+
+        const currentQuery = { ...(this.$route?.query || {}) };
+        const nextQuery = { ...currentQuery };
+
+        if (sceneName) {
+          nextQuery.scene = sceneName;
+        } else {
+          delete nextQuery.scene;
+        }
+
+        if (policyName) {
+          nextQuery.policy = policyName;
+        } else {
+          delete nextQuery.policy;
+        }
+
+        // Only navigate if something actually changed
+        const changed = Object.keys({ ...currentQuery, ...nextQuery }).some(k => currentQuery[k] !== nextQuery[k])
+          || Object.keys(currentQuery).length !== Object.keys(nextQuery).length;
+        if (!changed) return;
+
+        this.$router?.replace({ query: nextQuery });
+      } catch (e) {
+        // Non-fatal; avoid disrupting UI if routing not ready
+        console.warn('Failed to sync URL with selection:', e);
+      }
+    },
+    goToRoute(route) {
+      try {
+        if (route?.path && route.name !== this.$route?.name) {
+          this.$router.push({ path: route.path });
+        }
+      } finally {
+        this.routeMenu = false;
+      }
+    },
     resolveDefaultPolicy(task) {
       if (!task) return null;
       if (task.default_policy !== null && task.default_policy !== undefined) {
@@ -939,12 +1048,37 @@ export default {
 .project-title-text {
   color: var(--ui-text);
   text-decoration: none;
-  font-size: 0.95rem;
+  font-size: 1.1rem;
   font-weight: 700;
   letter-spacing: 0.01em;
 }
 
 .project-title-link:hover { text-decoration: none; }
+
+/* Keep title look identical; add chevron at right */
+.project-title-activator {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  cursor: pointer;
+  gap: 6px;
+}
+
+.project-title-activator .project-title-link,
+.project-title-activator .project-title-text {
+  flex: 1;
+}
+
+.project-title-caret {
+  opacity: 0.8;
+}
+
+.project-title-caret-btn.v-btn {
+  min-width: 0 !important;
+  padding: 0 !important;
+  margin: 0 0 0 6px !important;
+  box-shadow: none !important;
+}
 
 .mobile-padding { padding: 6px 10px !important; }
 .control-card :deep(.v-card-text) { padding: 6px 10px !important; }
@@ -1192,6 +1326,13 @@ export default {
 /* Help dialog */
 .help-content {
   padding: 16px !important;
+}
+
+.help-title {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--ui-text);
 }
 
 .shortcut-section {

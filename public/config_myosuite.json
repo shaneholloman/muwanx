@@ -1,5 +1,5 @@
 {
-  "project_name": "MyoSuite",
+  "project_name": "MyoSuite Demo",
   "project_link": "https://github.com/MyoHub/myosuite",
   "tasks": [
     {
@@ -36,8 +36,48 @@
     },
     {
       "id": "5",
-      "name": "TableTennis",
+      "name": "mc23_Relocate",
+      "model_xml": "./examples/scenes/myosuite/myosuite/envs/myo/assets/arm/myoarm_relocate.xml",
+      "asset_meta": null,
+      "default_policy": null,
+      "policies": []
+    },
+    {
+      "id": "6",
+      "name": "mc23_ChaseTag",
+      "model_xml": "./examples/scenes/myosuite/myosuite/envs/myo/assets/leg/myolegs_chasetag.xml",
+      "asset_meta": null,
+      "default_policy": null,
+      "policies": []
+    },
+    {
+      "id": "7",
+      "name": "mc24_Bimanual",
+      "model_xml": "./examples/scenes/myosuite/myosuite/envs/myo/assets/arm/myoarm_bionic_bimanual.xml",
+      "asset_meta": null,
+      "default_policy": null,
+      "policies": []
+    },
+    {
+      "id": "8",
+      "name": "mc24_RunTrack",
+      "model_xml": "./examples/scenes/myosuite/myosuite/envs/myo/assets/leg/myoosl_runtrack.xml",
+      "asset_meta": null,
+      "default_policy": null,
+      "policies": []
+    },
+    {
+      "id": "9",
+      "name": "mc25_TableTennis",
       "model_xml": "./examples/scenes/myosuite/myosuite/envs/myo/assets/arm/myoarm_tabletennis.xml",
+      "asset_meta": null,
+      "default_policy": null,
+      "policies": []
+    },
+    {
+      "id": "10",
+      "name": "mc25_Soccer",
+      "model_xml": "./examples/scenes/myosuite/myosuite/envs/myo/assets/leg_soccer/myolegs_soccer.xml",
       "asset_meta": null,
       "default_policy": null,
       "policies": []

@@ -517,7 +517,12 @@ export async function downloadExampleScenesFolder(mujoco, scenePath) {
     return;
   }
 
-  const normalizedPath = scenePath.replace(/^[./]+/, '');
+  // Normalize incoming scene path to align with how loadSceneFromURL cleans paths
+  // - Strip leading './'
+  // - Strip leading 'public/' so everything is rooted under '/working/examples/...'
+  const normalizedPath = String(scenePath)
+    .replace(/^(\.\/)+/, '')
+    .replace(/^public\//, '');
   const pathParts = normalizedPath.split('/');
 
   const xmlDirectory = pathParts.slice(0, -1).join('/');
@@ -525,7 +530,7 @@ export async function downloadExampleScenesFolder(mujoco, scenePath) {
     return;
   }
 
-  const cacheKey = xmlDirectory;
+  const cacheKey = normalizedPath;
   if (sceneDownloadPromises.has(cacheKey)) {
     return sceneDownloadPromises.get(cacheKey);
   }
@@ -621,11 +626,12 @@ export async function downloadExampleScenesFolder(mujoco, scenePath) {
     }
   })();
 
-  sceneDownloadPromises.set(xmlDirectory, downloadPromise);
+  // Keep the promise keyed by the normalized scene path for consistency
+  sceneDownloadPromises.set(cacheKey, downloadPromise);
   try {
     await downloadPromise;
   } catch (error) {
-    sceneDownloadPromises.delete(xmlDirectory);
+    sceneDownloadPromises.delete(cacheKey);
     throw error;
   }
 }

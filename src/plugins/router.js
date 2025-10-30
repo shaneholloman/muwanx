@@ -5,15 +5,21 @@ import Demo from '@/views/Demo.vue'
 const routes = [
   {
     path: '/',
-    name: 'Demo',
+    name: 'Muwanx',
     component: Demo,
     props: () => ({ configPath: './config.json' })
   },
   {
     path: '/mujoco_menagerie',
-    name: 'MujocoMenagerie',
+    name: 'MuJoCo Menagerie',
     component: Demo,
     props: () => ({ configPath: './config_mujoco_menagerie.json' })
+  },
+  {
+    path: '/mujoco_playground',
+    name: 'MuJoCo Playground',
+    component: Demo,
+    props: () => ({ configPath: './config_mujoco_playground.json' })
   },
   {
     path: '/myosuite',
@@ -28,9 +34,10 @@ const router = createRouter({
   routes,
 })
 
-// Reinitialize the app on route/params change
+// Reinitialize only when the base route (path) changes.
+// Allow query-only updates (e.g., scene/policy) without full reload.
 router.beforeEach((to, from, next) => {
-  if (from.name && to.fullPath !== from.fullPath) {
+  if (from.name && to.path !== from.path) {
     window.location.hash = '#' + to.fullPath
     window.location.reload()
   } else {

@@ -217,3 +217,23 @@ testCases:
       - "public/examples/scenes/myosuite/myosuite/envs/myo/assets/leg_soccer/soccer_assets/soccer_scene/SoccerPitch_goal_top.obj"
       - "public/examples/scenes/myosuite/myosuite/envs/myo/assets/leg_soccer/soccer_assets/soccer_scene/soccer_ball.xml"
       - "public/examples/scenes/myosuite/myosuite/envs/myo/assets/leg_soccer/soccer_assets/soccer_scene/soccer_field.xml"
+
+  - name: mujoco_playground_leaphand
+    model_xml: public/examples/scenes/mujoco_playground/mujoco_playground/_src/manipulation/leap_hand/xmls/scene_mjx_cube.xml
+    assets:
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/base.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/distal.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/medial.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/palm_right.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/proximal.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/thumb_base.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/thumb_distal.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/thumb_proximal.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/thumb_tip.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_menagerie/leap_hand/assets/tip.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_playground/_src/manipulation/leap_hand/xmls/leap_rh_mjx.xml"
+      - "public/examples/scenes/mujoco_playground/mujoco_playground/_src/manipulation/leap_hand/xmls/meshes/dex_cube.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_playground/_src/manipulation/leap_hand/xmls/meshes/leap_mount.obj"
+      - "public/examples/scenes/mujoco_playground/mujoco_playground/_src/manipulation/leap_hand/xmls/reorientation_cube.xml"
+      - "public/examples/scenes/mujoco_playground/mujoco_playground/_src/manipulation/leap_hand/xmls/reorientation_cube_textures/dex_cube.png"
+      - "public/examples/scenes/mujoco_playground/mujoco_playground/_src/manipulation/leap_hand/xmls/scene_mjx_cube.xml"
