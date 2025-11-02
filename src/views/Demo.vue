@@ -1,1042 +1,182 @@
 <template>
-  <transition name="fade">
-    <div v-if="isTransitioning" class="transition-overlay">
-      <v-progress-circular indeterminate color="primary" size="64"></v-progress-circular>
-      <div class="transition-text">{{ transitionMessage || 'Loading...' }}</div>
+  <v-overlay :model-value="isTransitioning.value" :z-index="5000" class="switch-overlay" scrim="rgba(0,0,0,0.35)">
+    <div class="overlay-content">
+      <v-progress-circular indeterminate color="primary" size="64" />
+      <div class="transition-text">{{ transitionMessage.value || 'Loading...' }}</div>
     </div>
-  </transition>
+  </v-overlay>
 
-  <div id="mujoco-container" class="mujoco-container">
-    <!-- this is for placing the background demo -->
-  </div>
+  <div id="mujoco-container" class="mujoco-container" />
 
   <div class="control-panel" :class="{ 'panel-collapsed': isPanelCollapsed }">
-    <!-- Toggle button for mobile -->
     <v-btn v-if="isMobile" class="panel-toggle" @click="togglePanel" icon size="small" color="primary" elevation="2">
       <v-icon>{{ isPanelCollapsed ? 'mdi-chevron-up' : 'mdi-chevron-down' }}</v-icon>
     </v-btn>
 
-    <v-card class="control-card" :elevation="isMobile ? 0 : 2">
-      <!-- Project title with dropdown -->
-      <v-card-title class="control-card-title">
-        <v-menu
-          v-model="routeMenu"
-          :close-on-content-click="true"
-          transition="fade-transition"
-          location="bottom start"
-        >
-          <template #activator="{ props }">
-            <div class="project-title-activator">
-              <template v-if="config && config.project_name">
-                <template v-if="config.project_link">
-                  <a :href="config.project_link" target="_blank" rel="noopener" class="project-title-link">
-                    {{ config.project_name }}
-                  </a>
-                </template>
-                <template v-else>
-                  <span class="project-title-text">{{ config.project_name }}</span>
-                </template>
-              </template>
-              <template v-else>
-                <span class="project-title-text">{{ currentProjectLabel }}</span>
-              </template>
-              <v-btn v-bind="props" icon size="small" variant="text" density="compact" class="project-title-caret-btn">
-                <v-icon size="20" class="project-title-caret">mdi-chevron-down</v-icon>
-              </v-btn>
-            </div>
-          </template>
-          <v-list
-            id="route-listbox"
-            class="dropdown-list"
-            density="compact"
-            :style="{ minWidth: '192px', maxHeight: '280px', overflowY: 'auto' }"
-          >
-            <v-list-item
-              v-for="(r, i) in routeItems"
-              :key="r.name || i"
-              :class="{ selected: r.name === $route.name }"
-              role="option"
-              :aria-selected="String(r.name === $route.name)"
-              @click="goToRoute(r)"
-            >
-              <v-list-item-title>{{ r.title }}</v-list-item-title>
-              <template #append>
-                <v-icon v-if="r.name === $route.name" icon="mdi-check" size="small" color="primary"></v-icon>
-              </template>
-            </v-list-item>
-          </v-list>
-        </v-menu>
-      </v-card-title>
-      <!-- Scene selection -->
-      <v-card-text :class="{ 'mobile-padding': isMobile }">
-        <div class="control-row">
-          <div class="control-label">Scene</div>
-          <div class="control-unit">
-            <v-menu v-model="sceneMenu" :close-on-content-click="true" transition="fade-transition" location="bottom start">
-              <template #activator="{ props }">
-                <v-btn
-                  v-bind="props"
-                  class="segment-button"
-                  size="small"
-                  variant="text"
-                  append-icon="mdi-chevron-down"
-                  role="combobox"
-                  aria-haspopup="listbox"
-                  :aria-expanded="String(sceneMenu)"
-                  aria-controls="scene-listbox"
-                  block
-                >
-                  <span class="segment-value">{{ selectedTask?.name || '—' }}</span>
-                </v-btn>
-              </template>
-              <v-list id="scene-listbox" class="dropdown-list" density="compact" :style="{ minWidth: '192px', maxHeight: '280px', overflowY: 'auto' }">
-                <v-list-item
-                  v-for="(item, i) in taskItems"
-                  :key="item.id || i"
-                  :class="{ selected: item.id === task }"
-                  role="option"
-                  :aria-selected="String(item.id === task)"
-                  @click="task = item.id; updateTaskCallback()"
-                >
-                  <v-list-item-title>{{ item.name }}</v-list-item-title>
-                  <template #append>
-                    <v-icon v-if="item.id === task" icon="mdi-check" size="small" color="primary"></v-icon>
-                  </template>
-                </v-list-item>
-              </v-list>
-            </v-menu>
-          </div>
-        </div>
-      </v-card-text>
-
-      <!-- Policy selection (only if available) -->
-      <v-card-text v-if="selectedTask && selectedTask.policies && selectedTask.policies.length"
-        :class="{ 'mobile-padding': isMobile }">
-        <div class="control-row">
-          <div class="control-label">Policy</div>
-          <div class="control-unit">
-            <v-menu v-model="policyMenu" :close-on-content-click="true" transition="fade-transition" location="bottom start">
-              <template #activator="{ props }">
-                <v-btn
-                  v-bind="props"
-                  class="segment-button"
-                  size="small"
-                  variant="text"
-                  append-icon="mdi-chevron-down"
-                  role="combobox"
-                  aria-haspopup="listbox"
-                  :aria-expanded="String(policyMenu)"
-                  aria-controls="policy-listbox"
-                  block
-                >
-                  <span class="segment-value">{{ selectedPolicy?.name || '—' }}</span>
-                </v-btn>
-              </template>
-              <v-list id="policy-listbox" class="dropdown-list" density="compact" :style="{ minWidth: '192px', maxHeight: '280px', overflowY: 'auto' }">
-                <v-list-item
-                  v-for="(item, i) in policyItems"
-                  :key="item.id || i"
-                  :class="{ selected: item.id === policy }"
-                  role="option"
-                  :aria-selected="String(item.id === policy)"
-                  @click="policy = item.id; updatePolicyCallback()"
-                >
-                  <v-list-item-title>{{ item.name }}</v-list-item-title>
-                  <template #append>
-                    <v-icon v-if="item.id === policy" icon="mdi-check" size="small" color="primary"></v-icon>
-                  </template>
-                </v-list-item>
-              </v-list>
-            </v-menu>
-          </div>
-        </div>
-      </v-card-text>
-
-      <!-- Policy-specific contents for selected policy -->
-      <template v-if="selectedPolicy">
-        <!-- Command Controls Group -->
-        <v-card-text :class="{ 'mobile-padding': isMobile }">
-          <!-- Use Setpoint -->
-          <div v-if="selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('setpoint')" class="control-row">
-            <div class="control-label">Setpoint</div>
-            <div class="control-unit">
-              <v-checkbox
-                :disabled="compliant_mode"
-                v-model="use_setpoint"
-                @update:modelValue="updateUseSetpointCallback()"
-                density="compact"
-                hide-details
-                class="mobile-checkbox inline-checkbox"
-              />
-            </div>
-          </div>
-
-          <!-- Target Velocity slider -->
-          <div class="control-row">
-            <div class="control-label">Target Velocity</div>
-            <div class="control-unit">
-              <v-slider
-                :disabled="use_setpoint && selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('setpoint') && compliant_mode"
-                v-model="command_vel_x"
-                :min="-0.5"
-                :max="1.5"
-                :step="0.1"
-                :thumb-size="isMobile ? 18 : 14"
-                :track-size="isMobile ? 5 : 3"
-                hide-details
-                @update:modelValue="updateCommandVelXCallback()"
-                class="mobile-slider"
-              >
-                <template #append>
-                  <div class="slider-value">{{ command_vel_x }}</div>
-                </template>
-              </v-slider>
-            </div>
-          </div>
-        </v-card-text>
-
-        <v-card-text v-if="selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('trajectory_playback')"
-          :class="{ 'mobile-padding': isMobile }">
-          <!-- Playback controls -->
-          <div class="control-row">
-            <div class="control-label">Playback</div>
-            <div class="control-unit">
-              <v-btn-toggle v-model="trajectoryPlaybackState" mandatory class="mb-1">
-                <v-btn @click="playTrajectory" value="play" :size="isMobile ? 'default' : 'small'" prepend-icon="mdi-play">Play</v-btn>
-                <v-btn @click="stopTrajectory" value="stop" :size="isMobile ? 'default' : 'small'" prepend-icon="mdi-stop">Stop</v-btn>
-                <v-btn @click="resetTrajectory" value="reset" :size="isMobile ? 'default' : 'small'" prepend-icon="mdi-refresh">Reset</v-btn>
-              </v-btn-toggle>
-            </div>
-          </div>
-
-          <div class="control-row">
-            <div class="control-label">Loop</div>
-            <div class="control-unit">
-              <v-checkbox v-model="trajectoryLoop" @update:modelValue="updateTrajectoryLoop" density="compact" hide-details class="inline-checkbox" />
-            </div>
-          </div>
-        </v-card-text>
-
-        <!-- Stiffness Controls Group -->
-        <v-divider v-if="selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('stiffness')"></v-divider>
-        <v-card-text v-if="selectedPolicy.ui_controls && selectedPolicy.ui_controls.includes('stiffness')"
-          :class="{ 'mobile-padding': isMobile }">
-          <div class="control-row">
-            <div class="control-label">Compliant</div>
-            <div class="control-unit">
-              <v-checkbox v-model="compliant_mode" @update:modelValue="updateCompliantModeCallback()"
-                density="compact" hide-details class="mobile-checkbox inline-checkbox" />
-            </div>
-          </div>
-
-          <div class="control-row">
-            <div class="control-label">Stiffness Kp</div>
-            <div class="control-unit">
-              <v-slider :disabled="compliant_mode" v-model="facet_kp" :min="0" :max="24" :step="1"
-                :thumb-size="isMobile ? 18 : 14" :track-size="isMobile ? 5 : 3" hide-details
-                @update:modelValue="updateFacetKpCallback()" class="mobile-slider">
-                <template #append>
-                  <div class="slider-value">{{ facet_kp }}</div>
-                </template>
-              </v-slider>
-            </div>
-          </div>
-        </v-card-text>
-      </template>
-
-      <!-- Force Controls Group -->
-      <v-divider></v-divider>
-      <v-card-text v-if="selectedTask && selectedTask.name === 'Go2'" :class="{ 'mobile-padding': isMobile, 'pb-2': !isMobile }">
-        <div class="control-row">
-          <div class="control-label">Force</div>
-          <div class="control-unit">
-            <v-btn @click="StartImpulse" color="primary" :size="isMobile ? 'default' : 'small'" class="impulse-button" block>
-              Impulse
-            </v-btn>
-          </div>
-        </div>
-      </v-card-text>
-
-      <!-- Reset button (previous design) -->
-      <v-btn @click="reset" block text :size="isMobile ? 'default' : 'small'" class="reset-button">
-        Reset
-      </v-btn>
-    </v-card>
+    <ControlPanel :project-name="projectName" :project-link="projectLink" :route-items="routeItems"
+      :current-route-name="$route.name" :is-mobile="isMobile" :task-items="taskItems" :task-id="task"
+      :policy-items="policyItems" :policy-id="policy" :selected-task="selectedTask" :selected-policy="selectedPolicy"
+      :use-setpoint="use_setpoint" :command-vel-x="command_vel_x" :compliant-mode="compliant_mode" :facet-kp="facet_kp"
+      :trajectory-state="trajectoryPlaybackState" :trajectory-loop="trajectoryLoop" @navigateRoute="goToRoute"
+      @selectTask="onSelectTask" @selectPolicy="onSelectPolicy"
+      @update:useSetpoint="onUpdateUseSetpoint"
+      @update:commandVelX="onUpdateCommandVelX"
+      @update:facetKp="onUpdateFacetKp"
+      @update:compliantMode="onUpdateCompliantMode"
+      @playTrajectory="playTrajectory" @stopTrajectory="stopTrajectory" @resetTrajectory="resetTrajectory"
+      @update:trajectoryLoop="updateTrajectoryLoop" @impulse="triggerImpulse" @reset="reset" />
   </div>
 
-  <!-- Loading dialog -->
-  <v-dialog :model-value="state === 0" persistent :max-width="isMobile ? '90vw' : '600px'"
-    :fullscreen="isMobile && isSmallScreen" scrollable>
-    <v-card class="status-dialog-card" :title="!isMobile ? 'Loading Simulation Environment' : undefined">
-      <v-card-text class="dialog-content">
-        <div v-if="isMobile" class="mobile-dialog-title">Loading...</div>
-        <v-progress-linear indeterminate color="primary" class="mb-4"></v-progress-linear>
-        <div class="loading-text">
-          <span v-if="isMobile">
-            Setting up simulation,<br />Please wait...
-          </span>
-          <span v-else>
-            Setting up simulation, Please wait...
-          </span>
-        </div>
-      </v-card-text>
-    </v-card>
-  </v-dialog>
+  <StatusDialogs :state="state" :extra-error-message="extra_error_message"
+    :url-param-error-message="urlParamErrorMessage" :is-mobile="isMobile" :is-small-screen="isSmallScreen"
+    @clearWarning="clearUrlWarning" />
 
-  <!-- Error dialog -->
-  <v-dialog :model-value="state < 0 || urlParamErrorMessage !== ''" :persistent="state < 0"
-    :max-width="isMobile ? '90vw' : '600px'" :fullscreen="isMobile && isSmallScreen" scrollable>
-    <v-card class="status-dialog-card"
-      :title="urlParamErrorMessage ? 'Invalid URL Parameters' : (isMobile ? 'Error' : 'Simulation Environment Loading Error')">
-      <v-card-text class="dialog-content">
-        <div class="error-text" v-if="state < 0">
-          <span v-if="state == -1">
-            Unexpected JS error, please refresh the page
-            <br />
-            {{ extra_error_message }}
-          </span>
-          <span v-if="state == -2">
-            Your browser does not support WebAssembly, please use latest Chrome/Edge/Firefox
-          </span>
-        </div>
-        <div v-if="urlParamErrorMessage" class="warning-content-inline">
-          <v-icon color="warning" size="48" class="mb-3">mdi-alert</v-icon>
-          <div class="warning-message">{{ urlParamErrorMessage }}</div>
-        </div>
-      </v-card-text>
-      <v-card-actions v-if="urlParamErrorMessage">
-        <v-spacer></v-spacer>
-        <v-btn color="primary" variant="text" @click="urlParamErrorMessage = ''">
-          OK
-        </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+  <Notice />
 
-  <!-- Notice -->
-  <div class="notice-container">
-    <div class="notice-content">
-      Powered by
-      <a href="https://github.com/ttktjmt/muwanx" target="_blank" class="notice-link">
-        Muwanx
-      </a>
-    </div>
-  </div>
-
-  <!-- Help Button -->
   <div class="help-button-container" v-if="!isMobile || isPanelCollapsed">
-    <v-btn @click="showHelpDialog = true" icon size="small" variant="text" class="help-btn"
-      title="Help Button (?)">
+    <v-btn @click="showHelpDialog = true" icon size="small" variant="text" class="help-btn" title="Help Button (?)">
       <v-icon color="white">mdi-help</v-icon>
     </v-btn>
   </div>
 
-  <!-- Help Dialog -->
-  <v-dialog v-model="showHelpDialog" :max-width="isMobile ? '90vw' : '500px'" scrollable>
-    <v-card>
-      <v-card-title class="d-flex justify-space-between align-center">
-        <span>Help</span>
-        <v-btn icon size="small" @click="showHelpDialog = false">
-          <v-icon>mdi-close</v-icon>
-        </v-btn>
-      </v-card-title>
-      <v-divider></v-divider>
-      <v-card-text class="help-content">
-        <div class="help-title">Keyboard Shortcuts</div>
-        <div class="shortcut-section">
-          <div class="shortcut-item">
-            <div class="shortcut-key">
-              <kbd @click="showHelpDialog = false" class="clickable-key">?</kbd>
-            </div>
-            <div class="shortcut-description">
-              Toggle this help dialog
-            </div>
-          </div>
-          <div class="shortcut-item">
-            <div class="shortcut-key">
-              <kbd @click="toggleUIVisibility" class="clickable-key">i</kbd>
-            </div>
-            <div class="shortcut-description">
-              Toggle Interactive Mode (Hide/Show UI)
-            </div>
-          </div>
-          <div class="shortcut-item">
-            <div class="shortcut-key">
-              <kbd @click="reset" class="clickable-key">backspace</kbd>
-            </div>
-            <div class="shortcut-description">
-              Reset simulation
-            </div>
-          </div>
-          <div class="shortcut-item">
-            <div class="shortcut-key">
-              <kbd @click="navigateScene(1)" class="clickable-key">s</kbd>
-              /
-              <kbd @click="navigateScene(-1)" class="clickable-key">S</kbd>
-            </div>
-            <div class="shortcut-description">
-              Next / Previous scene
-            </div>
-          </div>
-          <div class="shortcut-item">
-            <div class="shortcut-key">
-              <kbd @click="navigatePolicy(1)" class="clickable-key">p</kbd>
-              /
-              <kbd @click="navigatePolicy(-1)" class="clickable-key">P</kbd>
-            </div>
-            <div class="shortcut-description">
-              Next / Previous policy
-            </div>
-          </div>
-        </div>
-      </v-card-text>
-    </v-card>
-  </v-dialog>
+  <HelpDialog v-model="showHelpDialog" :is-mobile="isMobile" @toggleHelp="() => (showHelpDialog = !showHelpDialog)"
+    @toggleUI="toggleUIVisibility" @reset="reset" @navigateScene="navigateScene" @navigatePolicy="navigatePolicy" />
 </template>
 
-<script>
-import { MujocoRuntime } from '@/mujoco_wasm/runtime/MujocoRuntime.js';
-import { GoCommandManager } from '@/mujoco_wasm/runtime/managers/commands/GoCommandManager.js';
-import { IsaacActionManager } from '@/mujoco_wasm/runtime/managers/actions/IsaacActionManager.js';
-import { PassiveActionManager } from '@/mujoco_wasm/runtime/managers/actions/PassiveActionManager.js';
-import { TrajectoryActionManager } from '@/mujoco_wasm/runtime/managers/actions/TrajectoryActionManager.js';
-import { ConfigObservationManager } from '@/mujoco_wasm/runtime/managers/observations/ConfigObservationManager.js';
-import { LocomotionEnvManager } from '@/mujoco_wasm/runtime/managers/environment/LocomotionEnvManager.js';
-import loadMujoco from '@/mujoco_wasm/dist/mujoco_wasm.js';
-import { markRaw, nextTick } from 'vue';
-import { createShortcuts } from '@/utils/shortcuts.js';
+<script setup>
+import { onMounted, onBeforeUnmount, watch, ref, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import ControlPanel from '@/views/demo/components/ControlPanel.vue'
+import StatusDialogs from '@/views/demo/components/StatusDialogs.vue'
+import HelpDialog from '@/views/demo/components/HelpDialog.vue'
+import Notice from '@/views/demo/components/Notice.vue'
+import { useConfig } from '@/views/demo/composables/useConfig'
+import { useRuntime } from '@/views/demo/composables/useRuntime'
+import { useScenePolicy } from '@/views/demo/composables/useScenePolicy'
+import { useUrlSync } from '@/views/demo/composables/useUrlSync'
+import { useTransition } from '@/views/demo/composables/useTransition'
+import { useResponsive } from '@/views/demo/composables/useResponsive'
+import { createShortcuts } from '@/utils/shortcuts.js'
 
-export default {
-  name: 'DemoPage',
-  props: {
-    configPath: {
-      type: String,
-      default: './config.json'
-    }
-  },
-  data: () => ({
-    // segmented dropdown menus state
-    sceneMenu: false,
-    policyMenu: false,
-    routeMenu: false,
-    config: { tasks: [] },
-    task: null,
-    policy: null,
-    facet_kp: 24,
-    command_vel_x: 0.0,
-    use_setpoint: true,
-    compliant_mode: false,
-    state: 0,
-    extra_error_message: "",
-    urlParamErrorMessage: "",
-    shortcuts: null,
-    runtime: null,
-    commandManager: null,
-    actionManager: null,
-    trajectoryManager: null,
-    observationManager: null,
-    envManager: null,
-    // Mobile responsive data
-    isMobile: false,
-    isSmallScreen: false,
-    isPanelCollapsed: false,
-    isTransitioning: false,
-    transitionMessage: '',
-    // Interactive mode (hide UI)
-    uiHidden: false,
-    // Help dialog
-    showHelpDialog: false,
-    // Trajectory playback controls
-    trajectoryPlaybackState: 'stop',
-    trajectoryLoop: false,
-  }),
-  computed: {
-    selectedTask() {
-      return this.config?.tasks?.find?.(t => t.id === this.task) || null;
-    },
-    selectedPolicy() {
-      if (!this.selectedTask || !this.selectedTask.policies) return null;
-      return this.selectedTask.policies.find(p => p.id === this.policy) || null;
-    },
-    taskItems() {
-      return this.config?.tasks || [];
-    },
-    policyItems() {
-      return this.selectedTask?.policies || [];
-    },
-    currentProjectLabel() {
-      // Prefer config project_name if available, else fall back to route name
-      return this.config?.project_name || this.$route?.name || '—';
-    },
-    routeItems() {
-      // Build list from router records; use route name as title
-      const routes = (this.$router?.getRoutes?.() || []).filter(r => r.name && r.path);
-      // Deduplicate by name in case of aliases
-      const seen = new Set();
-      const items = [];
-      for (const r of routes) {
-        const key = String(r.name);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        items.push({ name: r.name, path: r.path, title: key });
-      }
-      return items;
-    },
-  },
-  watch: {
-    // Keep URL query in sync with current scene/policy selection
-    task() {
-      this.syncUrlWithSelection();
-    },
-    policy() {
-      this.syncUrlWithSelection();
-    },
-  },
-  methods: {
-    // Update the route query to reflect current scene and policy
-    syncUrlWithSelection() {
-      try {
-        const sceneName = this.selectedTask?.name || null;
-        const policyName = this.selectedPolicy?.name || null;
+const props = defineProps({ configPath: { type: String, default: './config.json' } })
 
-        const currentQuery = { ...(this.$route?.query || {}) };
-        const nextQuery = { ...currentQuery };
+const { isTransitioning, transitionMessage, withTransition } = useTransition()
+const { isMobile, isSmallScreen, isPanelCollapsed, togglePanel } = useResponsive()
+const rt = useRuntime()
+const {
+  state,
+  extra_error_message,
+  use_setpoint,
+  command_vel_x,
+  compliant_mode,
+  facet_kp,
+  trajectoryPlaybackState,
+  trajectoryLoop,
+  initRuntime,
+  onTaskChange,
+  onPolicyChange,
+  updateFacetKp,
+  updateUseSetpoint,
+  updateCommandVelX,
+  updateCompliantMode,
+  triggerImpulse,
+  playTrajectory,
+  stopTrajectory,
+  resetTrajectory,
+  updateTrajectoryLoop,
+  reset,
+  dispose,
+} = rt
 
-        if (sceneName) {
-          nextQuery.scene = sceneName;
-        } else {
-          delete nextQuery.scene;
-        }
+const conf = useConfig(props.configPath)
+const { config: appConfig, task, policy, taskItems, policyItems, selectedTask, selectedPolicy, urlParamErrorMessage, resolveDefaultPolicy, loadConfig } = conf
+const projectName = computed(() => appConfig.value?.project_name)
+const projectLink = computed(() => appConfig.value?.project_link)
 
-        if (policyName) {
-          nextQuery.policy = policyName;
-        } else {
-          delete nextQuery.policy;
-        }
+const { routeItems, goToRoute, sync } = useUrlSync({
+  router: useRouter(),
+  route: useRoute(),
+  getSceneName: () => selectedTask.value?.name || null,
+  getPolicyName: () => selectedPolicy.value?.name || null,
+})
 
-        // Only navigate if something actually changed
-        const changed = Object.keys({ ...currentQuery, ...nextQuery }).some(k => currentQuery[k] !== nextQuery[k])
-          || Object.keys(currentQuery).length !== Object.keys(nextQuery).length;
-        if (!changed) return;
+const { selectTask, selectPolicy, navigateScene, navigatePolicy } = useScenePolicy({
+  config: appConfig,
+  task,
+  policy,
+  resolveDefaultPolicy,
+  onTaskChange,
+  onPolicyChange,
+  withTransition,
+})
 
-        this.$router?.replace({ query: nextQuery });
-      } catch (e) {
-        // Non-fatal; avoid disrupting UI if routing not ready
-        console.warn('Failed to sync URL with selection:', e);
-      }
-    },
-    goToRoute(route) {
-      try {
-        if (route?.path && route.name !== this.$route?.name) {
-          this.$router.push({ path: route.path });
-        }
-      } finally {
-        this.routeMenu = false;
-      }
-    },
-    resolveDefaultPolicy(task) {
-      if (!task) return null;
-      if (task.default_policy !== null && task.default_policy !== undefined) {
-        return task.default_policy;
-      }
-      return task.policies?.[0]?.id ?? null;
-    },
-    async withTransition(message, action) {
-      this.transitionMessage = message;
-      this.isTransitioning = true;
-      await nextTick();
-      try {
-        return await action();
-      } finally {
-        this.isTransitioning = false;
-        this.transitionMessage = '';
-      }
-    },
-    resolveSceneConfig(task, policy) {
-      if (!task) {
-        return { scenePath: null, metaPath: null };
-      }
-      const scenePath = policy?.model_xml ?? task.model_xml;
-      const metaRaw = policy?.asset_meta ?? task.asset_meta ?? null;
-      const metaPath = metaRaw === 'null' || metaRaw === '' ? null : metaRaw;
-      return { scenePath, metaPath };
-    },
-    hasAssetMeta(metaPath) {
-      return Boolean(metaPath);
-    },
-    async loadAssetMeta(metaPath) {
-      if (!metaPath) return null;
-      try {
-        const resp = await fetch(metaPath);
-        if (!resp.ok) return null;
-        return await resp.json();
-      } catch (e) {
-        console.warn('Failed to load asset_meta for inspection:', e);
-        return null;
-      }
-    },
-    async ensureActionManager(metaPath, policyConfig) {
-      // Decide manager type more robustly: only use Isaac if asset_meta includes Isaac-related keys
-      // (so asset_meta can be camera-only without forcing IsaacActionManager)
-      let needsIsaac = false;
-      if (this.hasAssetMeta(metaPath)) {
-        const meta = await this.loadAssetMeta(metaPath);
-        if (meta && typeof meta === 'object') {
-          const hasIsaacJoints = Array.isArray(meta.joint_names_isaac) && meta.joint_names_isaac.length > 0;
-          const hasActuators = meta.actuators && typeof meta.actuators === 'object' && Object.keys(meta.actuators).length > 0;
-          const hasDefaultJpos = Array.isArray(meta.default_joint_pos) && meta.default_joint_pos.length > 0;
-          needsIsaac = hasIsaacJoints || hasActuators || hasDefaultJpos;
-        }
-      }
-      const needsTrajectory = policyConfig?.type === 'trajectory';
-      const currentManager = this.actionManager;
+const showHelpDialog = ref(false)
+let shortcuts = null
 
-      if (needsTrajectory) {
-        const trajectoryPath = policyConfig?.trajectory_path ?? null;
-        if (currentManager instanceof TrajectoryActionManager) {
-          await this.loadTrajectoryData(currentManager, trajectoryPath);
-          this.trajectoryManager = currentManager;
-          currentManager.setLoop(this.trajectoryLoop);
-          this.trajectoryPlaybackState = 'stop';
-          return;
-        }
+function toggleUIVisibility() {
+  document.body.classList.toggle('interactive-mode')
+}
 
-        const nextManager = markRaw(new TrajectoryActionManager());
-        if (this.runtime) {
-          if (this.runtime.actionManager && typeof this.runtime.actionManager.dispose === 'function') {
-            this.runtime.actionManager.dispose();
-          }
-          this.runtime.actionManager = nextManager;
-          nextManager.attachRuntime(this.runtime);
-          if (typeof nextManager.onInit === 'function') {
-            await nextManager.onInit();
-          }
-        }
-        await this.loadTrajectoryData(nextManager, trajectoryPath);
-        nextManager.setLoop(this.trajectoryLoop);
-        this.actionManager = nextManager;
-        this.trajectoryManager = nextManager;
-        this.trajectoryPlaybackState = 'stop';
-        return;
-      }
+async function onSelectTask(id) { await selectTask(id) }
+async function onSelectPolicy(id) { await selectPolicy(id) }
 
-      this.trajectoryManager = null;
-      this.trajectoryPlaybackState = 'stop';
-      this.trajectoryLoop = false;
+function onUpdateUseSetpoint(v) {
+  use_setpoint.value = v
+  updateUseSetpoint()
+}
 
-      if (needsIsaac && currentManager instanceof IsaacActionManager) {
-        return;
-      }
-      if (!needsIsaac && currentManager instanceof PassiveActionManager) {
-        return;
-      }
+function onUpdateCommandVelX(v) {
+  command_vel_x.value = v
+  updateCommandVelX()
+}
 
-      const nextManager = markRaw(needsIsaac ? new IsaacActionManager() : new PassiveActionManager());
-      if (this.runtime) {
-        if (this.runtime.actionManager && typeof this.runtime.actionManager.dispose === 'function') {
-          this.runtime.actionManager.dispose();
-        }
-        this.runtime.actionManager = nextManager;
-        nextManager.attachRuntime(this.runtime);
-        if (typeof nextManager.onInit === 'function') {
-          await nextManager.onInit();
-        }
-      }
-      this.actionManager = nextManager;
-    },
-    async loadTrajectoryData(manager, trajectoryPath) {
-      if (!manager || !trajectoryPath) {
-        return;
-      }
-      try {
-        const response = await fetch(trajectoryPath);
-        if (!response.ok) {
-          console.warn(`Failed to load trajectory from ${trajectoryPath}: ${response.status}`);
-          return;
-        }
-        const trajectoryData = await response.json();
-        manager.loadTrajectory(trajectoryData);
-      } catch (error) {
-        console.error('Error loading trajectory data:', error);
-      }
-    },
-    applyCommandState() {
-      if (!this.commandManager) {
-        return;
-      }
-      this.commandManager.setUseSetpoint(this.use_setpoint);
-      this.commandManager.setCompliantMode(this.compliant_mode);
-      this.commandManager.setImpedanceKp(this.facet_kp);
-      this.commandManager.setCommandVelocityX(this.command_vel_x);
-      const params = this.runtime?.params;
-      if (params) {
-        this.facet_kp = params.impedance_kp;
-        this.command_vel_x = params.command_vel_x;
-      }
-    },
-    checkMobileDevice() {
-      this.isMobile = window.innerWidth <= 768;
-      this.isSmallScreen = window.innerWidth <= 480;
-      this.isPanelCollapsed = this.isMobile; // Start collapsed on mobile
-    },
-    togglePanel() {
-      this.isPanelCollapsed = !this.isPanelCollapsed;
-    },
-    toggleUIVisibility() {
-      this.uiHidden = !this.uiHidden;
-      // Toggle body class for global CSS targeting
-      if (this.uiHidden) {
-        document.body.classList.add('interactive-mode');
-      } else {
-        document.body.classList.remove('interactive-mode');
-      }
-    },
-    async init() {
-      if (typeof WebAssembly !== "object" || typeof WebAssembly.instantiate !== "function") {
-        this.state = -2;
-        return;
-      }
-      try {
-        await this.loadConfig();
-        console.log(this.config);
-        if (!this.config.tasks.length) return;
-        const mujoco = await loadMujoco();
+function onUpdateFacetKp(v) {
+  facet_kp.value = v
+  updateFacetKp()
+}
 
-        // Use the task and policy selected in loadConfig (may be from URL params)
-        const initialTask = this.config.tasks.find(t => t.id === this.task) ?? this.config.tasks[0];
-        const initialPolicy = initialTask.policies.find(p => p.id === this.policy) ??
-          initialTask.policies.find(p => p.id === initialTask.default_policy) ??
-          initialTask.policies[0];
-        const { scenePath, metaPath } = this.resolveSceneConfig(initialTask, initialPolicy);
+function onUpdateCompliantMode(v) {
+  compliant_mode.value = v
+  updateCompliantMode()
+}
 
-        await this.ensureActionManager(metaPath, initialPolicy);
-        this.commandManager = markRaw(new GoCommandManager());
-        this.observationManager = markRaw(new ConfigObservationManager());
-        this.envManager = markRaw(new LocomotionEnvManager());
+function clearUrlWarning() { urlParamErrorMessage.value = '' }
 
-        this.runtime = markRaw(new MujocoRuntime(mujoco, {
-          commandManager: this.commandManager,
-          actionManager: this.actionManager,
-          observationManagers: [this.observationManager],
-          envManagers: [this.envManager],
-        }));
-        await this.runtime.init({
-          scenePath,
-          metaPath,
-          policyPath: initialPolicy?.path,
-        });
-        this.updateFacetballService(initialPolicy);
-        this.runtime.resume();
-        this.applyCommandState();
-        this.state = 1;
-      } catch (error) {
-        this.state = -1;
-        this.extra_error_message = error.toString();
-        console.error(error);
-      }
-    },
-    async loadConfig() {
-      try {
-        const response = await fetch(this.configPath);
-        this.config = await response.json();
+watch([selectedTask, selectedPolicy], () => sync())
 
-        // Parse URL parameters for initial scene and policy
-        const urlParams = new URLSearchParams(window.location.hash.split('?')[1]);
-        const sceneParam = urlParams.get('scene');
-        const policyParam = urlParams.get('policy');
+onMounted(async () => {
+  await loadConfig()
+  if (selectedTask.value) {
+    const initialTask = selectedTask.value
+    const initialPolicy = selectedPolicy.value
+    await initRuntime(initialTask, initialPolicy)
+  }
 
-        let selectedTask = null;
-        let selectedPolicyId = null;
-        let warningMessages = [];
+  const urlParams = new URLSearchParams(window.location.hash.split('?')[1])
+  if (urlParams.get('hidectrl') === '1') {
+    document.body.classList.add('interactive-mode')
+  } else if (urlParams.get('hidectrl') === '0') {
+    document.body.classList.remove('interactive-mode')
+  }
 
-        // Try to find task by name from URL parameter
-        if (sceneParam) {
-          selectedTask = this.config.tasks.find(t =>
-            t.name.toLowerCase() === sceneParam.toLowerCase()
-          );
+  shortcuts = createShortcuts({
+    onReset: () => reset(),
+    onToggleUI: () => toggleUIVisibility(),
+    onNavigateScene: (d) => navigateScene(d),
+    onNavigatePolicy: (d) => navigatePolicy(d),
+    getHelpVisible: () => showHelpDialog.value,
+    setHelpVisible: (v) => { showHelpDialog.value = v },
+  })
+})
 
-          if (!selectedTask) {
-            console.warn(`Scene "${sceneParam}" not found, using default`);
-            warningMessages.push(`Scene "${sceneParam}" not found`);
-          }
-        }
-
-        // Fall back to first task if not found
-        if (!selectedTask) {
-          selectedTask = this.config.tasks[0];
-        }
-
-        this.task = selectedTask?.id ?? null;
-
-        // Try to find policy by name from URL parameter
-        if (policyParam && selectedTask?.policies?.length) {
-          const foundPolicy = selectedTask.policies.find(p =>
-            p.name.toLowerCase() === policyParam.toLowerCase()
-          );
-
-          if (foundPolicy) {
-            selectedPolicyId = foundPolicy.id;
-          } else {
-            console.warn(`Policy "${policyParam}" not found for scene "${selectedTask.name}", using default`);
-            warningMessages.push(`Policy "${policyParam}" not found for scene "${selectedTask.name}"`);
-          }
-        }
-
-        // Fall back to default policy if not specified or not found
-        this.policy = selectedPolicyId ?? this.resolveDefaultPolicy(selectedTask);
-
-        // Show error dialog if there were any issues with URL parameters
-        if (warningMessages.length > 0) {
-          const defaultPolicyName = selectedTask.policies.find(p => p.id === this.policy)?.name ?? 'default';
-          this.urlParamErrorMessage = `${warningMessages.join('. ')}.\n\nLoading default: ${selectedTask.name} - ${defaultPolicyName}`;
-        }
-      } catch (error) {
-        console.error('Failed to load config:', error);
-        this.state = -1;
-        this.extra_error_message = 'Config load failed: ' + error;
-      }
-    },
-    async updateTaskCallback() {
-      const selectedTask = this.config.tasks.find(t => t.id === this.task);
-      if (!selectedTask) return;
-
-      this.policy = this.resolveDefaultPolicy(selectedTask);
-      if (!this.runtime) return;
-      const selectedPolicy = selectedTask.policies.find(p => p.id === this.policy);
-      const { scenePath, metaPath } = this.resolveSceneConfig(selectedTask, selectedPolicy);
-      await this.withTransition('Switching scene...', async () => {
-        await this.ensureActionManager(metaPath, selectedPolicy);
-        await this.runtime.loadEnvironment({
-          scenePath,
-          metaPath,
-          policyPath: selectedPolicy?.path,
-        });
-        this.updateFacetballService(selectedPolicy);
-        this.runtime.resume();
-        this.applyCommandState();
-      });
-    },
-    async updatePolicyCallback() {
-      const selectedTask = this.config.tasks.find(t => t.id === this.task);
-      const selectedPolicy = selectedTask.policies.find(p => p.id === this.policy);
-      if (!selectedPolicy) return;
-
-      if (!this.runtime) return;
-      const { scenePath, metaPath } = this.resolveSceneConfig(selectedTask, selectedPolicy);
-      await this.withTransition('Switching policy...', async () => {
-        await this.ensureActionManager(metaPath, selectedPolicy);
-        await this.runtime.loadEnvironment({
-          scenePath,
-          metaPath,
-          policyPath: selectedPolicy.path,
-        });
-        this.updateFacetballService(selectedPolicy);
-        this.runtime.resume();
-        this.applyCommandState();
-      });
-    },
-    async reloadDefaultPolicyAndResetSimulation() {
-      if (!this.runtime) return;
-
-      const selectedTask = this.config.tasks.find(t => t.id === this.task);
-      if (!selectedTask) return;
-
-      this.policy = this.resolveDefaultPolicy(selectedTask);
-      const defaultPolicy = selectedTask.policies.find(p => p.id === this.policy);
-
-      try {
-        const { scenePath, metaPath } = this.resolveSceneConfig(selectedTask, defaultPolicy);
-        await this.withTransition('Switching scene...', async () => {
-          await this.ensureActionManager(metaPath, defaultPolicy);
-          await this.runtime.loadEnvironment({
-            scenePath,
-            metaPath,
-            policyPath: defaultPolicy?.path,
-          });
-          this.updateFacetballService(defaultPolicy);
-          this.runtime.resume();
-
-          // Reset simulation after loading default policy or environment
-          await this.runtime.reset();
-          this.applyCommandState();
-        });
-      } catch (error) {
-        console.error('Failed to reload default policy and reset simulation:', error);
-      }
-    },
-    updateFacetballService(selectedPolicy) {
-      if (!this.runtime) return;
-      const setpointService = this.runtime.getService?.('setpoint-control');
-      if (!setpointService) return;
-      const policyId = selectedPolicy?.id ?? this.policy ?? null;
-      setpointService.setActivePolicy?.(policyId);
-      const showSetpoint = selectedPolicy?.show_setpoint ?? (policyId === 'facet');
-      setpointService.setVisible?.(showSetpoint || this.use_setpoint);
-      if (showSetpoint) {
-        setpointService.reset?.();
-      }
-    },
-    async resetSimulation() {
-      if (!this.runtime) return;
-
-      try {
-        await this.runtime.reset();
-        this.applyCommandState();
-      } catch (error) {
-        console.error('Failed to reset simulation:', error);
-      }
-    },
-    async reset() {
-      if (!this.runtime) return;
-      await this.runtime.reset();
-      this.applyCommandState();
-    },
-    updateFacetKpCallback() {
-      this.facet_kp = Math.max(this.facet_kp, 12);
-      this.facet_kp = Math.min(this.facet_kp, 24);
-      if (!this.commandManager) return;
-      this.commandManager.setImpedanceKp(this.facet_kp);
-      this.facet_kp = this.runtime?.params?.impedance_kp ?? this.facet_kp;
-    },
-    updateUseSetpointCallback() {
-      console.log("use setpoint", this.use_setpoint);
-      if (!this.commandManager) return;
-      this.commandManager.setUseSetpoint(this.use_setpoint);
-      if (this.use_setpoint) {
-        this.command_vel_x = 0.0;
-        this.commandManager.setCommandVelocityX(this.command_vel_x);
-      }
-    },
-    updateCommandVelXCallback() {
-      console.log("set command vel x", this.command_vel_x);
-      if (!this.commandManager) return;
-      this.commandManager.setCommandVelocityX(this.command_vel_x);
-    },
-    updateCompliantModeCallback() {
-      if (!this.commandManager) return;
-      this.commandManager.setCompliantMode(this.compliant_mode);
-      this.facet_kp = this.runtime?.params?.impedance_kp ?? this.facet_kp;
-    },
-    StartImpulse() {
-      console.log("start impulse");
-      if (!this.commandManager) return;
-      this.commandManager.triggerImpulse();
-    },
-    playTrajectory() {
-      if (!this.trajectoryManager) {
-        return;
-      }
-      this.trajectoryManager.play();
-      this.trajectoryPlaybackState = 'play';
-    },
-    stopTrajectory() {
-      if (!this.trajectoryManager) {
-        return;
-      }
-      this.trajectoryManager.stop();
-      this.trajectoryPlaybackState = 'stop';
-      this.runtime?.applyAction?.();
-    },
-    resetTrajectory() {
-      if (!this.trajectoryManager) {
-        return;
-      }
-      const wasPlaying = this.trajectoryManager.isPlaying;
-      this.trajectoryManager.reset();
-      this.trajectoryPlaybackState = wasPlaying ? 'play' : 'reset';
-    },
-    updateTrajectoryLoop(value) {
-      this.trajectoryLoop = value;
-      if (this.trajectoryManager) {
-        this.trajectoryManager.setLoop(value);
-      }
-    },
-    handleResize() {
-      this.checkMobileDevice();
-    },
-    navigateScene(direction) {
-      if (!this.config.tasks || this.config.tasks.length === 0) return;
-
-      const currentIndex = this.config.tasks.findIndex(t => t.id === this.task);
-      if (currentIndex === -1) return;
-
-      let nextIndex = currentIndex + direction;
-      // Wrap around
-      if (nextIndex < 0) {
-        nextIndex = this.config.tasks.length - 1;
-      } else if (nextIndex >= this.config.tasks.length) {
-        nextIndex = 0;
-      }
-
-      this.task = this.config.tasks[nextIndex].id;
-      this.updateTaskCallback();
-    },
-    navigatePolicy(direction) {
-      const selectedTask = this.config.tasks.find(t => t.id === this.task);
-      if (!selectedTask || !selectedTask.policies || selectedTask.policies.length === 0) return;
-
-      const currentIndex = selectedTask.policies.findIndex(p => p.id === this.policy);
-      if (currentIndex === -1) return;
-
-      let nextIndex = currentIndex + direction;
-      // Wrap around
-      if (nextIndex < 0) {
-        nextIndex = selectedTask.policies.length - 1;
-      } else if (nextIndex >= selectedTask.policies.length) {
-        nextIndex = 0;
-      }
-
-      this.policy = selectedTask.policies[nextIndex].id;
-      this.updatePolicyCallback();
-    },
-  },
-  mounted() {
-    this.checkMobileDevice();
-    this.init();
-
-    window.addEventListener('resize', this.handleResize);
-
-    const urlParams = new URLSearchParams(window.location.hash.split('?')[1]);
-    if (urlParams.get('hidectrl') === '1') {
-      this.uiHidden = true;
-      document.body.classList.add('interactive-mode');
-    } else if (urlParams.get('hidectrl') === '0') {
-      this.uiHidden = false;
-      document.body.classList.remove('interactive-mode');
-    }
-
-    this.shortcuts = createShortcuts({
-      onReset: () => this.reset(),
-      onToggleUI: () => this.toggleUIVisibility(),
-      onNavigateScene: (d) => this.navigateScene(d),
-      onNavigatePolicy: (d) => this.navigatePolicy(d),
-      getHelpVisible: () => this.showHelpDialog,
-      setHelpVisible: (v) => { this.showHelpDialog = v; },
-    });
-  },
-  beforeUnmount() {
-    // Properly dispose of the runtime before component unmount
-    if (this.runtime) {
-      try {
-        this.runtime.dispose();
-      } catch (e) {
-        console.warn('Error disposing runtime:', e);
-      }
-      this.runtime = null;
-    }
-
-    window.removeEventListener('resize', this.handleResize);
-    if (this.shortcuts && typeof this.shortcuts.detach === 'function') {
-      this.shortcuts.detach();
-    }
-    // Clean up interactive mode class
-    document.body.classList.remove('interactive-mode');
-  },
-};
+onBeforeUnmount(() => {
+  dispose()
+  if (shortcuts && typeof shortcuts.detach === 'function') shortcuts.detach()
+  document.body.classList.remove('interactive-mode')
+})
 </script>
 
 <style scoped>
-/* Canvas container */
 .mujoco-container {
   position: fixed;
   inset: 0;
@@ -1045,7 +185,6 @@ export default {
   z-index: 1;
 }
 
-/* Control panel */
 .control-panel {
   position: fixed;
   top: 20px;
@@ -1054,225 +193,6 @@ export default {
   z-index: 1000;
 }
 
-.control-card {
-  background: var(--ui-surface);
-  backdrop-filter: saturate(120%) blur(6px);
-  border: 1px solid var(--ui-border);
-  box-shadow: var(--ui-shadow);
-  border-radius: 8px !important; /* sharper corners */
-}
-
-/* removed old tabs styles */
-
-.control-card {
-  font-size: 0.8rem; /* base size inside panel */
-}
-
-.control-card :deep(.v-card-title.control-card-title) {
-  padding: 6px 12px !important;
-  background: primary !important;
-}
-
-.project-title-link,
-.project-title-text {
-  color: var(--ui-text);
-  text-decoration: none;
-  font-size: 1.1rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-
-.project-title-link:hover { text-decoration: none; }
-
-/* Keep title look identical; add chevron at right */
-.project-title-activator {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  cursor: pointer;
-  gap: 6px;
-}
-
-.project-title-activator .project-title-link,
-.project-title-activator .project-title-text {
-  flex: 1;
-}
-
-.project-title-caret {
-  opacity: 0.8;
-}
-
-.project-title-caret-btn.v-btn {
-  min-width: 0 !important;
-  padding: 0 !important;
-  margin: 0 0 0 6px !important;
-  box-shadow: none !important;
-}
-
-.mobile-padding { padding: 6px 10px !important; }
-.control-card :deep(.v-card-text) { padding: 6px 10px !important; }
-
-.control-section-title {
-  margin: 4px 0 4px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--ui-text);
-  opacity: 0.85;
-}
-
-/* Unified label + control rows */
-.control-row {
-  display: grid;
-  grid-template-columns: var(--cp-label-width, 96px) 1fr;
-  align-items: center;
-  column-gap: 12px;
-  row-gap: 6px;
-  width: 100%;
-}
-
-.control-label {
-  font-size: 0.85rem;
-  color: var(--ui-text);
-  opacity: 0.85;
-  user-select: none;
-}
-
-.control-unit {
-  min-width: 0; /* allow contents to shrink */
-}
-
-/* Make checkboxes tidy when used as a control unit */
-.inline-checkbox {
-  margin: 0 !important;
-  padding: 0 !important;
-}
-.inline-checkbox :deep(.v-selection-control) {
-  margin-inline-start: 0 !important;
-}
-
-@media (max-width: 768px) {
-  .control-row {
-    grid-template-columns: var(--cp-label-width, 90px) 1fr;
-    column-gap: 10px;
-  }
-}
-
-.checkbox-label .label-text {
-  font-size: 0.8rem;
-  font-weight: 400; /* not bold */
-  color: var(--ui-text);
-}
-
-.checkbox-label .label-description { display: none; }
-
-.slider-section { margin-top: 4px; }
-
-.slider-label {
-  font-size: 0.72rem;
-  color: var(--ui-muted);
-  margin-bottom: 4px;
-}
-
-.slider-value {
-  min-width: 32px;
-  font-size: 0.72rem;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  color: var(--ui-muted);
-  margin-left: 0 !important;
-  padding-left: 0 !important;
-}
-
-/* Remove default spacing before slider append content */
-.mobile-slider :deep(.v-input__append) {
-  margin-inline-start: 0 !important;
-  margin-left: 0 !important;
-  padding-inline-start: 0 !important;
-  gap: 0 !important;
-}
-
-.force-description {
-  font-size: 0.72rem;
-  color: var(--ui-muted);
-}
-
-.impulse-button,
-.reset-button {
-  border: 1px solid var(--ui-border);
-}
-
-/* Segmented select (label + dropdown button) */
-.segmented-select {
-  display: inline-flex;
-  align-items: stretch;
-  border-radius: 3px;
-  box-shadow: 0 0 0 1px var(--ui-border);
-  overflow: hidden;
-}
-
-.segment-label {
-  background: color-mix(in srgb, var(--ui-surface) 70%, transparent);
-  color: var(--ui-muted);
-  font-size: 12px;
-  font-weight: 500;
-  padding: 6px 8px;
-  border-right: 1px solid var(--ui-border);
-  display: flex;
-  align-items: center;
-}
-
-.segment-button.v-btn {
-  background: color-mix(in srgb, var(--ui-surface) 70%, transparent) !important;
-  box-shadow: none !important;
-  height: 28px !important;
-  min-height: 28px !important;
-  border-top-left-radius: 0 !important;
-  border-bottom-left-radius: 0 !important;
-  padding: 0 10px !important;
-  text-transform: none !important;
-  width: 100% !important;
-}
-
-.segment-button.v-btn:hover {
-  background: var(--ui-surface) !important;
-}
-
-.segment-button.v-btn :deep(.v-btn__content) {
-  width: 100%;
-  justify-content: flex-start;
-}
-.segment-button.v-btn :deep(.v-btn__append) {
-  margin-left: auto !important;
-}
-
-.segment-value {
-  font-size: 12px;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Dropdown list styling */
-.dropdown-list {
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-}
-
-.dropdown-list .v-list-item.selected {
-  background: rgba(25, 118, 210, 0.08);
-}
-
-.dropdown-list .v-list-item:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.dropdown-list .v-list-item-title {
-  font-size: 0.85rem;
-}
-
-/* Mobile: bottom sheet */
 @media (max-width: 768px) {
   .control-panel {
     top: auto;
@@ -1298,90 +218,20 @@ export default {
   }
 }
 
-/* Dialogs */
-.dialog-content {
-  text-align: center;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  min-height: 100px;
-}
-
-@media (max-width: 768px) {
-  .dialog-content {
-    min-height: 50vh;
-  }
-  .status-dialog-card .v-card-title {
-    text-align: center !important;
-    justify-content: center !important;
-  }
-  .mobile-dialog-title {
-    text-align: left;
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin-bottom: 12px;
-  }
-}
-
-.loading-text,
-.error-text {
-  font-size: 0.95rem;
-  line-height: 1.5;
-}
-
-/* Warnings */
-.warning-content-inline {
-  text-align: center;
+.overlay-content {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
 }
 
-.warning-message {
+.transition-text {
+  color: white;
   font-size: 0.95rem;
-  line-height: 1.6;
-  white-space: pre-line;
+  letter-spacing: 0.01em;
 }
 
-/* Notice */
-.notice-container {
-  position: fixed;
-  bottom: 12px;
-  left: 12px;
-  z-index: 999;
-}
-
-@media (max-width: 768px) {
-  .notice-container {
-    top: 12px;
-    left: 50%;
-    transform: translateX(-50%);
-    bottom: auto;
-  }
-}
-
-.notice-content {
-  color: rgba(255, 255, 255, 0.7);
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  backdrop-filter: blur(2px);
-}
-
-.notice-link {
-  color: #8DDFFB;
-  text-decoration: none;
-}
-
-.notice-link:hover {
-  text-decoration: underline;
-}
-
-/* Help button */
 .help-button-container {
   position: fixed;
   bottom: 20px;
@@ -1389,8 +239,6 @@ export default {
   z-index: 1001;
   transition: bottom 0.2s ease;
 }
-
-/* removed variant classes; help button shows only when panel collapsed */
 
 .help-btn {
   background: transparent !important;
@@ -1401,92 +249,13 @@ export default {
 .help-btn:hover {
   opacity: 1;
 }
-
-@media (max-width: 768px) {
-  .help-button-container {
-    right: 16px;
-  }
-}
-
-/* Help dialog */
-.help-content {
-  padding: 16px !important;
-}
-
-.help-title {
-  font-size: 1rem;
-  font-weight: 700;
-  margin-bottom: 6px;
-  color: var(--ui-text);
-}
-
-.shortcut-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.shortcut-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.shortcut-key {
-  min-width: 120px;
-}
-
-.shortcut-key kbd {
-  display: inline-block;
-  padding: 6px 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ui-text);
-  background: #f6f7f8;
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-}
-
-.shortcut-key kbd.clickable-key {
-  cursor: pointer;
-  user-select: none;
-}
-
-.shortcut-description {
-  flex: 1;
-  font-size: 14px;
-  color: var(--ui-muted);
-}
-
-/* Transition overlay */
-.transition-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  z-index: 2000;
-  backdrop-filter: blur(2px);
-}
-
-.transition-text {
-  color: white;
-  font-size: 0.95rem;
-  letter-spacing: 0.01em;
-}
 </style>
 
 <style>
-/* Global styles for interactive mode - hides UI elements when body has 'interactive-mode' class */
 body.interactive-mode .control-panel {
   display: none !important;
 }
 
-/* Keep transition overlay, notice, and help button visible in interactive mode */
 body.interactive-mode .transition-overlay,
 body.interactive-mode .notice-container,
 body.interactive-mode .help-button-container {
