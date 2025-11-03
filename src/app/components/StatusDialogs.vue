@@ -25,7 +25,7 @@
 </template>
 
 <script setup>
-import StatusOverlay from '@/views/demo/components/StatusOverlay.vue'
+import StatusOverlay from '@/app/components/StatusOverlay.vue'
 defineProps({
   state: { type: Number, required: true },
   extraErrorMessage: { type: String, default: '' },

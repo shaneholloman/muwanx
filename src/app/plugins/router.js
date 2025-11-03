@@ -1,6 +1,6 @@
 // plugins/router.js
 import { createRouter, createWebHistory, createWebHashHistory } from 'vue-router'
-import Demo from '@/views/Demo.vue'
+import Demo from '@/app/Demo.vue'
 
 const routes = [
   {

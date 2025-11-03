@@ -17,7 +17,7 @@ export default defineConfig({
     // https://github.com/vuetifyjs/vuetify-loader/tree/master/packages/vite-plugin#readme
     Vuetify({
       styles: {
-        configFile: './src/styles/settings.scss',
+        configFile: './src/app/styles/settings.scss',
       },
     }),
     Fonts({

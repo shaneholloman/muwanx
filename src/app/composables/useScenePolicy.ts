@@ -1,5 +1,5 @@
 import { computed } from 'vue';
-import type { AppConfig, TaskConfigItem, PolicyConfigItem } from '@/views/demo/types/config';
+import type { AppConfig, TaskConfigItem, PolicyConfigItem } from '@/app/types/config';
 
 export function useScenePolicy(options: {
   config: { value: AppConfig };

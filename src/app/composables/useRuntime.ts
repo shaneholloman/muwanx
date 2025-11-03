@@ -1,14 +1,14 @@
 import { ref, markRaw } from 'vue';
 import loadMujoco from 'mujoco-js';
-import { MujocoRuntime } from '@/mujoco/runtime/MujocoRuntime.js';
-import { GoCommandManager } from '@/mujoco/runtime/managers/commands/GoCommandManager.js';
-import { IsaacActionManager } from '@/mujoco/runtime/managers/actions/IsaacActionManager.js';
-import { PassiveActionManager } from '@/mujoco/runtime/managers/actions/PassiveActionManager.js';
-import { TrajectoryActionManager } from '@/mujoco/runtime/managers/actions/TrajectoryActionManager.js';
-import { ConfigObservationManager } from '@/mujoco/runtime/managers/observations/ConfigObservationManager.js';
-import { LocomotionEnvManager } from '@/mujoco/runtime/managers/environment/LocomotionEnvManager.js';
-import type { PolicyConfigItem, TaskConfigItem } from '@/views/demo/types/config';
-import { MUJOCO_CONTAINER_ID } from '@/views/demo/constants';
+import { MujocoRuntime } from '@/core/mujoco/runtime/MujocoRuntime.js';
+import { GoCommandManager } from '@/core/mujoco/runtime/managers/commands/GoCommandManager.js';
+import { IsaacActionManager } from '@/core/mujoco/runtime/managers/actions/IsaacActionManager.js';
+import { PassiveActionManager } from '@/core/mujoco/runtime/managers/actions/PassiveActionManager.js';
+import { TrajectoryActionManager } from '@/core/mujoco/runtime/managers/actions/TrajectoryActionManager.js';
+import { ConfigObservationManager } from '@/core/mujoco/runtime/managers/observations/ConfigObservationManager.js';
+import { LocomotionEnvManager } from '@/core/mujoco/runtime/managers/environment/LocomotionEnvManager.js';
+import type { PolicyConfigItem, TaskConfigItem } from '@/app/types/config';
+import { MUJOCO_CONTAINER_ID } from '@/app/constants';
 
 export function useRuntime() {
   const runtime = ref<MujocoRuntime | null>(null);

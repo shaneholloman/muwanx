@@ -5,7 +5,7 @@
  */
 
 // Plugins
-import { registerPlugins } from '@/plugins'
+import { registerPlugins } from '@/app/plugins'
 
 // Components
 import App from './App.vue'
