@@ -3,9 +3,28 @@
   "private": true,
   "type": "module",
   "version": "0.0.0",
+  "main": "./dist/muwanx.umd.js",
+  "module": "./dist/muwanx.es.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/muwanx.es.js",
+      "require": "./dist/muwanx.umd.js"
+    },
+    "./viewer": {
+      "import": "./src/viewer/MuwanxViewer.vue"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "assets"
+  ],
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
+    "build:demo": "BUILD_MODE=demo vite build",
+    "build:lib": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {

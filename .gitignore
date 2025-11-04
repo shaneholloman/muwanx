@@ -52,3 +52,6 @@ venv
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Local package files
+muwanx-*.tgz
