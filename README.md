@@ -16,7 +16,7 @@
 
 ---
 
-**Muwanx** is a browser-based mujoco playground built on top of [**MU**joco **WA**sm](https://github.com/google-deepmind/mujoco/tree/main/wasm), [three.js](https://github.com/mrdoob/three.js/), and [on**NX** runtime](https://github.com/microsoft/onnxruntime). It enables MuJoCo simulations with real-time trained policy control, running entirely in the browser - no server for simulation required.  
+**Muwanx** is a browser-based mujoco playground built on top of [**MU**joco **WA**sm](https://github.com/google-deepmind/mujoco/tree/main/wasm), [on**NX** runtime](https://github.com/microsoft/onnxruntime), and [three.js](https://github.com/mrdoob/three.js/). It enables MuJoCo simulations with real-time trained policy control, running entirely in the browser - no server for simulation required.  
 Perfect for sharing interactive demos as static sites (which can be hosted on GitHub Pages), rapidly prototyping RL policies, or building customizable environments for experimentation and visualization.
 
 
@@ -30,6 +30,7 @@ Perfect for sharing interactive demos as static sites (which can be hosted on Gi
 - **Real-time**: Run MuJoCo simulations with real-time policy control.
 - **Interactive**: Change the state of objects by applying forces.
 - **Cross-platform**: Works seamlessly on desktop and mobile devices.
+- **VR Support**: Native VR viewer for immersive simulation experiences.
 - **Client-only**: All computation runs in the browser. No server for simulation is required.
 - **Easy Sharing**: Host as a static site for effortless demo distribution (e.g., GitHub Pages).
 - **Customizable**: Add your own MuJoCo models and ONNX policies quickly.
@@ -73,7 +74,8 @@ Muwanx incorporates mujoco models from the external sources in its demo. See the
 
 ## Acknowledgments
 
-This project was greatly inspired by the [demo page of the Facet project](https://facet.pages.dev/) by the research group at Tsinghua University.
+This project was greatly inspired by the [demo page of the Facet project](https://facet.pages.dev/) by the research group at Tsinghua University.  
+This project is also built upon the excellent work of [zalo/mujoco_wasm](https://github.com/zalo/mujoco_wasm) project, which is one of the earliest efforts to develop a demo for running MuJoCo in the browser.
 
 ## License
 
