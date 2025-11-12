@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mujocoAssetCollector } from '../src/core/mujoco/utils/mujocoAssetCollector.js';
+import { mujocoAssetCollector } from '../src/core/mujoco/utils/mujocoAssetCollector';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';

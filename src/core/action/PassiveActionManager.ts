@@ -1,5 +1,5 @@
 import { MjData, MjModel } from 'mujoco-js';
-import { BaseManager } from '../BaseManager.js';
+import { BaseManager } from '../engine/managers/BaseManager';
 
 export class PassiveActionManager extends BaseManager {
   controlType: string;

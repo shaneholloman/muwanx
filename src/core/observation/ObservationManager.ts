@@ -1,6 +1,6 @@
 import * as ort from 'onnxruntime-web';
-import { BaseManager } from '../BaseManager.js';
-import { Observations } from '../../observations/index.js';
+import { BaseManager } from '../engine/managers/BaseManager';
+import { Observations } from './index';
 
 export class ConfigObservationManager extends BaseManager {
   observationGroups: Record<string, any[]>;

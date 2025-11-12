@@ -1,5 +1,5 @@
 import { ref, onMounted, onBeforeUnmount, onUnmounted } from 'vue';
-import { MOBILE_BREAKPOINT, SMALL_SCREEN_BREAKPOINT } from '@/viewer/constants';
+import { MOBILE_BREAKPOINT, SMALL_SCREEN_BREAKPOINT } from '@/viewer/utils/constants';
 
 export function useResponsive() {
   const isMobile = ref(false);

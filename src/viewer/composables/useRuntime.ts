@@ -1,13 +1,13 @@
 import { ref, markRaw } from 'vue';
 import loadMujoco from 'mujoco-js';
-import { MujocoRuntime } from '@/core/mujoco/runtime/MujocoRuntime.js';
-import { GoCommandManager } from '@/core/mujoco/runtime/managers/commands/GoCommandManager.js';
-import { IsaacActionManager } from '@/core/mujoco/runtime/managers/actions/IsaacActionManager.js';
-import { PassiveActionManager } from '@/core/mujoco/runtime/managers/actions/PassiveActionManager.js';
-import { ConfigObservationManager } from '@/core/mujoco/runtime/managers/observations/ConfigObservationManager.js';
-import { LocomotionEnvManager } from '@/core/mujoco/runtime/managers/environment/LocomotionEnvManager.js';
+import { MujocoRuntime } from '@/core/engine/MujocoRuntime';
+import { GoCommandManager as CommandManager } from '@/core/engine/managers/CommandManager';
+import { IsaacActionManager as ActionManager } from '@/core/action/IsaacActionManager';
+import { PassiveActionManager } from '@/core/action/PassiveActionManager';
+import { ConfigObservationManager as ObservationManager } from '@/core/observation/ObservationManager';
+import { LocomotionEnvManager as EnvManager } from '@/core/engine/managers/EnvManager';
 import type { PolicyConfigItem, TaskConfigItem } from '@/types/config';
-import { MUJOCO_CONTAINER_ID } from '@/viewer/constants';
+import { MUJOCO_CONTAINER_ID } from '@/viewer/utils/constants';
 
 export function useRuntime() {
   const runtime = ref<MujocoRuntime | null>(null);
@@ -61,10 +61,10 @@ export function useRuntime() {
     }
     const current = actionManager.value;
 
-    if (needsIsaac && current instanceof IsaacActionManager) return;
+    if (needsIsaac && current instanceof ActionManager) return;
     if (!needsIsaac && current instanceof PassiveActionManager) return;
 
-    const next = markRaw(needsIsaac ? new IsaacActionManager() : new PassiveActionManager());
+    const next = markRaw(needsIsaac ? new ActionManager() : new PassiveActionManager());
     if (runtime.value) {
       if (runtime.value.actionManager && typeof runtime.value.actionManager.dispose === 'function') {
         runtime.value.actionManager.dispose();
@@ -114,9 +114,9 @@ export function useRuntime() {
       const mujoco = await loadMujoco();
       const { scenePath, metaPath } = resolveSceneConfig(initialTask, initialPolicy);
       await ensureActionManager(metaPath, initialPolicy);
-      commandManager.value = markRaw(new GoCommandManager());
-      observationManager.value = markRaw(new ConfigObservationManager());
-      envManager.value = markRaw(new LocomotionEnvManager());
+      commandManager.value = markRaw(new CommandManager());
+      observationManager.value = markRaw(new ObservationManager());
+      envManager.value = markRaw(new EnvManager());
 
       runtime.value = markRaw(new MujocoRuntime(mujoco, {
         containerId: MUJOCO_CONTAINER_ID,

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/muwanx_banner.png" alt="muwanx">
+  <img src="assets/muwanx-banner.png" alt="muwanx">
 </div>
 <div align="center">
     <em>Real-time Interactive AI Robot Simulation in Your Browser</em>
@@ -56,7 +56,7 @@ npm run dev
 
 Open your browser and navigate to the localhost URL shown in the terminal.
 
-<img src="assets/muwanx_demo.gif" alt="muwanx demo" width="70%">
+<img src="assets/muwanx-demo.gif" alt="muwanx demo" width="70%">
 
 <!-- 
 ## Usage

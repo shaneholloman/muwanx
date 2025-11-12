@@ -1,5 +1,5 @@
 import { MjData, MjModel } from 'mujoco-js';
-import { BaseManager } from '../BaseManager.js';
+import { BaseManager } from '../engine/managers/BaseManager';
 
 interface IsaacActionManagerOptions {
   actionSmoothing?: { prev: number; current: number };

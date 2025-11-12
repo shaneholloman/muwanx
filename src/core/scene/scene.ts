@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mujocoAssetCollector } from '../../utils/mujocoAssetCollector';
+import { mujocoAssetCollector } from '../engine/utils/mujocoAssetCollector';
 import { createLights } from './lights';
 import { createTexture } from './textures';
 import type { MjModel, MjData } from 'mujoco-js';

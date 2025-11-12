@@ -1,4 +1,4 @@
-import { BaseManager } from '../BaseManager.js';
+import { BaseManager } from './BaseManager';
 
 interface GoCommandManagerOptions {
   setpointServiceName?: string;

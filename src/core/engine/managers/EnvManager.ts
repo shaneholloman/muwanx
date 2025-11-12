@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { BaseManager } from '../BaseManager.js';
-import { DragStateManager } from '../../utils/DragStateManager.js';
-import { getPosition, getQuaternion, toMujocoPos } from '../../utils/mujocoScene.js';
+import { BaseManager } from './BaseManager';
+import { DragStateManager } from '@/viewer/utils/DragStateManager';
+import { getPosition, getQuaternion, toMujocoPos } from '@/core/scene/scene';
 import { MjData, MjModel } from 'mujoco-js';
 
 interface LocomotionEnvOptions {

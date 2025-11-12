@@ -380,6 +380,14 @@
     },
     {
       "id": "48",
+      "name": "TetherIA Aero Hand Open",
+      "model_xml": "./assets/scene/mujoco_menagerie/tetheria_aero_hand_open/scene_right.xml",
+      "asset_meta": null,
+      "default_policy": null,
+      "policies": []
+    },
+    {
+      "id": "49",
       "name": "Trossen VX300S",
       "model_xml": "./assets/scene/mujoco_menagerie/trossen_vx300s/scene.xml",
       "asset_meta": null,
@@ -387,7 +395,7 @@
       "policies": []
     },
     {
-      "id": "49",
+      "id": "50",
       "name": "Trossen WX250S",
       "model_xml": "./assets/scene/mujoco_menagerie/trossen_wx250s/scene.xml",
       "asset_meta": null,
@@ -395,7 +403,7 @@
       "policies": []
     },
     {
-      "id": "50",
+      "id": "51",
       "name": "TRS SO-ARM100",
       "model_xml": "./assets/scene/mujoco_menagerie/trs_so_arm100/scene.xml",
       "asset_meta": null,
@@ -403,7 +411,7 @@
       "policies": []
     },
     {
-      "id": "51",
+      "id": "52",
       "name": "UFactory Lite6",
       "model_xml": "./assets/scene/mujoco_menagerie/ufactory_lite6/scene.xml",
       "asset_meta": null,
@@ -411,7 +419,7 @@
       "policies": []
     },
     {
-      "id": "52",
+      "id": "53",
       "name": "UFactory xArm7",
       "model_xml": "./assets/scene/mujoco_menagerie/ufactory_xarm7/scene.xml",
       "asset_meta": null,
@@ -419,7 +427,7 @@
       "policies": []
     },
     {
-      "id": "53",
+      "id": "54",
       "name": "UMI Gripper",
       "model_xml": "./assets/scene/mujoco_menagerie/umi_gripper/scene.xml",
       "asset_meta": null,
@@ -427,7 +435,7 @@
       "policies": []
     },
     {
-      "id": "54",
+      "id": "55",
       "name": "Unitree A1",
       "model_xml": "./assets/scene/mujoco_menagerie/unitree_a1/scene.xml",
       "asset_meta": null,
@@ -435,7 +443,7 @@
       "policies": []
     },
     {
-      "id": "55",
+      "id": "56",
       "name": "Unitree G1",
       "model_xml": "./assets/scene/mujoco_menagerie/unitree_g1/scene.xml",
       "asset_meta": null,
@@ -443,7 +451,7 @@
       "policies": []
     },
     {
-      "id": "56",
+      "id": "57",
       "name": "Unitree Go1",
       "model_xml": "./assets/scene/mujoco_menagerie/unitree_go1/scene.xml",
       "asset_meta": null,
@@ -451,7 +459,7 @@
       "policies": []
     },
     {
-      "id": "57",
+      "id": "58",
       "name": "Unitree Go2",
       "model_xml": "./assets/scene/mujoco_menagerie/unitree_go2/scene.xml",
       "asset_meta": null,
@@ -459,7 +467,7 @@
       "policies": []
     },
     {
-      "id": "58",
+      "id": "59",
       "name": "Unitree H1",
       "model_xml": "./assets/scene/mujoco_menagerie/unitree_h1/scene.xml",
       "asset_meta": null,
@@ -467,7 +475,7 @@
       "policies": []
     },
     {
-      "id": "59",
+      "id": "60",
       "name": "Unitree Z1",
       "model_xml": "./assets/scene/mujoco_menagerie/unitree_z1/scene.xml",
       "asset_meta": null,
@@ -475,7 +483,7 @@
       "policies": []
     },
     {
-      "id": "60",
+      "id": "61",
       "name": "Universal Robots UR5e",
       "model_xml": "./assets/scene/mujoco_menagerie/universal_robots_ur5e/scene.xml",
       "asset_meta": null,
@@ -483,7 +491,7 @@
       "policies": []
     },
     {
-      "id": "61",
+      "id": "62",
       "name": "Universal Robots UR10e",
       "model_xml": "./assets/scene/mujoco_menagerie/universal_robots_ur10e/scene.xml",
       "asset_meta": null,
@@ -491,7 +499,7 @@
       "policies": []
     },
     {
-      "id": "62",
+      "id": "63",
       "name": "Wonik Allegro Left",
       "model_xml": "./assets/scene/mujoco_menagerie/wonik_allegro/scene_left.xml",
       "asset_meta": null,
@@ -499,7 +507,7 @@
       "policies": []
     },
     {
-      "id": "63",
+      "id": "64",
       "name": "Wonik Allegro Right",
       "model_xml": "./assets/scene/mujoco_menagerie/wonik_allegro/scene_right.xml",
       "asset_meta": null,

@@ -1,30 +1,30 @@
 // plugins/router.js
 import { createRouter, createWebHistory, createWebHashHistory } from 'vue-router'
-import MuwanxViewer from '../MuwanxViewer.vue'
+import MwxViewer from '../MwxViewer.vue'
 
 const routes = [
   {
     path: '/',
     name: 'Muwanx',
-    component: MuwanxViewer,
+    component: MwxViewer,
     props: () => ({ configPath: './assets/config.json' })
   },
   {
     path: '/mujoco_menagerie',
     name: 'MuJoCo Menagerie',
-    component: MuwanxViewer,
+    component: MwxViewer,
     props: () => ({ configPath: './assets/config_mujoco_menagerie.json' })
   },
   {
     path: '/mujoco_playground',
     name: 'MuJoCo Playground',
-    component: MuwanxViewer,
+    component: MwxViewer,
     props: () => ({ configPath: './assets/config_mujoco_playground.json' })
   },
   {
     path: '/myosuite',
     name: 'MyoSuite',
-    component: MuwanxViewer,
+    component: MwxViewer,
     props: () => ({ configPath: './assets/config_myosuite.json' })
   },
 ]

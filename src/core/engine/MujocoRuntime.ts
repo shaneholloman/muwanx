@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { downloadExampleScenesFolder, getPosition, getQuaternion, loadSceneFromURL } from './utils/mujocoScene';
-import { ONNXModule } from './utils/onnxHelper';
+import { downloadExampleScenesFolder, getPosition, getQuaternion, loadSceneFromURL } from '@/core/scene/scene';
+import { ONNXModule } from '@/core/agent/onnxHelper';
 import type { MjModel, MjData } from 'mujoco-js';
-import { updateHeadlightFromCamera, updateLightsFromData } from './utils/lights';
+import { updateHeadlightFromCamera, updateLightsFromData } from '@/core/scene/lights';
 
 const DEFAULT_CONTAINER_ID = 'mujoco-container';
 
