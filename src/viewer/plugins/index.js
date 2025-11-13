@@ -6,10 +6,12 @@
 
 // Plugins
 import vuetify from './vuetify'
-import router from './router'
 
-export function registerPlugins (app) {
+export function registerPlugins (app, router) {
   app
     .use(vuetify)
-    .use(router)
+  
+  if (router) {
+    app.use(router)
+  }
 }

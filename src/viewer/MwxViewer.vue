@@ -30,6 +30,7 @@ import ControlPanel from './components/ControlPanel.vue'
 import StatusDialogs from './components/StatusDialogs.vue'
 import HelpDialog from './components/HelpDialog.vue'
 import Notice from './components/Notice.vue'
+import StatusOverlay from './components/StatusOverlay.vue'
 import { useConfig } from './composables/useConfig'
 import { useRuntime } from './composables/useRuntime'
 import { useScenePolicy } from './composables/useScenePolicy'
@@ -37,7 +38,6 @@ import { useUrlSync } from './composables/useUrlSync'
 import { useTransition } from './composables/useTransition'
 import { useResponsive } from './composables/useResponsive'
 import { createShortcuts } from './utils/shortcuts'
-import StatusOverlay from './components/StatusOverlay.vue'
 
 const props = defineProps({ configPath: { type: String, default: './assets/config.json' } })
 

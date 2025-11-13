@@ -1,6 +1,5 @@
-// plugins/router.js
-import { createRouter, createWebHistory, createWebHashHistory } from 'vue-router'
-import MwxViewer from '../MwxViewer.vue'
+import { createRouter, createWebHashHistory } from 'vue-router'
+import MwxViewer from '@/viewer/MwxViewer.vue'
 
 const routes = [
   {
