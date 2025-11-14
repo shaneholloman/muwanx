@@ -21,6 +21,10 @@ const projects = [
 // Get config path from URL hash
 function getConfigFromHash(): string {
   const hash = window.location.hash.slice(1).split('?')[0] // Remove # and query params
+  // Treat empty hash, '/', and 'default' as the default project
+  if (!hash || hash === '/' || hash === 'default') {
+    return projects[0].config
+  }
   const project = projects.find(p => p.id === hash || `/${p.id}` === hash)
   return project ? project.config : projects[0].config
 }

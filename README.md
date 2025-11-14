@@ -60,7 +60,7 @@ Open your browser and navigate to the localhost URL shown in the terminal.
 
 ## Usage as an npm Package
 
-Muwanx is available as an [npm package](https://www.npmjs.com/package/muwanx) with a customizable API that allows you to build interactive MuJoCo applications with neural network policies.
+Muwanx is available as an [npm package](https://www.npmjs.com/package/muwanx) with a customizable API for building interactive MuJoCo applications with neural network policies.
 
 ### Installation
 
@@ -70,165 +70,60 @@ npm install muwanx
 
 ### Quick Start
 
-#### Imperative API (Recommended)
-
-Build your viewer programmatically with method chaining:
+**Imperative API (Recommended)** - Build programmatically:
 
 ```typescript
 import { MwxViewer } from 'muwanx';
 
-// Create viewer instance
 const viewer = new MwxViewer('#mujoco-container');
 
-// Build your application programmatically
 const project = viewer.addProject({
-  project_name: "My Robotics Project",
-  project_link: "https://github.com/username/project"
+  project_name: "My Robotics Project"
 });
 
 const scene = project.addScene({
-  id: "go2-scene",
-  name: "Unitree Go2 Locomotion",
-  model_xml: "./assets/scene/unitree_go2/scene.xml",
-  asset_meta: "./assets/policy/go2/asset_meta.json",
-  camera: {
-    position: [2.0, 1.7, 1.7],
-    target: [0, 0.2, 0],
-    fov: 45
-  }
+  id: "robot-scene",
+  name: "Robot Locomotion",
+  model_xml: "./assets/scene/robot.xml"
 });
 
 const policy = scene.addPolicy({
-  id: "vanilla-policy",
-  name: "Vanilla Locomotion",
-  path: "./assets/policy/go2/vanilla.json",
-  stiffness: 25.0,
-  damping: 0.5,
-  ui_controls: ['setpoint', 'stiffness']
+  id: "walking-policy",
+  name: "Walking Policy",
+  path: "./assets/policy/walk.json"
 });
 
-// Initialize and start simulation
 await viewer.initialize();
-await viewer.selectScene('go2-scene');
-await viewer.selectPolicy('vanilla-policy');
-
-// Control simulation
+await viewer.selectScene('robot-scene');
 viewer.play();
 ```
 
-#### Declarative API (Alternative)
-
-Load from configuration file:
+**Declarative API** - Load from config:
 
 ```typescript
 import { MwxViewer } from 'muwanx';
 
 const viewer = new MwxViewer('#mujoco-container');
 await viewer.loadConfig('./config.json');
-
-// Control the simulation
 viewer.play();
-viewer.pause();
-await viewer.reset();
 ```
 
-### Event Handling
+### Documentation
 
-Listen to viewer events:
+📖 **[Complete Usage Guide](doc/USAGE.md)** - Comprehensive documentation with:
+- API patterns and when to use each
+- Complete examples (quadrupeds, humanoids, multi-project apps)
+- Configuration reference
+- Event system and runtime control
+- Advanced usage and TypeScript support
+- Troubleshooting guide
 
-```typescript
-viewer.on('scene-changed', ({ scene }) => {
-  console.log('Scene loaded:', scene.name);
-});
+### Quick Links
 
-viewer.on('policy-changed', ({ policy }) => {
-  console.log('Policy loaded:', policy.name);
-});
-
-viewer.on('params-changed', ({ params }) => {
-  console.log('Parameters updated:', params);
-});
-
-viewer.on('error', ({ error, context }) => {
-  console.error(`Error in ${context}:`, error);
-});
-```
-
-### Runtime Control
-
-Update simulation parameters dynamically:
-
-```typescript
-viewer.updateParams({
-  lin_vel_x: 1.0,      // Forward velocity (m/s)
-  lin_vel_y: 0.0,      // Lateral velocity (m/s)
-  ang_vel_z: 0.5,      // Angular velocity (rad/s)
-  stiffness: 25.0,     // PD controller stiffness
-  damping: 0.5,        // PD controller damping
-});
-```
-
-### TypeScript Support
-
-Full TypeScript type definitions included:
-
-```typescript
-import type {
-  ViewerConfig,
-  ProjectConfig,
-  SceneConfig,
-  PolicyConfig,
-  RuntimeParams,
-  AssetMetadata,
-} from 'muwanx';
-```
-
-### Examples
-
-See the `examples/` directory for:
-- **Demo Application**: Full-featured Vue.js viewer with UI controls
-- **API Documentation**: Complete usage guide and examples
-
-### API Reference
-
-**MwxViewer Class:**
-- `loadConfig(config)` - Load configuration from object or URL
-- `addProject(config)` - Add project programmatically
-- `initialize()` - Initialize MuJoCo runtime
-- `selectProject(id)` - Switch to project
-- `selectScene(id)` - Load scene
-- `selectPolicy(id)` - Load policy
-- `play()` - Start simulation
-- `pause()` - Pause simulation
-- `reset()` - Reset simulation
-- `updateParams(params)` - Update runtime parameters
-- `getProjects()` - Get all projects
-- `getScenes()` - Get scenes for current project
-- `getPolicies()` - Get policies for current scene
-- `on(event, callback)` - Add event listener
-- `off(event, callback)` - Remove event listener
-
-For detailed API documentation, see [examples/README.md](examples/README.md).
-
-### Advanced Usage
-
-For advanced use cases, you can access lower-level components:
-
-```typescript
-import {
-  MujocoRuntime,
-  IsaacActionManager,
-  ObservationManager,
-  ONNXModule
-} from 'muwanx';
-
-// Access the underlying runtime
-const runtime = viewer.getRuntime();
-
-// Direct access to MuJoCo model and data
-const mjModel = runtime.mjModel;
-const mjData = runtime.mjData;
-```
+- **[Live Demo](https://ttktjmt.github.io/muwanx/)** - Interactive demo
+- **[Usage Guide](doc/USAGE.md)** - Complete documentation
+- **[Examples](examples/)** - Source code examples
+- **[API Types](src/types/api.ts)** - TypeScript definitions
 
 ## Third-Party Assets
 
