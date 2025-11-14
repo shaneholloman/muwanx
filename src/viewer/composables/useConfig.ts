@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue';
 import type { AppConfig, TaskConfigItem, PolicyConfigItem } from '@/types/config';
 
-export function useConfig(configPath: string) {
+export function useConfig(configSource: string | AppConfig) {
   const config = ref<AppConfig>({ tasks: [] });
   const task = ref<string | null>(null);
   const policy = ref<string | null>(null);
@@ -28,9 +28,14 @@ export function useConfig(configPath: string) {
 
   async function loadConfig() {
     try {
-      const response = await fetch(configPath);
-      const json = await response.json();
-      config.value = json as AppConfig;
+      // Support both config path (declarative) and config object (imperative)
+      if (typeof configSource === 'string') {
+        const response = await fetch(configSource);
+        const json = await response.json();
+        config.value = json as AppConfig;
+      } else {
+        config.value = configSource;
+      }
 
       // Parse URL params from hash part for initial scene/policy
       const urlParams = new URLSearchParams(window.location.hash.split('?')[1]);

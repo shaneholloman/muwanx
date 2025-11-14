@@ -88,6 +88,8 @@ export default defineConfig(({ mode }) => {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
       '@examples': fileURLToPath(new URL('./examples', import.meta.url)),
+      // Alias 'muwanx' to local src for development
+      'muwanx': fileURLToPath(new URL('./src/index.ts', import.meta.url)),
     },
     extensions: [
       '.js',

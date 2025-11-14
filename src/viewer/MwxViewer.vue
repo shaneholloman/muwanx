@@ -38,7 +38,10 @@ import { useTransition } from './composables/useTransition'
 import { useResponsive } from './composables/useResponsive'
 import { createShortcuts } from './utils/shortcuts'
 
-const props = defineProps({ configPath: { type: String, default: './assets/config.json' } })
+const props = defineProps({
+  configPath: { type: String, default: './assets/config.json' },
+  config: { type: Object, default: null }
+})
 
 const transitionApi = useTransition()
 const isTransitioning = transitionApi.isTransitioning
@@ -66,7 +69,8 @@ const {
   dispose,
 } = rt
 
-const conf = useConfig(props.configPath)
+// Use config object if provided (imperative), otherwise use configPath (declarative)
+const conf = useConfig(props.config || props.configPath)
 const { config: appConfig, task, policy, taskItems, policyItems, selectedTask, selectedPolicy, urlParamErrorMessage, resolveDefaultPolicy, loadConfig } = conf
 const projectName = computed(() => appConfig.value?.project_name)
 const projectLink = computed(() => appConfig.value?.project_link)
