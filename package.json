@@ -12,11 +12,21 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/muwanx.es.js",
       "require": "./dist/muwanx.umd.js"
     },
     "./viewer": {
-      "import": "./src/viewer/MuwanxViewer.vue"
+      "types": "./src/viewer/MwxViewer.vue",
+      "import": "./src/viewer/MwxViewer.vue"
+    },
+    "./core": {
+      "types": "./src/core/MwxViewer.ts",
+      "import": "./src/core/MwxViewer.ts"
+    },
+    "./types": {
+      "types": "./src/types/api.ts",
+      "import": "./src/types/api.ts"
     }
   },
   "files": [
@@ -50,6 +60,7 @@
     "unplugin-fonts": "^1.3.1",
     "unplugin-vue-components": "^28.4.1",
     "vite": "^6.3.5",
+    "vite-plugin-dts": "^4.3.0",
     "vite-plugin-vuetify": "^2.1.1"
   }
 }

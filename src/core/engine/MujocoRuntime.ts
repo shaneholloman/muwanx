@@ -9,7 +9,7 @@ import { updateHeadlightFromCamera, updateLightsFromData } from '@/core/scene/li
 
 const DEFAULT_CONTAINER_ID = 'mujoco-container';
 
-interface MujocoRuntimeOptions {
+export interface MujocoRuntimeOptions {
   containerId?: string;
   commandManager?: any;
   actionManager?: any;
