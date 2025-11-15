@@ -332,6 +332,7 @@ export interface LegacyAppConfig {
     name: string;
     model_xml: string;
     asset_meta?: string | null;
+    camera?: CameraConfig;
     default_policy?: string | null;
     policies: Array<{
       id: string;
@@ -356,6 +357,7 @@ export function convertLegacyConfig(legacy: LegacyAppConfig): ProjectConfig {
       name: task.name,
       model_xml: task.model_xml,
       asset_meta: task.asset_meta,
+      camera: task.camera,
       default_policy: task.default_policy,
       policies: task.policies.map(policy => ({
         id: policy.id,

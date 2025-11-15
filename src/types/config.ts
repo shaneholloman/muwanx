@@ -14,6 +14,11 @@ export interface TaskConfigItem {
   name: string;
   model_xml: string;
   asset_meta?: string | null;
+  camera?: {
+    position?: [number, number, number];
+    target?: [number, number, number];
+    fov?: number;
+  };
   default_policy?: string | null;
   policies: PolicyConfigItem[];
 }

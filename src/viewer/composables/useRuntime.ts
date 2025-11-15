@@ -130,6 +130,18 @@ export function useRuntime() {
         metaPath,
         policyPath: initialPolicy?.path,
       });
+
+      // Apply camera config from task if provided
+      if (initialTask.camera) {
+        runtime.value.applyCameraFromMetadata({
+          camera: {
+            pos: initialTask.camera.position,
+            target: initialTask.camera.target,
+            fov: initialTask.camera.fov,
+          },
+        });
+      }
+
       updateFacetballService(initialPolicy);
       runtime.value.resume();
       applyCommandState();
@@ -150,6 +162,18 @@ export function useRuntime() {
       metaPath,
       policyPath: policyItem?.path ?? null,
     });
+
+    // Apply camera config from task if provided
+    if (taskItem.camera) {
+      runtime.value.applyCameraFromMetadata({
+        camera: {
+          pos: taskItem.camera.position,
+          target: taskItem.camera.target,
+          fov: taskItem.camera.fov,
+        },
+      });
+    }
+
     updateFacetballService(policyItem);
     runtime.value.resume();
     applyCommandState();
