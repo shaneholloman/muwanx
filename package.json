@@ -17,12 +17,12 @@
       "require": "./dist/muwanx.umd.js"
     },
     "./viewer": {
-      "types": "./src/viewer/MwxViewer.vue",
-      "import": "./src/viewer/MwxViewer.vue"
+      "types": "./src/viewer/components/MwxViewer.vue",
+      "import": "./src/viewer/components/MwxViewer.vue"
     },
-    "./core": {
-      "types": "./src/core/MwxViewer.ts",
-      "import": "./src/core/MwxViewer.ts"
+    "./api": {
+      "types": "./src/viewer/MwxViewer.ts",
+      "import": "./src/viewer/MwxViewer.ts"
     },
     "./types": {
       "types": "./src/types/api.ts",

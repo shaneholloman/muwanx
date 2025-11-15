@@ -25,18 +25,18 @@
 
 <script setup>
 import { onMounted, onBeforeUnmount, watch, ref, computed } from 'vue'
-import ControlPanel from './components/ControlPanel.vue'
-import StatusDialogs from './components/StatusDialogs.vue'
-import HelpDialog from './components/HelpDialog.vue'
-import Notice from './components/Notice.vue'
-import StatusOverlay from './components/StatusOverlay.vue'
-import { useConfig } from './composables/useConfig'
-import { useRuntime } from './composables/useRuntime'
-import { useScenePolicy } from './composables/useScenePolicy'
-import { useUrlSync } from './composables/useUrlSync'
-import { useTransition } from './composables/useTransition'
-import { useResponsive } from './composables/useResponsive'
-import { createShortcuts } from './utils/shortcuts'
+import ControlPanel from './ControlPanel.vue'
+import StatusDialogs from './StatusDialogs.vue'
+import HelpDialog from './HelpDialog.vue'
+import Notice from './Notice.vue'
+import StatusOverlay from './StatusOverlay.vue'
+import { useConfig } from '../composables/useConfig'
+import { useRuntime } from '../composables/useRuntime'
+import { useScenePolicy } from '../composables/useScenePolicy'
+import { useUrlSync } from '../composables/useUrlSync'
+import { useTransition } from '../composables/useTransition'
+import { useResponsive } from '../composables/useResponsive'
+import { createShortcuts } from '../utils/shortcuts'
 
 const props = defineProps({
   configPath: { type: String, default: './assets/config.json' },

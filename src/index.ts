@@ -42,12 +42,12 @@
 // ============================================================================
 // Main API - MwxViewer class and builders
 // ============================================================================
-export { MwxViewer, Project, Scene, Policy } from './core/MwxViewer';
+export { MwxViewer, Project, Scene, Policy } from './viewer/MwxViewer';
 export type {
   ViewerEvents,
   ViewerEventName,
   ViewerEventCallback,
-} from './core/MwxViewer';
+} from './viewer/MwxViewer';
 
 // ============================================================================
 // API Type Definitions
@@ -140,10 +140,10 @@ export * from './core/scene/tendons';
 // Vue Viewer Components (Optional)
 // ============================================================================
 // Note: These are exported separately via the './viewer' export path
-// Import them using: import { MwxViewer as MwxViewerComponent } from 'muwanx/viewer';
+// Import them using: import MwxViewerComponent from 'muwanx/viewer';
 
 // Re-export viewer for convenience
-export { default as MwxViewerComponent } from './viewer/MwxViewer.vue';
+export { default as MwxViewerComponent } from './viewer/components/MwxViewer.vue';
 
 // Composables
 export { useConfig } from './viewer/composables/useConfig';
