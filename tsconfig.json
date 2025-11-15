@@ -15,7 +15,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@examples/*": ["examples/*"]
+      "@examples/*": ["examples/*"],
+      "muwanx": ["./src/index.ts"]
     },
     "types": [
       "vite/client"
