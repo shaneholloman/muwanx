@@ -1,4 +1,4 @@
-# Muwanx Web Viewer
+# muwanx Web Viewer
 
 Browser-based interactive viewer for MuJoCo robotics simulations with real-time policy control.
 
