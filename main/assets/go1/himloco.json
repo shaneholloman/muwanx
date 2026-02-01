@@ -88,5 +88,38 @@
   },
   "action_scale": 0.25,
   "stiffness": 40.0,
-  "damping": 1.0
+  "damping": 1.0,
+  "commands": {
+    "velocity": {
+      "inputs": [
+        {
+          "type": "slider",
+          "name": "lin_vel_x",
+          "label": "Forward Velocity",
+          "min": -1.0,
+          "max": 1.0,
+          "step": 0.05,
+          "default": 0.5
+        },
+        {
+          "type": "slider",
+          "name": "lin_vel_y",
+          "label": "Lateral Velocity",
+          "min": -0.5,
+          "max": 0.5,
+          "step": 0.05,
+          "default": 0.0
+        },
+        {
+          "type": "slider",
+          "name": "ang_vel_z",
+          "label": "Yaw Rate",
+          "min": -1.0,
+          "max": 1.0,
+          "step": 0.05,
+          "default": 0.0
+        }
+      ]
+    }
+  }
 }
