@@ -888,13 +888,55 @@ export class mjswanRuntime {
 
     for (const [termKey, actionTerm] of Object.entries(actionsConfig)) {
       const controlType = actionTerm.type ?? 'joint_position';
-      if (controlType !== 'joint_position' && controlType !== 'torque') {
+      if (
+        controlType !== 'joint_position' &&
+        controlType !== 'torque' &&
+        controlType !== 'muscle_activation'
+      ) {
         console.warn(`[PolicyRunner] Action term "${termKey}": unsupported type "${controlType}", skipping.`);
         continue;
       }
 
-      // If actuator_names is absent or [".*"], match all joints (backward-compatible).
       const patterns = actionTerm.actuator_names ?? ['.*'];
+
+      if (controlType === 'muscle_activation') {
+        const muscleMapping = stateBuilder.getCtrlMappingByActuatorNames(patterns);
+        if (!muscleMapping) {
+          console.warn(`[PolicyRunner] Action term "${termKey}": no actuators matched patterns [${patterns.join(', ')}], skipping.`);
+          continue;
+        }
+        const n = muscleMapping.ctrlAdr.length;
+        const actionScale = this.normalizeControlArray(
+          actionTerm.scale as number[] | number | Record<string, number> | undefined,
+          n,
+          1.0
+        );
+        const actionOffset = this.normalizeControlArray(
+          actionTerm.offset as number[] | number | Record<string, number> | undefined,
+          n,
+          0.0
+        );
+        console.log(
+          `[PolicyRunner] Action term "${termKey}" (muscle_activation): ${n} actuator(s)`
+        );
+        results.push({
+          controlType,
+          ctrlAdr: muscleMapping.ctrlAdr,
+          qposAdr: [],
+          qvelAdr: [],
+          actionIndices: muscleMapping.actionIndices,
+          actionScale,
+          actionOffset,
+          defaultJointPos: new Float32Array(n),
+          encoderBias: new Float32Array(n),
+          positionActuator: new Array(n).fill(false),
+          kp: new Float32Array(n),
+          kd: new Float32Array(n),
+        });
+        continue;
+      }
+
+      // If actuator_names is absent or [".*"], match all joints (backward-compatible).
       const isMatchAll = patterns.length === 1 && patterns[0] === '.*';
 
       let mapping: { ctrlAdr: number[]; qposAdr: number[]; qvelAdr: number[]; actionIndices: number[] } | null;
@@ -1069,6 +1111,14 @@ export class mjswanRuntime {
           if (ctrlIndex >= 0) {
             ctrl[ctrlIndex] = actionScale[i] * (allActions[actionIndices[i]] ?? 0);
           }
+        }
+      } else if (controlType === 'muscle_activation') {
+        // MyoSuite-canonical mapping: ctrl = sigmoid(5 * (a - 0.5)), action in [-1, 1].
+        for (let i = 0; i < numJoints; i++) {
+          const ctrlIndex = ctrlAdr[i];
+          if (ctrlIndex < 0) continue;
+          const raw = (allActions[actionIndices[i]] ?? 0) * actionScale[i] + actionOffset[i];
+          ctrl[ctrlIndex] = 1 / (1 + Math.exp(-5 * (raw - 0.5)));
         }
       }
     }

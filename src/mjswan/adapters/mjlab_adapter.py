@@ -340,6 +340,13 @@ def adapt_commands(
 # ---------------------------------------------------------------------------
 
 
+_ACTION_CLASS_ALIASES: dict[str, str] = {
+    # myosuite ships its own muscle action cfg outside mjlab's class hierarchy.
+    # Translate it to mjswan's MuscleActivationActionCfg.
+    "MyoMuscleActivationActionCfg": "MuscleActivationActionCfg",
+}
+
+
 def _adapt_action_cfg(term: Any) -> MjswanActionTermCfg | None:
     """Convert a single mjlab ``ActionTermCfg`` to mjswan.
 
@@ -350,7 +357,7 @@ def _adapt_action_cfg(term: Any) -> MjswanActionTermCfg | None:
     Returns ``None`` if no mjswan equivalent exists; the caller is
     responsible for dropping the entry.
     """
-    class_name = type(term).__name__
+    class_name = _ACTION_CLASS_ALIASES.get(type(term).__name__, type(term).__name__)
     mjswan_cls = getattr(_actions_module, class_name, None)
 
     if mjswan_cls is None or not (
@@ -394,7 +401,7 @@ def adapt_actions(
     for key, term in actions.items():
         if isinstance(term, MjswanActionTermCfg):
             result[key] = term
-        elif _is_from_mjlab(term):
+        elif _is_from_mjlab(term) or type(term).__name__ in _ACTION_CLASS_ALIASES:
             adapted = _adapt_action_cfg(term)
             if adapted is not None:
                 result[key] = adapted

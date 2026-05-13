@@ -178,6 +178,29 @@ class JointEffortActionCfg(BaseActionCfg):
         return entry
 
 
+@dataclass(kw_only=True)
+class MuscleActivationActionCfg(BaseActionCfg):
+    """MyoSuite-style muscle activation control.
+
+    Maps raw policy outputs through ``sigmoid(5 * (a - 0.5))`` to muscle
+    excitation in ``[0, 1]`` and writes the result directly to ``mjData.ctrl``
+    slots of the named actuators. Use for biomechanical models with MuJoCo
+    muscle actuators (``dyntype=muscle``).
+    """
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.unsupported_reason is not None:
+            raise NotImplementedError(self.unsupported_reason)
+
+        entry: dict[str, Any] = {"type": "muscle_activation"}
+        if self.scale != 1.0:
+            entry["scale"] = self.scale
+        if self.offset != 0.0:
+            entry["offset"] = self.offset
+        entry["actuator_names"] = list(self.actuator_names)
+        return entry
+
+
 # ---------------------------------------------------------------------------
 # Tendon actions (stubs — not supported in browser runtime)
 # ---------------------------------------------------------------------------
@@ -244,6 +267,7 @@ __all__ = [
     "JointPositionActionCfg",
     "JointVelocityActionCfg",
     "JointEffortActionCfg",
+    "MuscleActivationActionCfg",
     "TendonLengthActionCfg",
     "TendonVelocityActionCfg",
     "TendonEffortActionCfg",
