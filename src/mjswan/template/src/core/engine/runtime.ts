@@ -137,6 +137,8 @@ export class mjswanRuntime {
     positionActuator: boolean[];
     kp: Float32Array;
     kd: Float32Array;
+    // muscle_activation only: when true apply MyoSuite sigmoid; when false clip(raw, 0, 1).
+    muscleNormalize: boolean;
   }> | null;
   private onnxModule: OnnxModule | null;
   private onnxInputDict: Record<string, ort.Tensor> | null;
@@ -790,6 +792,7 @@ export class mjswanRuntime {
     positionActuator: boolean[];
     kp: Float32Array;
     kd: Float32Array;
+    muscleNormalize: boolean;
   }> | null {
     const jointNames = runner.getPolicyJointNames();
     const affineBiasValue = this.mujoco.mjtBias?.mjBIAS_AFFINE?.value ?? 1;
@@ -860,6 +863,7 @@ export class mjswanRuntime {
         positionActuator,
         kp,
         kd,
+        muscleNormalize: false,
       };
     };
 
@@ -925,8 +929,9 @@ export class mjswanRuntime {
           n,
           0.0
         );
+        const muscleNormalize = (actionTerm as { normalize?: boolean }).normalize ?? true;
         console.log(
-          `[PolicyRunner] Action term "${termKey}" (muscle_activation): ${n} actuator(s)`
+          `[PolicyRunner] Action term "${termKey}" (muscle_activation): ${n} actuator(s), normalize=${muscleNormalize}`
         );
         results.push({
           controlType,
@@ -941,6 +946,7 @@ export class mjswanRuntime {
           positionActuator: new Array(n).fill(false),
           kp: new Float32Array(n),
           kd: new Float32Array(n),
+          muscleNormalize,
         });
         continue;
       }
@@ -1099,6 +1105,7 @@ export class mjswanRuntime {
         positionActuator,
         kp,
         kd,
+        muscleNormalize,
       } =
         term;
       const numJoints = ctrlAdr.length;
@@ -1134,12 +1141,18 @@ export class mjswanRuntime {
           }
         }
       } else if (controlType === 'muscle_activation') {
-        // MyoSuite-canonical mapping: ctrl = sigmoid(5 * (a - 0.5)), action in [-1, 1].
+        // Shared pre-step: raw = scale * action + offset.
+        // normalize=true:  MyoSuite-canonical sigmoid σ(5 * (raw - 0.5)).
+        // normalize=false: clip(raw, 0, 1) for models that already output excitation.
         for (let i = 0; i < numJoints; i++) {
           const ctrlIndex = ctrlAdr[i];
           if (ctrlIndex < 0) continue;
           const raw = (allActions[actionIndices[i]] ?? 0) * actionScale[i] + actionOffset[i];
-          ctrl[ctrlIndex] = 1 / (1 + Math.exp(-5 * (raw - 0.5)));
+          if (muscleNormalize) {
+            ctrl[ctrlIndex] = 1 / (1 + Math.exp(-5 * (raw - 0.5)));
+          } else {
+            ctrl[ctrlIndex] = raw < 0 ? 0 : raw > 1 ? 1 : raw;
+          }
         }
       }
     }

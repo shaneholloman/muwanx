@@ -26,6 +26,10 @@ from rich.progress import (
 from . import __version__
 from ._build_client import ClientBuilder
 from .app import mjswanApp
+from .envs.mdp.actions.actions import (
+    MuscleActivationActionCfg,
+    validate_muscle_actuators,
+)
 from .project import ProjectConfig, ProjectHandle
 from .scene import SceneConfig
 from .splat import SplatConfig
@@ -336,6 +340,32 @@ class Builder:
             raise ValueError("Motion name must be a non-empty string.")
         return f"{name2id(policy_name)}_{name2id(motion_name)}.npz"
 
+    def _validate_muscle_action_terms(self, scene: SceneConfig) -> None:
+        """Validate every ``MuscleActivationActionCfg`` in the scene's policies.
+
+        Each term's ``actuator_names`` must resolve to muscle-dyntype actuators
+        in the scene's MuJoCo model. Raises ``ValueError`` on the first violation
+        so users see configuration mistakes before deployment rather than at
+        runtime in the browser.
+        """
+        muscle_terms: list[tuple[str, MuscleActivationActionCfg]] = []
+        for policy in scene.policies:
+            actions = getattr(policy, "actions", None) or {}
+            for term_name, cfg in actions.items():
+                if isinstance(cfg, MuscleActivationActionCfg):
+                    muscle_terms.append((term_name, cfg))
+        if not muscle_terms:
+            return
+
+        model = scene.model
+        if model is None and scene.spec is not None:
+            model = scene.spec.compile()
+        if model is None:
+            return
+
+        for term_name, cfg in muscle_terms:
+            validate_muscle_actuators(model, cfg, term_name=term_name)
+
     def _save_web(self, output_path: Path) -> None:
         """Save as a complete web application.
 
@@ -488,6 +518,9 @@ class Builder:
                     scene_dir = project_assets_dir / scene_id
                     scene_dir.mkdir(parents=True, exist_ok=True)
                     scene_path = scene_dir / scene.scene_filename
+
+                    self._validate_muscle_action_terms(scene)
+
                     if scene.spec is not None:
                         scene.spec.assets.update(collect_spec_assets(scene.spec))
                         to_zip_deflated(scene.spec, str(scene_path))  # Saves as .mjz
@@ -623,6 +656,10 @@ class Builder:
                                 data["default_joint_pos"] = policy.default_joint_pos
                             if policy.encoder_bias:
                                 data["encoder_bias"] = policy.encoder_bias
+                            if getattr(policy, "initial_qpos", None):
+                                data["initial_qpos"] = policy.initial_qpos
+                            if getattr(policy, "initial_qvel", None):
+                                data["initial_qvel"] = policy.initial_qvel
                             if policy.commands:
                                 data["commands"] = {
                                     name: cmd.to_dict()

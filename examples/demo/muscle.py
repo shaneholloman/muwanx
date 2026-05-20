@@ -109,7 +109,7 @@ def setup_builder() -> mjswan.Builder:
     handle = scene.add_policy(
         name="Random Action",
         policy=_build_policy(),
-        policy_joint_names=[],  # muscle policy: no joint-name mapping
+        policy_joint_names=[],
         observations={
             "policy": ObservationGroupCfg(
                 terms={

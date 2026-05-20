@@ -111,6 +111,15 @@ FakeMjlabJointEffortActionCfg = _make_mjlab_class(
     damping=None,
 )
 
+# myosuite4's `MyoMuscleActivationActionCfg` is standalone (not a dataclass and
+# does not inherit BaseActionCfg), so we mirror only the fields the adapter
+# inspects: `entity_name` and `actuator_names`.
+FakeMyoMuscleActivationActionCfg = _make_mjlab_class(
+    "MyoMuscleActivationActionCfg",
+    entity_name="robot",
+    actuator_names=("m1", "m2"),
+)
+
 FakeMjlabSceneEntityCfg = _make_mjlab_class(
     "SceneEntityCfg",
     **{
@@ -434,3 +443,87 @@ class TestAdaptedSerialization:
         assert d["scale"] == {"hip": 0.5, "knee": 0.3}
         assert d["stiffness"] == 40.0
         assert d["damping"] == 2.5
+
+
+# ---------------------------------------------------------------------------
+# Muscle action adaptation: MyoMuscleActivationActionCfg → MuscleActivationActionCfg
+# ---------------------------------------------------------------------------
+
+
+class TestMuscleActionAdaptation:
+    """Adapt myosuite4's ``MyoMuscleActivationActionCfg`` to mjswan."""
+
+    def test_adapted_to_muscle_activation_action_cfg(self):
+        from mjswan.envs.mdp.actions import MuscleActivationActionCfg
+
+        mjlab_cfg = FakeMyoMuscleActivationActionCfg(
+            entity_name="robot",
+            actuator_names=("m1", "m2"),
+        )
+
+        result = adapt_actions({"muscles": mjlab_cfg})
+        assert result is not None
+        assert isinstance(result["muscles"], MuscleActivationActionCfg)
+
+    def test_adapted_action_serializes_to_muscle_activation_type(self):
+        mjlab_cfg = FakeMyoMuscleActivationActionCfg(
+            entity_name="robot",
+            actuator_names=("m1", "m2"),
+        )
+
+        result = adapt_actions({"muscles": mjlab_cfg})
+        assert result is not None
+        d = result["muscles"].to_dict()
+        assert d["type"] == "muscle_activation"
+
+    def test_actuator_names_prefixed_with_entity_name(self):
+        mjlab_cfg = FakeMyoMuscleActivationActionCfg(
+            entity_name="robot",
+            actuator_names=("m1", "m2"),
+        )
+
+        result = adapt_actions({"muscles": mjlab_cfg})
+        assert result is not None
+        d = result["muscles"].to_dict()
+        assert d["actuator_names"] == ["robot/m1", "robot/m2"]
+
+    def test_normalize_defaults_to_true_when_source_lacks_field(self):
+        # MyoMuscleActivationActionCfg has no `normalize` field and always
+        # applies the sigmoid mapping in upstream; the adapted cfg must keep
+        # the mjswan default (normalize=True), which serializes as the key
+        # being omitted (default-suppression).
+        mjlab_cfg = FakeMyoMuscleActivationActionCfg(
+            entity_name="robot",
+            actuator_names=("m1",),
+        )
+
+        result = adapt_actions({"muscles": mjlab_cfg})
+        assert result is not None
+        d = result["muscles"].to_dict()
+        assert "normalize" not in d
+        assert result["muscles"].normalize is True
+
+    def test_default_scale_offset_preserved_when_source_omits_them(self):
+        mjlab_cfg = FakeMyoMuscleActivationActionCfg(
+            entity_name="robot",
+            actuator_names=("m1",),
+        )
+
+        result = adapt_actions({"muscles": mjlab_cfg})
+        assert result is not None
+        d = result["muscles"].to_dict()
+        assert "scale" not in d
+        assert "offset" not in d
+        assert result["muscles"].scale == 1.0
+        assert result["muscles"].offset == 0.0
+
+    def test_class_name_alias_dispatch(self):
+        # The adapter looks up the source class name in _ACTION_CLASS_ALIASES.
+        # If the source class is renamed upstream, this test would catch the
+        # break by failing dispatch.
+        mjlab_cfg = FakeMyoMuscleActivationActionCfg()
+        assert type(mjlab_cfg).__name__ == "MyoMuscleActivationActionCfg"
+
+        result = adapt_actions({"muscles": mjlab_cfg})
+        assert result is not None
+        assert "muscles" in result
