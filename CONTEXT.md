@@ -93,7 +93,9 @@ Camera parameters (lookat, distance, fovy, elevation, azimuth) + tracking mode (
 - `mjlab_compat.py`: Monkey-patches `MujocoCfg.apply_to_spec()` onto mjlab when needed.
 
 ### `envs/mdp/` and `managers/`
-mjlab-compatible MDP layer. `envs/mdp/` holds the config-side building blocks: observation groups, action terms (`JointPositionActionCfg`, `JointEffortActionCfg`), event functions, and termination functions. `managers/` holds the runtime counterparts (`observation_manager`, `event_manager`, `action_manager`, `termination_manager`) that mjlab's training loop hands to the policy. Custom obs/event/termination functions are registered via `register_obs_func` / `register_event_func` / `register_termination_func`.
+mjlab-compatible MDP layer. `envs/mdp/` holds the config-side building blocks: observation groups, action terms (`JointPositionActionCfg`, `JointEffortActionCfg`, `MuscleActivationActionCfg`), event functions, and termination functions. `managers/` holds the runtime counterparts (`observation_manager`, `event_manager`, `action_manager`, `termination_manager`) that mjlab's training loop hands to the policy. Custom obs/event/termination functions are registered via `register_obs_func` / `register_event_func` / `register_termination_func`.
+
+**Muscle action term.** `MuscleActivationActionCfg` drives MuJoCo muscle actuators. `normalize=True` (default) applies the canonical MyoSuite sigmoid `σ(5(scale·a + offset − 0.5))` to map policy outputs into excitation in (0, 1); `normalize=False` clips `scale·a + offset` to [0, 1]. The semantics mirror myosuite4's `MuscleActionTermCfg.normalize`. The mjlab adapter translates `MyoMuscleActivationActionCfg` (the class actually used by every myo* mjlab task) to `MuscleActivationActionCfg`; see [docs/adr/0002](./docs/adr/0002-muscle-action-term-aligned-with-myomuscleactivationactioncfg.md).
 
 ### `_build_client.py`
 Orchestrates the Node.js / Vite frontend build. Manages a local `nodeenv` if Node isn't available system-wide.
