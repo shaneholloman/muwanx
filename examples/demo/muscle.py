@@ -4,9 +4,10 @@ Showcases mjswan's muscle-driven policy support using MyoFinger from MyoHub:
 https://github.com/MyoHub/myo_sim
 
 The MyoFinger model has 4 hinge joints (IFadb, IFmcp, IFpip, IFdip) driven
-by 5 MuJoCo muscle actuators via ``MuscleActivationActionCfg``.  A trivial
-8 -> 5 ONNX policy outputs constant 0.5 activations so every muscle fires
-at 50%.
+by 5 MuJoCo muscle actuators via ``MuscleActivationActionCfg``.  The policy
+is an ONNX graph whose only op is ``RandomUniform`` -- it ignores the
+observation and emits fresh uniform-[0, 1] activations on every inference
+call, so each muscle is driven by a new random excitation each policy step.
 
 This demo exercises three features used by muscle-driven policies:
 
@@ -22,17 +23,18 @@ from pathlib import Path
 from urllib.request import urlretrieve
 
 import mujoco
-import numpy as np
 import onnx
-from onnx import TensorProto, helper, numpy_helper
+from onnx import TensorProto, helper
 
 import mjswan
 from mjswan.envs.mdp import observations as obs_fns
 from mjswan.envs.mdp.actions import MuscleActivationActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 
-NUM_MUSCLES = 5  # extn, adabR, adabL, mflx, dflx
-NUM_JOINTS = 4  # IFadb, IFmcp, IFpip, IFdip
+JOINT_NAMES = ("IFadb", "IFmcp", "IFpip", "IFdip")
+MUSCLE_NAMES = ("extn", "adabR", "adabL", "mflx", "dflx")
+NUM_MUSCLES = len(MUSCLE_NAMES)
+NUM_JOINTS = len(JOINT_NAMES)
 OBS_DIM = 2 * NUM_JOINTS  # joint_pos + joint_vel
 
 # Slightly flexed finger instead of the model's fully extended default.
@@ -54,27 +56,27 @@ def _fetch_myofinger() -> Path:
 
 
 def _build_policy() -> onnx.ModelProto:
-    """8 -> 5 policy with zero weights and bias 0.5 (constant 50% activation)."""
-    W = np.zeros((OBS_DIM, NUM_MUSCLES), dtype=np.float32)
-    b = np.full((NUM_MUSCLES,), 0.5, dtype=np.float32)
-
+    """Random-uniform policy: ignores the observation, emits fresh [0, 1] samples."""
     obs_in = helper.make_tensor_value_info("policy", TensorProto.FLOAT, [1, OBS_DIM])
     act_out = helper.make_tensor_value_info(
         "action", TensorProto.FLOAT, [1, NUM_MUSCLES]
     )
 
+    random_node = helper.make_node(
+        "RandomUniform",
+        inputs=[],
+        outputs=["action"],
+        shape=[1, NUM_MUSCLES],
+        low=0.0,
+        high=1.0,
+        dtype=TensorProto.FLOAT,
+    )
+
     graph = helper.make_graph(
-        nodes=[
-            helper.make_node("MatMul", ["policy", "W"], ["linear"]),
-            helper.make_node("Add", ["linear", "b"], ["action"]),
-        ],
+        nodes=[random_node],
         name="muscle_policy",
         inputs=[obs_in],
         outputs=[act_out],
-        initializer=[
-            numpy_helper.from_array(W, name="W"),
-            numpy_helper.from_array(b, name="b"),
-        ],
     )
     model = helper.make_model(
         graph,
@@ -86,7 +88,7 @@ def _build_policy() -> onnx.ModelProto:
 
 
 def setup_builder() -> mjswan.Builder:
-    builder = mjswan.Builder()
+    builder = mjswan.Builder(debug=True)
     project = builder.add_project(name="Muscle Actuator")
 
     scene = project.add_scene(
@@ -94,22 +96,38 @@ def setup_builder() -> mjswan.Builder:
         name="MyoFinger",
     )
 
+    scene.set_viewer_config(
+        mjswan.ViewerConfig(
+            lookat=(0.0, 0.0, 0.2),
+            distance=1.5,
+            elevation=-20.0,
+            azimuth=120.0,
+            origin_type=mjswan.ViewerConfig.OriginType.WORLD,
+        )
+    )
+
     handle = scene.add_policy(
-        name="Constant 50% Activation",
+        name="Random Action",
         policy=_build_policy(),
         policy_joint_names=[],  # muscle policy: no joint-name mapping
         observations={
             "policy": ObservationGroupCfg(
                 terms={
-                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
-                    "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
+                    "joint_pos": ObservationTermCfg(
+                        func=obs_fns.joint_pos_rel,
+                        params={"joint_names": list(JOINT_NAMES)},
+                    ),
+                    "joint_vel": ObservationTermCfg(
+                        func=obs_fns.joint_vel_rel,
+                        params={"joint_names": list(JOINT_NAMES)},
+                    ),
                 }
             ),
         },
         actions={
             "muscles": MuscleActivationActionCfg(
                 entity_name="",
-                actuator_names=("extn", "adabR", "adabL", "mflx", "dflx"),
+                actuator_names=MUSCLE_NAMES,
             ),
         },
     )
