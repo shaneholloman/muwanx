@@ -118,6 +118,8 @@ export class mjswanRuntime {
   private policyRunner: PolicyRunner | null;
   private policyStateBuilder: PolicyStateBuilder | null;
   private policyConfigPath: string | null;
+  private initialQpos: number[] | null;
+  private initialQvel: number[] | null;
   private policyDebugCounter: number;
   private policyControl: Array<{
     controlType: string;
@@ -238,6 +240,8 @@ export class mjswanRuntime {
     this.policyRunner = null;
     this.policyStateBuilder = null;
     this.policyConfigPath = null;
+    this.initialQpos = null;
+    this.initialQvel = null;
     this.policyDebugCounter = 0;
     this.policyControl = null;
     this.onnxModule = null;
@@ -647,6 +651,8 @@ export class mjswanRuntime {
           motions: config.motions,
         };
       }
+      this.initialQpos = Array.isArray(config.initial_qpos) ? (config.initial_qpos as number[]) : null;
+      this.initialQvel = Array.isArray(config.initial_qvel) ? (config.initial_qvel as number[]) : null;
       this.resetSimulationState();
       this.mujoco.mj_forward(this.mjModel, this.mjData);
       this.updateCachedState();
@@ -676,7 +682,10 @@ export class mjswanRuntime {
         this.updateCachedState();
       }
 
-      if (!config.policy_joint_names || config.policy_joint_names.length === 0) {
+      if (
+        !(config.policy_num_actions as number | undefined) &&
+        (!config.policy_joint_names || config.policy_joint_names.length === 0)
+      ) {
         throw new Error('Policy config missing policy_joint_names.');
       }
 
@@ -1022,6 +1031,18 @@ export class mjswanRuntime {
       this.mujoco.mj_resetDataKeyframe(this.mjModel, this.mjData, 0);
     } else {
       this.mujoco.mj_resetData(this.mjModel, this.mjData);
+    }
+    if (this.initialQpos) {
+      const qpos = this.mjData.qpos;
+      for (let i = 0; i < Math.min(this.initialQpos.length, this.mjModel.nq); i++) {
+        qpos[i] = this.initialQpos[i];
+      }
+    }
+    if (this.initialQvel) {
+      const qvel = this.mjData.qvel;
+      for (let i = 0; i < Math.min(this.initialQvel.length, this.mjModel.nv); i++) {
+        qvel[i] = this.initialQvel[i];
+      }
     }
     if (this.eventManager) {
       this.eventManager.onReset({

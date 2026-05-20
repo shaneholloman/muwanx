@@ -53,6 +53,7 @@ export type TerminationConfigEntry = {
 export type PolicyConfig = {
   policy_module?: string;
   policy_joint_names?: string[];
+  policy_num_actions?: number;
   default_joint_pos?: number[];
   encoder_bias?: number[];
   action_scale?: number[] | number;

@@ -560,6 +560,10 @@ class Builder:
                                         data["policy_joint_names"] = (
                                             policy.policy_joint_names
                                         )
+                                    if getattr(policy, "policy_num_actions", None):
+                                        data["policy_num_actions"] = (
+                                            policy.policy_num_actions
+                                        )
                                     if getattr(policy, "default_joint_pos", None):
                                         data["default_joint_pos"] = (
                                             policy.default_joint_pos
@@ -603,6 +607,7 @@ class Builder:
                             or policy.actions
                             or policy.terminations
                             or policy.policy_joint_names
+                            or policy.policy_num_actions
                             or policy.motions
                         ):
                             # No config_path but MDP components defined
@@ -612,6 +617,8 @@ class Builder:
                             }
                             if policy.policy_joint_names:
                                 data["policy_joint_names"] = policy.policy_joint_names
+                            if policy.policy_num_actions:
+                                data["policy_num_actions"] = policy.policy_num_actions
                             if policy.default_joint_pos:
                                 data["default_joint_pos"] = policy.default_joint_pos
                             if policy.encoder_bias:

@@ -76,6 +76,15 @@ class PolicyConfig:
     ``policy_joint_names`` at the top level of the policy JSON config.
     """
 
+    policy_num_actions: int | None = None
+    """Explicit number of policy output actions.
+
+    Use for policies (e.g. muscle-driven) where ``policy_joint_names`` is
+    empty and the output size cannot be inferred from joint names.  When set,
+    serialized as ``policy_num_actions`` in the policy JSON and used by the
+    TS ``PolicyRunner`` instead of ``policy_joint_names.length``.
+    """
+
     default_joint_pos: list[float] | None = None
     """Default joint positions corresponding to ``policy_joint_names``.
 

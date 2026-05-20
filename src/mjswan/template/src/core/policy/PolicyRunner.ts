@@ -48,7 +48,7 @@ export class PolicyRunner {
     this.context = null;
 
     this.policyJointNames = (config.policy_joint_names ?? []).slice();
-    this.numActions = this.policyJointNames.length;
+    this.numActions = (config.policy_num_actions as number | undefined) ?? this.policyJointNames.length;
     this.lastActions = new Float32Array(this.numActions);
     this.defaultJointPos = this.normalizeArray(
       config.default_joint_pos ?? [],
@@ -178,6 +178,10 @@ export class PolicyRunner {
 
   getLastActions(): Float32Array {
     return new Float32Array(this.lastActions);
+  }
+
+  getConfig(): PolicyConfig {
+    return this.config;
   }
 
   setLastActions(actions: Float32Array): void {
