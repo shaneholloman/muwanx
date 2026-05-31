@@ -1,19 +1,17 @@
-import type { MjModel } from 'mujoco';
-import { ObservationBase } from './ObservationBase';
-import type { ObservationConfig } from './ObservationBase';
-import type { PolicyRunner } from '../policy/PolicyRunner';
-import type { PolicyState } from '../policy/types';
-import { loadNpz } from '../scene/npz';
+import { ObservationBase } from 'mjswan/observation';
+import type { ObservationConfig } from 'mjswan/observation';
+import type { PolicyRunner } from 'mjswan/types';
+import { loadNpz } from 'mjswan/npz';
 
 // ---------------------------------------------------------------------------
 // Shared clip cache — keyed by URL; loaded once, shared across all observers
 // ---------------------------------------------------------------------------
 
 type MimicClipRaw = {
-  qpos: Float32Array;       // flat (T * nq)
-  qvel: Float32Array;       // flat (T * nv)
-  siteXpos: Float32Array;   // flat (T * nClipSites * 3)
-  clipSiteNames: string[];  // clip's own site ordering
+  qpos: Float32Array;
+  qvel: Float32Array;
+  siteXpos: Float32Array;
+  clipSiteNames: string[];
   nFrames: number;
   nq: number;
   nv: number;
@@ -64,23 +62,17 @@ async function _fetchMimicClip(url: string): Promise<MimicClipRaw | null> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function _getModelSiteNames(mjModel: MjModel): string[] {
-  const namesArray = new Uint8Array(mjModel.names);
-  const decoder = new TextDecoder();
-  const names: string[] = [];
-  for (let i = 0; i < mjModel.nsite; i++) {
-    let start = mjModel.name_siteadr[i];
-    let end = start;
-    while (end < namesArray.length && namesArray[end] !== 0) end++;
-    names.push(decoder.decode(namesArray.subarray(start, end)));
+function _resolveBodyIds(runner: PolicyRunner, bodyNames: string[]): number[] {
+  if (bodyNames.length === 0) return [];
+  const ctx = runner.getContext();
+  if (!ctx?.mjModel) return bodyNames.map(() => -1);
+  const bodyObjType = (ctx.mujoco.mjtObj?.mjOBJ_BODY?.value) ?? 1;
+  const ids = bodyNames.map((n) => ctx.mujoco.mj_name2id(ctx.mjModel!, bodyObjType, n));
+  const missing = bodyNames.filter((_, i) => ids[i] < 0);
+  if (missing.length > 0) {
+    console.warn('[MimicObservations] _resolveBodyIds: body not found:', missing);
   }
-  return names;
-}
-
-function _resolveSiteIds(mjModel: MjModel | null, siteNames: string[]): number[] {
-  if (!mjModel || siteNames.length === 0) return [];
-  const allNames = _getModelSiteNames(mjModel);
-  return siteNames.map((n) => allNames.indexOf(n));
+  return ids;
 }
 
 function _findClipUrl(runner: PolicyRunner): string | null {
@@ -89,22 +81,21 @@ function _findClipUrl(runner: PolicyRunner): string | null {
   return clipMotion?.path ?? null;
 }
 
-function _frameIndex(simTime: number, ctrlDt: number, nFrames: number): number {
-  if (nFrames <= 0 || ctrlDt <= 0) return 0;
-  return Math.floor(simTime / ctrlDt) % nFrames;
+function _frameIndex(simTime: number, fps: number, nFrames: number): number {
+  if (nFrames <= 0 || fps <= 0) return 0;
+  return Math.floor(simTime * fps) % nFrames;
 }
 
 // ---------------------------------------------------------------------------
 // MimicQpos — full qpos vector (nq = 89)
 // ---------------------------------------------------------------------------
 
-class MimicQpos extends ObservationBase {
+export class MimicQpos extends ObservationBase {
   private nq: number;
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
     super(runner, config);
-    const mjModel = runner.getContext()?.mjModel ?? null;
-    this.nq = mjModel?.nq ?? 89;
+    this.nq = runner.getContext()?.mjModel?.nq ?? 89;
   }
 
   get size(): number {
@@ -121,18 +112,17 @@ class MimicQpos extends ObservationBase {
 }
 
 // ---------------------------------------------------------------------------
-// MimicQvel — qvel scaled by ctrl_dt (nv = 88)
+// MimicQvel — qvel scaled by 1/fps (nv = 88)
 // ---------------------------------------------------------------------------
 
-class MimicQvel extends ObservationBase {
+export class MimicQvel extends ObservationBase {
   private nv: number;
-  private ctrlDt: number;
+  private fps: number;
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
     super(runner, config);
-    const mjModel = runner.getContext()?.mjModel ?? null;
-    this.nv = mjModel?.nv ?? 88;
-    this.ctrlDt = (config.ctrl_dt as number | undefined) ?? 0.01;
+    this.nv = runner.getContext()?.mjModel?.nv ?? 88;
+    this.fps = (config.fps as number | undefined) ?? 100;
   }
 
   get size(): number {
@@ -143,7 +133,8 @@ class MimicQvel extends ObservationBase {
     const qvel = this.runner.getContext()?.mjData?.qvel;
     if (!qvel) return new Float32Array(this.nv);
     const out = new Float32Array(this.nv);
-    for (let i = 0; i < this.nv; i++) out[i] = (qvel[i] ?? 0) * this.ctrlDt;
+    const ctrlDt = 1.0 / this.fps;
+    for (let i = 0; i < this.nv; i++) out[i] = (qvel[i] ?? 0) * ctrlDt;
     return out;
   }
 }
@@ -152,13 +143,12 @@ class MimicQvel extends ObservationBase {
 // MimicAct — muscle activation state (na actuators)
 // ---------------------------------------------------------------------------
 
-class MimicAct extends ObservationBase {
+export class MimicAct extends ObservationBase {
   private na: number;
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
     super(runner, config);
-    const mjModel = runner.getContext()?.mjModel ?? null;
-    this.na = mjModel?.na ?? 0;
+    this.na = runner.getContext()?.mjModel?.na ?? 0;
   }
 
   get size(): number {
@@ -175,33 +165,35 @@ class MimicAct extends ObservationBase {
 }
 
 // ---------------------------------------------------------------------------
-// MimicSitePos — current tracked site positions (n_sites * 3)
+// MimicSitePos — current tracked body positions (n_sites * 3)
+// Uses body xpos as proxy for mimic tracking sites (sites are absent in the
+// compiled browser model; they were defined at the body origin in training).
 // ---------------------------------------------------------------------------
 
-class MimicSitePos extends ObservationBase {
-  private siteIds: number[];
+export class MimicSitePos extends ObservationBase {
+  private bodyIds: number[];
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
     super(runner, config);
-    const siteNames = (config.site_names as string[] | undefined) ?? [];
-    const mjModel = runner.getContext()?.mjModel ?? null;
-    this.siteIds = _resolveSiteIds(mjModel, siteNames);
+    const bodyNames = (config.body_names as string[] | undefined) ?? [];
+    this.bodyIds = _resolveBodyIds(runner, bodyNames);
   }
 
   get size(): number {
-    return this.siteIds.length * 3;
+    return this.bodyIds.length * 3;
   }
 
   compute(): Float32Array {
     const out = new Float32Array(this.size);
-    if (this.siteIds.length === 0) return out;
-    const siteXpos = this.runner.getContext()?.mjData?.site_xpos;
-    if (!siteXpos) return out;
-    for (let i = 0; i < this.siteIds.length; i++) {
-      const id = this.siteIds[i];
-      out[i * 3] = siteXpos[id * 3] ?? 0;
-      out[i * 3 + 1] = siteXpos[id * 3 + 1] ?? 0;
-      out[i * 3 + 2] = siteXpos[id * 3 + 2] ?? 0;
+    if (this.bodyIds.length === 0) return out;
+    const xpos = this.runner.getContext()?.mjData?.xpos;
+    if (!xpos) return out;
+    for (let i = 0; i < this.bodyIds.length; i++) {
+      const id = this.bodyIds[i];
+      if (id < 0) continue;
+      out[i * 3] = xpos[id * 3] ?? 0;
+      out[i * 3 + 1] = xpos[id * 3 + 1] ?? 0;
+      out[i * 3 + 2] = xpos[id * 3 + 2] ?? 0;
     }
     return out;
   }
@@ -213,17 +205,22 @@ class MimicSitePos extends ObservationBase {
 
 abstract class MimicClipObsBase extends ObservationBase {
   protected clip: MimicClipRaw | null = null;
-  protected ctrlDt: number;
+  protected fps: number;
+  private _loadPromise: Promise<void> | null = null;
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
     super(runner, config);
-    this.ctrlDt = (config.ctrl_dt as number | undefined) ?? 0.01;
+    this.fps = (config.fps as number | undefined) ?? 100;
     const url = _findClipUrl(runner);
     if (url) {
-      _loadMimicClipRaw(url).then((data) => {
+      this._loadPromise = _loadMimicClipRaw(url).then((data) => {
         this.clip = data;
       }).catch(() => {});
     }
+  }
+
+  preload(): Promise<void> {
+    return this._loadPromise ?? Promise.resolve();
   }
 
   protected get simTime(): number {
@@ -236,7 +233,7 @@ abstract class MimicClipObsBase extends ObservationBase {
   }
 
   protected frameIdx(nFrames: number): number {
-    return _frameIndex(this.simTime, this.ctrlDt, nFrames);
+    return _frameIndex(this.simTime, this.fps, nFrames);
   }
 }
 
@@ -244,16 +241,13 @@ abstract class MimicClipObsBase extends ObservationBase {
 // MimicSiteTarget — clip site_xpos at current frame, ordered by model sites
 // ---------------------------------------------------------------------------
 
-class MimicSiteTarget extends MimicClipObsBase {
+export class MimicSiteTarget extends MimicClipObsBase {
   private siteNames: string[];
-  private siteIds: number[];
   private clipSiteIds: number[] | null = null;
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
     super(runner, config);
     this.siteNames = (config.site_names as string[] | undefined) ?? [];
-    const mjModel = runner.getContext()?.mjModel ?? null;
-    this.siteIds = _resolveSiteIds(mjModel, this.siteNames);
   }
 
   get size(): number {
@@ -289,16 +283,16 @@ class MimicSiteTarget extends MimicClipObsBase {
 // MimicSiteErr — clip target minus current site positions
 // ---------------------------------------------------------------------------
 
-class MimicSiteErr extends MimicClipObsBase {
+export class MimicSiteErr extends MimicClipObsBase {
   private siteNames: string[];
-  private siteIds: number[];
+  private bodyIds: number[];
   private clipSiteIds: number[] | null = null;
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
     super(runner, config);
     this.siteNames = (config.site_names as string[] | undefined) ?? [];
-    const mjModel = runner.getContext()?.mjModel ?? null;
-    this.siteIds = _resolveSiteIds(mjModel, this.siteNames);
+    const bodyNames = (config.body_names as string[] | undefined) ?? [];
+    this.bodyIds = _resolveBodyIds(runner, bodyNames);
   }
 
   get size(): number {
@@ -314,19 +308,19 @@ class MimicSiteErr extends MimicClipObsBase {
 
   compute(): Float32Array {
     const out = new Float32Array(this.size);
-    const siteXpos = this.runner.getContext()?.mjData?.site_xpos;
-    if (!this.clip || !siteXpos) return out;
+    const xpos = this.runner.getContext()?.mjData?.xpos;
+    if (!this.clip || !xpos) return out;
     const idx = this.frameIdx(this.clip.nFrames);
     const clipIds = this.getClipSiteIds();
     const stride = this.clip.nClipSites * 3;
     for (let i = 0; i < clipIds.length; i++) {
       const ci = clipIds[i];
-      const si = this.siteIds[i];
-      if (ci < 0 || si < 0) continue;
+      const bi = this.bodyIds[i];
+      if (ci < 0 || bi < 0) continue;
       const base = idx * stride + ci * 3;
-      out[i * 3] = (this.clip.siteXpos[base] ?? 0) - (siteXpos[si * 3] ?? 0);
-      out[i * 3 + 1] = (this.clip.siteXpos[base + 1] ?? 0) - (siteXpos[si * 3 + 1] ?? 0);
-      out[i * 3 + 2] = (this.clip.siteXpos[base + 2] ?? 0) - (siteXpos[si * 3 + 2] ?? 0);
+      out[i * 3] = (this.clip.siteXpos[base] ?? 0) - (xpos[bi * 3] ?? 0);
+      out[i * 3 + 1] = (this.clip.siteXpos[base + 1] ?? 0) - (xpos[bi * 3 + 1] ?? 0);
+      out[i * 3 + 2] = (this.clip.siteXpos[base + 2] ?? 0) - (xpos[bi * 3 + 2] ?? 0);
     }
     return out;
   }
@@ -336,7 +330,7 @@ class MimicSiteErr extends MimicClipObsBase {
 // MimicClipRefQpos — reference qpos at current clip frame
 // ---------------------------------------------------------------------------
 
-class MimicClipRefQpos extends MimicClipObsBase {
+export class MimicClipRefQpos extends MimicClipObsBase {
   private nq: number;
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
@@ -359,10 +353,10 @@ class MimicClipRefQpos extends MimicClipObsBase {
 }
 
 // ---------------------------------------------------------------------------
-// MimicClipRefQvel — reference qvel at current clip frame (no ctrl_dt scaling)
+// MimicClipRefQvel — reference qvel at current clip frame (no scaling)
 // ---------------------------------------------------------------------------
 
-class MimicClipRefQvel extends MimicClipObsBase {
+export class MimicClipRefQvel extends MimicClipObsBase {
   private nv: number;
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
@@ -388,7 +382,7 @@ class MimicClipRefQvel extends MimicClipObsBase {
 // MimicClipPhase — normalised position in [0, 1] along the clip
 // ---------------------------------------------------------------------------
 
-class MimicClipPhase extends MimicClipObsBase {
+export class MimicClipPhase extends MimicClipObsBase {
   get size(): number {
     return 1;
   }
@@ -404,27 +398,39 @@ class MimicClipPhase extends MimicClipObsBase {
 // MimicLookahead — k-step lookahead over clip site positions + root kinematics
 //
 // Per step (i = 1..k, stride frames apart):
-//   [0..nSites*3-1]       relative site positions (clip_site_xpos - cur_root_pos)
+//   [0..nSites*3-1]        relative site positions (clip_site_xpos - cur_root_pos)
 //   [nSites*3..nSites*3+2] delta root pos (clip.qpos[future,:3] - cur_root_pos)
-//   [nSites*3+3..nSites*3+5] future root vel (clip.qvel[future,:3])
-//   [nSites*3+6]          phase (future_frame / max(nFrames-1, 1))
-// Total per step: nClipSites*3 + 7; default = 17*3+7 = 58 -> k=5 -> 290
+//   [nSites*3+3..+5]       future root vel (clip.qvel[future,:3])
+//   [nSites*3+6]           phase (future_frame / max(nFrames-1, 1))
+// Total per step: nSites*3 + 7; default nSites=17 -> 58 per step, k=5 -> 290
 // ---------------------------------------------------------------------------
 
-class MimicLookahead extends MimicClipObsBase {
+export class MimicLookahead extends MimicClipObsBase {
   private k: number;
   private stride: number;
   private nClipSitesHint: number;
+  private siteNames: string[];
+  private clipSiteIds: number[] | null = null;
 
   constructor(runner: PolicyRunner, config: ObservationConfig) {
-    super(runner, config);
+    super(runner, config);  // sets this.fps
     this.k = (config.k as number | undefined) ?? 5;
     this.stride = (config.stride as number | undefined) ?? 20;
     this.nClipSitesHint = (config.n_clip_sites as number | undefined) ?? 17;
+    this.siteNames = (config.site_names as string[] | undefined) ?? [];
+  }
+
+  private getClipSiteIds(): number[] {
+    if (this.clipSiteIds !== null) return this.clipSiteIds;
+    if (!this.clip) return this.siteNames.map(() => -1);
+    this.clipSiteIds = this.siteNames.map((n) => this.clip!.clipSiteNames.indexOf(n));
+    return this.clipSiteIds;
   }
 
   get size(): number {
-    const nSites = this.clip?.nClipSites ?? this.nClipSitesHint;
+    const nSites = this.siteNames.length > 0
+      ? this.siteNames.length
+      : (this.clip?.nClipSites ?? this.nClipSitesHint);
     return this.k * (nSites * 3 + 7);
   }
 
@@ -435,38 +441,38 @@ class MimicLookahead extends MimicClipObsBase {
     if (nFrames <= 0) return out;
 
     const [curRootX, curRootY, curRootZ] = this.rootPos;
-
     const curIdx = this.frameIdx(nFrames);
-    const perStep = nClipSites * 3 + 7;
+
+    const clipIds = this.getClipSiteIds();
+    const nSites = clipIds.length;
+    const perStep = nSites * 3 + 7;
 
     for (let si = 0; si < this.k; si++) {
       const futureIdx = (curIdx + (si + 1) * this.stride) % nFrames;
       let offset = si * perStep;
 
-      // Relative site positions (future clip sites minus current root pos)
       const siteBase = futureIdx * nClipSites * 3;
-      for (let j = 0; j < nClipSites; j++) {
-        out[offset + j * 3] = (siteXpos[siteBase + j * 3] ?? 0) - curRootX;
-        out[offset + j * 3 + 1] = (siteXpos[siteBase + j * 3 + 1] ?? 0) - curRootY;
-        out[offset + j * 3 + 2] = (siteXpos[siteBase + j * 3 + 2] ?? 0) - curRootZ;
+      for (let j = 0; j < nSites; j++) {
+        const ci = clipIds[j];
+        if (ci < 0) continue;
+        out[offset + j * 3] = (siteXpos[siteBase + ci * 3] ?? 0) - curRootX;
+        out[offset + j * 3 + 1] = (siteXpos[siteBase + ci * 3 + 1] ?? 0) - curRootY;
+        out[offset + j * 3 + 2] = (siteXpos[siteBase + ci * 3 + 2] ?? 0) - curRootZ;
       }
-      offset += nClipSites * 3;
+      offset += nSites * 3;
 
-      // Delta root position (future clip qpos[0:3] minus current root pos)
       const qposBase = futureIdx * nq;
       out[offset] = (clipQpos[qposBase] ?? 0) - curRootX;
       out[offset + 1] = (clipQpos[qposBase + 1] ?? 0) - curRootY;
       out[offset + 2] = (clipQpos[qposBase + 2] ?? 0) - curRootZ;
       offset += 3;
 
-      // Future root velocity (clip qvel[0:3], no subtraction)
       const qvelBase = futureIdx * nv;
       out[offset] = clipQvel[qvelBase] ?? 0;
       out[offset + 1] = clipQvel[qvelBase + 1] ?? 0;
       out[offset + 2] = clipQvel[qvelBase + 2] ?? 0;
       offset += 3;
 
-      // Phase
       out[offset] = futureIdx / Math.max(nFrames - 1, 1);
     }
 

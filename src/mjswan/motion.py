@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from .policy import PolicyHandle
@@ -40,6 +40,12 @@ class MotionConfig:
     loop: bool = True
     """Whether the motion restarts from the beginning when it reaches the last frame."""
 
+    clip_format: Literal["body_world", "qpos"] = "body_world"
+    """NPZ layout: ``body_world`` (pre-computed frames) or ``qpos`` (browser derives via ``mj_forward``)."""
+
+    time_source: Literal["wall", "sim"] = "wall"
+    """Frame index source: ``wall`` uses render-loop ``dt``; ``sim`` uses ``mjData.time`` for pause/slow-motion accuracy."""
+
     metadata: dict[str, Any] = field(default_factory=dict)
     """Additional metadata for future extensions."""
 
@@ -65,6 +71,10 @@ class MotionConfig:
             data["default"] = True
         if not self.loop:
             data["loop"] = False
+        if self.clip_format != "body_world":
+            data["clip_format"] = self.clip_format
+        if self.time_source != "wall":
+            data["time_source"] = self.time_source
         if self.metadata:
             data["metadata"] = dict(self.metadata)
         return data

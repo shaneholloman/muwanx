@@ -208,7 +208,7 @@ def adapt_observations(
 # ---------------------------------------------------------------------------
 
 
-def _adapt_term_func(func: Any) -> TermFunc:
+def _adapt_term_func(func: Any, term_name: str | None = None) -> TermFunc:
     """Convert an mjlab termination callable to an mjswan ``TermFunc`` sentinel.
 
     If *func* is already an mjswan ``TermFunc`` it is returned as-is, so
@@ -216,7 +216,9 @@ def _adapt_term_func(func: Any) -> TermFunc:
     for functions that have no mjlab equivalent.
 
     Otherwise, looks up ``func.__name__`` directly on
-    ``mjswan.envs.mdp.terminations``.
+    ``mjswan.envs.mdp.terminations``.  When the function is a closure (e.g.
+    ``_fn``), *term_name* is tried as a fallback against ``_custom_term_registry``
+    so tasks can register by dict key rather than by function name.
     """
     if isinstance(func, TermFunc):
         return func
@@ -226,6 +228,9 @@ def _adapt_term_func(func: Any) -> TermFunc:
         return sentinel
     if name and name in _custom_term_registry:
         return _custom_term_registry[name]
+    # Fall back to term_name when the function name is a closure (e.g. '_fn')
+    if term_name and term_name in _custom_term_registry:
+        return _custom_term_registry[term_name]
     raise ValueError(
         f"No mjswan mapping for mjlab termination function '{name}'. "
         f"Ensure a matching TermFunc sentinel exists in "
@@ -259,11 +264,13 @@ def _sanitize_termination_params(params: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _adapt_term_cfg(term: Any) -> MjswanTerminationTermCfg:
+def _adapt_term_cfg(
+    term: Any, term_name: str | None = None
+) -> MjswanTerminationTermCfg:
     """Convert a single mjlab ``TerminationTermCfg`` to mjswan."""
     raw_params = dict(getattr(term, "params", None) or {})
     return MjswanTerminationTermCfg(
-        func=_adapt_term_func(term.func),
+        func=_adapt_term_func(term.func, term_name=term_name),
         params=_sanitize_termination_params(raw_params),
         time_out=getattr(term, "time_out", False),
     )
@@ -278,7 +285,7 @@ def adapt_terminations(
     return {
         key: term
         if isinstance(term, MjswanTerminationTermCfg)
-        else _adapt_term_cfg(term)
+        else _adapt_term_cfg(term, term_name=key)
         if _is_from_mjlab(term)
         else term
         for key, term in terminations.items()

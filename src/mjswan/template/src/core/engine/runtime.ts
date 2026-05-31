@@ -120,7 +120,6 @@ export class mjswanRuntime {
   private policyConfigPath: string | null;
   private initialQpos: number[] | null;
   private initialQvel: number[] | null;
-  private policyDebugCounter: number;
   private policyControl: Array<{
     controlType: string;
     ctrlAdr: number[];
@@ -244,7 +243,6 @@ export class mjswanRuntime {
     this.policyConfigPath = null;
     this.initialQpos = null;
     this.initialQvel = null;
-    this.policyDebugCounter = 0;
     this.policyControl = null;
     this.onnxModule = null;
     this.onnxInputDict = null;
@@ -555,22 +553,6 @@ export class mjswanRuntime {
           const state = this.policyStateBuilder.build();
           const obs = this.policyRunner.collectObservationsByKey(state);
           await this.runOnnxInference(obs);
-          if (this.policyDebugCounter % 60 === 0) {
-            const debugKey =
-              'policy' in obs
-                ? 'policy'
-                : 'observation' in obs
-                  ? 'observation'
-                  : Object.keys(obs)[0];
-            const debugObs = debugKey ? obs[debugKey] : null;
-            const preview = debugObs ? Array.from(debugObs.slice(0, 8)) : [];
-            console.log('[PolicyRunner] obs', {
-              key: debugKey,
-              size: debugObs ? debugObs.length : 0,
-              sample: preview,
-            });
-          }
-          this.policyDebugCounter += 1;
         }
         this.executeSimulationSteps();
         this.updateCachedState();
@@ -610,7 +592,6 @@ export class mjswanRuntime {
     this.policyConfigPath = policyConfigPath;
     this.policyRunner = null;
     this.policyStateBuilder = null;
-    this.policyDebugCounter = 0;
     this.policyControl = null;
     this.onnxModule = null;
     this.onnxInputDict = null;
@@ -706,6 +687,9 @@ export class mjswanRuntime {
         scene: this.scene,
       });
 
+      // Await observation preloads so clip-based obs don't return zeros on the first step.
+      await runner.preloadAll();
+
       this.policyRunner = runner;
       this.policyStateBuilder = new PolicyStateBuilder(
         this.mujoco,
@@ -717,6 +701,29 @@ export class mjswanRuntime {
       const state = this.policyStateBuilder.build();
       this.policyRunner.reset(state);
       this.policyControl = this.buildPolicyControl(config, runner, this.policyStateBuilder);
+
+      // Infer decimation from ctrl_dt in obs terms (default heuristic targets 0.02s, some tasks train finer).
+      {
+        const obsGroups = config.observations;
+        const allTerms: Array<Record<string, unknown>> = [];
+        if (Array.isArray(obsGroups)) {
+          allTerms.push(...(obsGroups as Array<Record<string, unknown>>));
+        } else if (obsGroups && typeof obsGroups === 'object') {
+          for (const g of Object.values(obsGroups)) {
+            if (Array.isArray(g)) allTerms.push(...(g as Array<Record<string, unknown>>));
+          }
+        }
+        for (const term of allTerms) {
+          if (term && typeof term.ctrl_dt === 'number' && term.ctrl_dt > 0 && this.timestep > 0) {
+            const newDec = Math.max(1, Math.round(term.ctrl_dt / this.timestep));
+            if (newDec !== this.decimation) {
+              console.log(`[PolicyRunner] Decimation updated: ${this.decimation} → ${newDec} (ctrl_dt=${term.ctrl_dt}, sim_dt=${this.timestep})`);
+              this.decimation = newDec;
+            }
+            break;
+          }
+        }
+      }
 
       // Initialize termination manager if termination config is present
       if (config.terminations && Object.keys(config.terminations).length > 0) {

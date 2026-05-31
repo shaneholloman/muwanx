@@ -21,5 +21,8 @@ export abstract class ObservationBase<TConfig extends ObservationConfig = Observ
 
   update?(_state: PolicyState): void;
 
+  /** Return a promise that resolves once the observation is ready to compute. */
+  preload?(): Promise<void>;
+
   abstract compute(state: PolicyState): Float32Array | number[];
 }

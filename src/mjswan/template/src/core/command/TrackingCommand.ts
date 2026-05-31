@@ -13,6 +13,8 @@ export type TrackingMotionConfig = {
   dataset_joint_names?: string[];
   default?: boolean;
   loop?: boolean;
+  clip_format?: 'body_world' | 'qpos';
+  time_source?: 'wall' | 'sim';
 };
 
 type LoadedTrackingMotion = TrackingMotionConfig & {
@@ -22,6 +24,7 @@ type LoadedTrackingMotion = TrackingMotionConfig & {
   bodyQuatW: Float32Array[];
   bodyLinVelW: Float32Array[];
   bodyAngVelW: Float32Array[];
+  qposFrames?: Float32Array[];
   frameCount: number;
 };
 
@@ -220,6 +223,9 @@ export class TrackingCommand implements CommandTerm {
     if (!this.selectedMotion || this.refLen === 0) {
       return new Float32Array(this.nJoints * 2);
     }
+    if (this.selectedMotion.clip_format === 'qpos') {
+      return new Float32Array(0);
+    }
     const jointPos = this.refJointPos[this.refIdx] ?? new Float32Array(this.nJoints);
     const jointVel = this.selectedMotion.jointVel[this.refIdx] ?? new Float32Array(this.nJoints);
     const out = new Float32Array(jointPos.length + jointVel.length);
@@ -301,6 +307,12 @@ export class TrackingCommand implements CommandTerm {
       this.updateGhostPose();
       return;
     }
+    if (this.selectedMotion.time_source === 'sim') {
+      const simTime = this.context.mjData?.time ?? 0;
+      this.refIdx = this.sampleHz > 0 ? Math.floor(simTime * this.sampleHz) % this.refLen : 0;
+      this.updateGhostPose();
+      return;
+    }
     const shouldLoop = this.selectedMotion?.loop !== false;
     this.frameAccumulator += dt * this.sampleHz;
     let motionLooped = false;
@@ -357,6 +369,10 @@ export class TrackingCommand implements CommandTerm {
 
   getSelectedMotionName(): string | null {
     return this.selectedMotionName;
+  }
+
+  getClipUrl(): string | null {
+    return this.selectedMotion?.path ?? this.motions[0]?.path ?? null;
   }
 
   getAnchorBodyName(): string | null {
@@ -464,6 +480,26 @@ export class TrackingCommand implements CommandTerm {
   private async loadMotion(config: TrackingMotionConfig): Promise<LoadedTrackingMotion> {
     this.sampleHz = config.fps;
     const npz = await loadNpz(config.path);
+    const empty: Float32Array[] = [];
+
+    if (config.clip_format === 'qpos') {
+      if (!npz['qpos']) {
+        throw new Error("Motion asset with clip_format='qpos' is missing 'qpos'");
+      }
+      const qposFrames = splitFrames(npz['qpos']!);
+      return {
+        ...config,
+        jointPos: empty,
+        jointVel: empty,
+        bodyPosW: empty,
+        bodyQuatW: empty,
+        bodyLinVelW: empty,
+        bodyAngVelW: empty,
+        qposFrames,
+        frameCount: qposFrames.length,
+      };
+    }
+
     const required = ['joint_pos', 'joint_vel', 'body_pos_w', 'body_quat_w', 'body_lin_vel_w', 'body_ang_vel_w'] as const;
     for (const key of required) {
       if (!npz[key]) {
@@ -529,7 +565,7 @@ export class TrackingCommand implements CommandTerm {
 
   private updateReferenceState(): void {
     const motion = this.selectedMotion;
-    if (!motion || motion.frameCount === 0) {
+    if (!motion || motion.frameCount === 0 || motion.clip_format === 'qpos') {
       this.refRootPos = [];
       this.refRootQuat = [];
       this.refBodyPosW = [];
@@ -555,7 +591,7 @@ export class TrackingCommand implements CommandTerm {
     const mjModel = this.context.mjModel;
     const mjData = this.context.mjData;
     const motion = this.selectedMotion;
-    if (!mjModel || !mjData || !motion || this.refLen === 0) {
+    if (!mjModel || !mjData || !motion || this.refLen === 0 || motion.clip_format === 'qpos') {
       return;
     }
 
@@ -730,6 +766,20 @@ export class TrackingCommand implements CommandTerm {
       if (this.ghostRoot) {
         this.ghostRoot.visible = false;
       }
+      return;
+    }
+
+    if (this.selectedMotion.clip_format === 'qpos' && this.selectedMotion.qposFrames) {
+      const frame = this.selectedMotion.qposFrames[this.refIdx];
+      if (frame) {
+        this.ghostData.qpos.set(frame);
+      }
+      this.context.mujoco.mj_forward(this.context.mjModel, this.ghostData);
+      for (const [bodyId, body] of this.ghostBodies) {
+        getPosition(this.ghostData.xpos, bodyId, body.position);
+        getQuaternion(this.ghostData.xquat, bodyId, body.quaternion);
+      }
+      this.ghostRoot.visible = this.referenceVisible;
       return;
     }
 

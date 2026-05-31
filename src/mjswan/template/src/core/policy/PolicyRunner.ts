@@ -132,6 +132,19 @@ export class PolicyRunner {
     return first ? outputs[first] : new Float32Array(0);
   }
 
+  /** Await all observation preload() promises before the first inference step. */
+  async preloadAll(): Promise<void> {
+    const promises: Promise<void>[] = [];
+    for (const obsList of Object.values(this.obsGroups)) {
+      for (const obs of obsList) {
+        if (typeof obs.preload === 'function') {
+          promises.push(obs.preload());
+        }
+      }
+    }
+    await Promise.all(promises);
+  }
+
   getObservationSize(): number {
     if (this.defaultObsKey && this.obsSizes[this.defaultObsKey] !== undefined) {
       return this.obsSizes[this.defaultObsKey];

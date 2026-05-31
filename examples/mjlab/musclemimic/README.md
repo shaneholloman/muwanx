@@ -8,7 +8,9 @@ Trains the [`myoMimicFullbody-v0`](https://github.com/ttktjmt/myosuite4/blob/col
 
 ## Prerequisites
 
-1. **Install extras** — this example needs `huggingface_hub` (clip download) and `musclemimic_models` (myosuite mjlab registration), which aren't pulled in by the default mjswan venv. Listed in [`requirements.txt`](requirements.txt):
+1. **Install extras** — this example needs `huggingface_hub` (clip download) and
+   `musclemimic_models` (myosuite mjlab registration), which aren't pulled in by the
+   default mjswan venv. Listed in [`requirements.txt`](requirements.txt):
    ```sh
    uv pip install -r examples/mjlab/musclemimic/requirements.txt
    ```
