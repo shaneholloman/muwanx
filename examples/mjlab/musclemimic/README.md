@@ -2,7 +2,7 @@
 
 Source: https://github.com/amathislab/musclemimic
 
-Demo: WIP
+Demo: https://mjswan-musclemimic.pages.dev/
 
 Trains the [`myoMimicFullbody-v0`](https://github.com/ttktjmt/myosuite4/blob/colab/tutorials/mimic/train_colab.ipynb) task on mjlab and replays it in the browser. Policy: W&B run `ttktjmt-org/mjlab/zyklrroq`.
 
