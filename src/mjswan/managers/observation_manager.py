@@ -144,6 +144,8 @@ class ObservationGroupCfg:
         """
         result = []
         for term_cfg in self.terms.values():
+            if term_cfg.func.unsupported_reason is not None:
+                continue
             d = term_cfg.to_dict()
             # Group-level history overrides term-level
             if self.history_length is not None and self.history_length > 0:

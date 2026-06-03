@@ -48,7 +48,7 @@ export class PolicyRunner {
     this.context = null;
 
     this.policyJointNames = (config.policy_joint_names ?? []).slice();
-    this.numActions = this.policyJointNames.length;
+    this.numActions = (config.policy_num_actions as number | undefined) ?? this.policyJointNames.length;
     this.lastActions = new Float32Array(this.numActions);
     this.defaultJointPos = this.normalizeArray(
       config.default_joint_pos ?? [],
@@ -132,6 +132,19 @@ export class PolicyRunner {
     return first ? outputs[first] : new Float32Array(0);
   }
 
+  /** Await all observation preload() promises before the first inference step. */
+  async preloadAll(): Promise<void> {
+    const promises: Promise<void>[] = [];
+    for (const obsList of Object.values(this.obsGroups)) {
+      for (const obs of obsList) {
+        if (typeof obs.preload === 'function') {
+          promises.push(obs.preload());
+        }
+      }
+    }
+    await Promise.all(promises);
+  }
+
   getObservationSize(): number {
     if (this.defaultObsKey && this.obsSizes[this.defaultObsKey] !== undefined) {
       return this.obsSizes[this.defaultObsKey];
@@ -178,6 +191,10 @@ export class PolicyRunner {
 
   getLastActions(): Float32Array {
     return new Float32Array(this.lastActions);
+  }
+
+  getConfig(): PolicyConfig {
+    return this.config;
   }
 
   setLastActions(actions: Float32Array): void {

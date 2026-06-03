@@ -22,8 +22,12 @@ Usage (identical to mjlab)::
 from __future__ import annotations
 
 import abc
+import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import mujoco
 
 
 @dataclass(kw_only=True)
@@ -178,6 +182,106 @@ class JointEffortActionCfg(BaseActionCfg):
         return entry
 
 
+@dataclass(kw_only=True)
+class MuscleActivationActionCfg(BaseActionCfg):
+    """MyoSuite-style muscle activation control.
+
+    Writes excitation values to ``mjData.ctrl`` for the named MuJoCo muscle
+    actuators (``dyntype=muscle``). Both modes apply ``raw = scale * a + offset``
+    first, then:
+
+    - ``normalize=True`` (default): applies the canonical MyoSuite sigmoid
+      ``σ(5 * (raw - 0.5))`` to produce excitation in ``(0, 1)``.
+    - ``normalize=False``: clips ``raw`` to ``[0, 1]`` for models that already
+      output excitation in that range.
+
+    Semantics mirror myosuite4 ``MuscleActionTermCfg.normalize``; see
+    ``docs/adr/0002-muscle-action-term-aligned-with-myomuscleactivationactioncfg.md``.
+    """
+
+    normalize: bool = True
+    """Apply the MyoSuite sigmoid mapping. When False, clip ``raw`` to [0, 1]."""
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.unsupported_reason is not None:
+            raise NotImplementedError(self.unsupported_reason)
+
+        entry: dict[str, Any] = {"type": "muscle_activation"}
+        if self.scale != 1.0:
+            entry["scale"] = self.scale
+        if self.offset != 0.0:
+            entry["offset"] = self.offset
+        if not self.normalize:
+            entry["normalize"] = False
+        entry["actuator_names"] = list(self.actuator_names)
+        return entry
+
+
+def validate_muscle_actuators(
+    model: "mujoco.MjModel",
+    cfg: MuscleActivationActionCfg,
+    term_name: str = "",
+) -> list[int]:
+    """Validate that ``cfg.actuator_names`` resolves to muscle actuators only.
+
+    Patterns are full-match regexes (each wrapped as ``^(?:pattern)$``), mirroring
+    the TS runtime's ``getCtrlMappingByActuatorNames``. Raises ``ValueError`` if
+    any pattern matches no actuator or if any matched actuator has a non-muscle
+    ``actuator_dyntype``. Returns the resolved actuator ids in original order
+    (deduplicated).
+    """
+    import mujoco
+
+    prefix = (
+        f"MuscleActivationActionCfg {term_name!r}: "
+        if term_name
+        else "MuscleActivationActionCfg: "
+    )
+    if not cfg.actuator_names:
+        raise ValueError(f"{prefix}actuator_names is empty")
+
+    actuator_names = [
+        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+        for i in range(model.nu)
+    ]
+
+    matched: list[int] = []
+    for pattern in cfg.actuator_names:
+        regex = re.compile(f"^(?:{pattern})$")
+        ids_for_pattern = [
+            i for i, n in enumerate(actuator_names) if n is not None and regex.match(n)
+        ]
+        if not ids_for_pattern:
+            available = [n for n in actuator_names if n]
+            raise ValueError(
+                f"{prefix}actuator_names pattern {pattern!r} matched no actuator. "
+                f"Available actuators: {available}"
+            )
+        matched.extend(ids_for_pattern)
+
+    seen: set[int] = set()
+    unique_ids: list[int] = []
+    for i in matched:
+        if i not in seen:
+            seen.add(i)
+            unique_ids.append(i)
+
+    muscle_dyn = int(mujoco.mjtDyn.mjDYN_MUSCLE)
+    violations: list[tuple[str, int]] = []
+    for i in unique_ids:
+        dt = int(model.actuator_dyntype[i])
+        if dt != muscle_dyn:
+            violations.append((actuator_names[i] or f"#{i}", dt))
+    if violations:
+        details = ", ".join(f"{name!r} (dyntype={dt})" for name, dt in violations)
+        raise ValueError(
+            f"{prefix}actuators are not muscle dyntype: {details}. "
+            f"Expected dyntype={muscle_dyn} (mjDYN_MUSCLE)."
+        )
+
+    return unique_ids
+
+
 # ---------------------------------------------------------------------------
 # Tendon actions (stubs — not supported in browser runtime)
 # ---------------------------------------------------------------------------
@@ -244,8 +348,10 @@ __all__ = [
     "JointPositionActionCfg",
     "JointVelocityActionCfg",
     "JointEffortActionCfg",
+    "MuscleActivationActionCfg",
     "TendonLengthActionCfg",
     "TendonVelocityActionCfg",
     "TendonEffortActionCfg",
     "SiteEffortActionCfg",
+    "validate_muscle_actuators",
 ]

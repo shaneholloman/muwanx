@@ -106,6 +106,16 @@ function parseNpyBuffer(buffer: Uint8Array): NpzEntry {
     if (needsSwap) i32 = swapEndianI32(i32);
     float32Data = new Float32Array(i32.length);
     for (let i = 0; i < i32.length; i++) float32Data[i] = i32[i];
+  } else if (dtype === 'i8') {
+    // int64 → float32: lossy beyond 2^24, but fits typical index/count fields (numpy default int on 64-bit).
+    let bi64 = new BigInt64Array(
+      rawData.buffer as ArrayBuffer,
+      rawData.byteOffset,
+      rawData.byteLength / 8,
+    );
+    if (needsSwap) bi64 = swapEndianBI64(bi64);
+    float32Data = new Float32Array(bi64.length);
+    for (let i = 0; i < bi64.length; i++) float32Data[i] = Number(bi64[i]);
   } else {
     // Handle fixed-width byte-string dtype: |S<n>
     const strMatch = descr.match(/^S(\d+)$/);
@@ -156,11 +166,18 @@ function parseNpyBuffer(buffer: Uint8Array): NpzEntry {
       }
       return { shape, data: new Float32Array(0), strings };
     }
+    if (dtype === 'O') {
+      // numpy object dtype (pickled Python objects) cannot be deserialised in the browser; treated as a skip.
+      throw new Error(PICKLED_OBJECT_DTYPE_MESSAGE);
+    }
     throw new Error(`Unsupported numpy dtype: ${descr}`);
   }
 
   return { shape, data: float32Data };
 }
+
+const PICKLED_OBJECT_DTYPE_MESSAGE =
+  'npz: pickled python objects (|O dtype) cannot be loaded in the browser';
 
 function isLittleEndian(): boolean {
   const buf = new ArrayBuffer(2);
@@ -191,6 +208,17 @@ function swapEndianI32(arr: Int32Array<ArrayBufferLike>): Int32Array<ArrayBuffer
   const out = new Int32Array(arr.length);
   for (let i = 0; i < arr.length; i++) {
     out[i] = view.getInt32(i * 4, true);
+  }
+  return out;
+}
+
+function swapEndianBI64(
+  arr: BigInt64Array<ArrayBufferLike>,
+): BigInt64Array<ArrayBuffer> {
+  const view = new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+  const out = new BigInt64Array(arr.length);
+  for (let i = 0; i < arr.length; i++) {
+    out[i] = view.getBigInt64(i * 8, true);
   }
   return out;
 }
@@ -283,7 +311,12 @@ export async function loadNpz(url: string): Promise<NpzData> {
     try {
       result[fileName] = parseNpyBuffer(npyBytes);
     } catch (err) {
-      console.warn(`[NPZ] Failed to parse ${fileName}:`, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === PICKLED_OBJECT_DTYPE_MESSAGE) {
+        console.debug(`[NPZ] Skipping pickled object field "${fileName}"`);
+      } else {
+        console.warn(`[NPZ] Failed to parse ${fileName}:`, err);
+      }
     }
   }
 

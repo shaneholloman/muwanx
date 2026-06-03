@@ -108,6 +108,7 @@ export class mjswanRuntime {
   private running: boolean;
   private timestep: number;
   private decimation: number;
+  private policyCtrlDt: number | null;
   private loadingScene: Promise<void> | null;
   private resizeObserver: ResizeObserver | null;
   private dragStateManager: DragStateManager | null;
@@ -118,7 +119,8 @@ export class mjswanRuntime {
   private policyRunner: PolicyRunner | null;
   private policyStateBuilder: PolicyStateBuilder | null;
   private policyConfigPath: string | null;
-  private policyDebugCounter: number;
+  private initialQpos: number[] | null;
+  private initialQvel: number[] | null;
   private policyControl: Array<{
     controlType: string;
     ctrlAdr: number[];
@@ -135,6 +137,8 @@ export class mjswanRuntime {
     positionActuator: boolean[];
     kp: Float32Array;
     kd: Float32Array;
+    // muscle_activation only: when true apply MyoSuite sigmoid; when false clip(raw, 0, 1).
+    muscleNormalize: boolean;
   }> | null;
   private onnxModule: OnnxModule | null;
   private onnxInputDict: Record<string, ort.Tensor> | null;
@@ -232,13 +236,15 @@ export class mjswanRuntime {
     this.running = false;
     this.timestep = 0.001;
     this.decimation = 1;
+    this.policyCtrlDt = null;
     this.loadingScene = null;
     this.dragStateManager = null;
     this.dragForceScale = 100.0;
     this.policyRunner = null;
     this.policyStateBuilder = null;
     this.policyConfigPath = null;
-    this.policyDebugCounter = 0;
+    this.initialQpos = null;
+    this.initialQvel = null;
     this.policyControl = null;
     this.onnxModule = null;
     this.onnxInputDict = null;
@@ -438,7 +444,8 @@ export class mjswanRuntime {
       this.syncStaticBodiesFromData();
 
       this.timestep = this.mjModel.opt.timestep || 0.001;
-      this.decimation = Math.max(1, Math.round(0.02 / this.timestep));
+      const ctrlDtForDec = this.policyCtrlDt ?? 0.02;
+      this.decimation = Math.max(1, Math.round(ctrlDtForDec / this.timestep));
 
       this.lastSimState.bodies.clear();
       this.updateCachedState();
@@ -549,22 +556,6 @@ export class mjswanRuntime {
           const state = this.policyStateBuilder.build();
           const obs = this.policyRunner.collectObservationsByKey(state);
           await this.runOnnxInference(obs);
-          if (this.policyDebugCounter % 60 === 0) {
-            const debugKey =
-              'policy' in obs
-                ? 'policy'
-                : 'observation' in obs
-                  ? 'observation'
-                  : Object.keys(obs)[0];
-            const debugObs = debugKey ? obs[debugKey] : null;
-            const preview = debugObs ? Array.from(debugObs.slice(0, 8)) : [];
-            console.log('[PolicyRunner] obs', {
-              key: debugKey,
-              size: debugObs ? debugObs.length : 0,
-              sample: preview,
-            });
-          }
-          this.policyDebugCounter += 1;
         }
         this.executeSimulationSteps();
         this.updateCachedState();
@@ -604,7 +595,6 @@ export class mjswanRuntime {
     this.policyConfigPath = policyConfigPath;
     this.policyRunner = null;
     this.policyStateBuilder = null;
-    this.policyDebugCounter = 0;
     this.policyControl = null;
     this.onnxModule = null;
     this.onnxInputDict = null;
@@ -647,6 +637,8 @@ export class mjswanRuntime {
           motions: config.motions,
         };
       }
+      this.initialQpos = Array.isArray(config.initial_qpos) ? (config.initial_qpos as number[]) : null;
+      this.initialQvel = Array.isArray(config.initial_qvel) ? (config.initial_qvel as number[]) : null;
       this.resetSimulationState();
       this.mujoco.mj_forward(this.mjModel, this.mjData);
       this.updateCachedState();
@@ -676,7 +668,10 @@ export class mjswanRuntime {
         this.updateCachedState();
       }
 
-      if (!config.policy_joint_names || config.policy_joint_names.length === 0) {
+      if (
+        !(config.policy_num_actions as number | undefined) &&
+        (!config.policy_joint_names || config.policy_joint_names.length === 0)
+      ) {
         throw new Error('Policy config missing policy_joint_names.');
       }
 
@@ -695,6 +690,9 @@ export class mjswanRuntime {
         scene: this.scene,
       });
 
+      // Await observation preloads so clip-based obs don't return zeros on the first step.
+      await runner.preloadAll();
+
       this.policyRunner = runner;
       this.policyStateBuilder = new PolicyStateBuilder(
         this.mujoco,
@@ -706,6 +704,31 @@ export class mjswanRuntime {
       const state = this.policyStateBuilder.build();
       this.policyRunner.reset(state);
       this.policyControl = this.buildPolicyControl(config, runner, this.policyStateBuilder);
+
+      // Infer decimation from fps in obs terms (default heuristic targets 0.02s, some tasks train finer).
+      {
+        const obsGroups = config.observations;
+        const allTerms: Array<Record<string, unknown>> = [];
+        if (Array.isArray(obsGroups)) {
+          allTerms.push(...(obsGroups as Array<Record<string, unknown>>));
+        } else if (obsGroups && typeof obsGroups === 'object') {
+          for (const g of Object.values(obsGroups)) {
+            if (Array.isArray(g)) allTerms.push(...(g as Array<Record<string, unknown>>));
+          }
+        }
+        for (const term of allTerms) {
+          if (!term || this.timestep <= 0) continue;
+          if (typeof term.fps === 'number' && term.fps > 0) {
+            this.policyCtrlDt = 1 / term.fps;
+            const newDec = Math.max(1, Math.round(this.policyCtrlDt / this.timestep));
+            if (newDec !== this.decimation) {
+              console.log(`[PolicyRunner] Decimation updated: ${this.decimation} → ${newDec} (fps=${term.fps}, sim_dt=${this.timestep})`);
+              this.decimation = newDec;
+            }
+            break;
+          }
+        }
+      }
 
       // Initialize termination manager if termination config is present
       if (config.terminations && Object.keys(config.terminations).length > 0) {
@@ -781,6 +804,7 @@ export class mjswanRuntime {
     positionActuator: boolean[];
     kp: Float32Array;
     kd: Float32Array;
+    muscleNormalize: boolean;
   }> | null {
     const jointNames = runner.getPolicyJointNames();
     const affineBiasValue = this.mujoco.mjtBias?.mjBIAS_AFFINE?.value ?? 1;
@@ -851,6 +875,7 @@ export class mjswanRuntime {
         positionActuator,
         kp,
         kd,
+        muscleNormalize: false,
       };
     };
 
@@ -888,13 +913,57 @@ export class mjswanRuntime {
 
     for (const [termKey, actionTerm] of Object.entries(actionsConfig)) {
       const controlType = actionTerm.type ?? 'joint_position';
-      if (controlType !== 'joint_position' && controlType !== 'torque') {
+      if (
+        controlType !== 'joint_position' &&
+        controlType !== 'torque' &&
+        controlType !== 'muscle_activation'
+      ) {
         console.warn(`[PolicyRunner] Action term "${termKey}": unsupported type "${controlType}", skipping.`);
         continue;
       }
 
-      // If actuator_names is absent or [".*"], match all joints (backward-compatible).
       const patterns = actionTerm.actuator_names ?? ['.*'];
+
+      if (controlType === 'muscle_activation') {
+        const muscleMapping = stateBuilder.getCtrlMappingByActuatorNames(patterns);
+        if (!muscleMapping) {
+          console.warn(`[PolicyRunner] Action term "${termKey}": no actuators matched patterns [${patterns.join(', ')}], skipping.`);
+          continue;
+        }
+        const n = muscleMapping.ctrlAdr.length;
+        const actionScale = this.normalizeControlArray(
+          actionTerm.scale as number[] | number | Record<string, number> | undefined,
+          n,
+          1.0
+        );
+        const actionOffset = this.normalizeControlArray(
+          actionTerm.offset as number[] | number | Record<string, number> | undefined,
+          n,
+          0.0
+        );
+        const muscleNormalize = (actionTerm as { normalize?: boolean }).normalize ?? true;
+        console.log(
+          `[PolicyRunner] Action term "${termKey}" (muscle_activation): ${n} actuator(s), normalize=${muscleNormalize}`
+        );
+        results.push({
+          controlType,
+          ctrlAdr: muscleMapping.ctrlAdr,
+          qposAdr: [],
+          qvelAdr: [],
+          actionIndices: muscleMapping.actionIndices,
+          actionScale,
+          actionOffset,
+          defaultJointPos: new Float32Array(n),
+          encoderBias: new Float32Array(n),
+          positionActuator: new Array(n).fill(false),
+          kp: new Float32Array(n),
+          kd: new Float32Array(n),
+          muscleNormalize,
+        });
+        continue;
+      }
+
+      // If actuator_names is absent or [".*"], match all joints (backward-compatible).
       const isMatchAll = patterns.length === 1 && patterns[0] === '.*';
 
       let mapping: { ctrlAdr: number[]; qposAdr: number[]; qvelAdr: number[]; actionIndices: number[] } | null;
@@ -981,6 +1050,18 @@ export class mjswanRuntime {
     } else {
       this.mujoco.mj_resetData(this.mjModel, this.mjData);
     }
+    if (this.initialQpos) {
+      const qpos = this.mjData.qpos;
+      for (let i = 0; i < Math.min(this.initialQpos.length, this.mjModel.nq); i++) {
+        qpos[i] = this.initialQpos[i];
+      }
+    }
+    if (this.initialQvel) {
+      const qvel = this.mjData.qvel;
+      for (let i = 0; i < Math.min(this.initialQvel.length, this.mjModel.nv); i++) {
+        qvel[i] = this.initialQvel[i];
+      }
+    }
     if (this.eventManager) {
       this.eventManager.onReset({
         mjModel: this.mjModel,
@@ -1036,6 +1117,7 @@ export class mjswanRuntime {
         positionActuator,
         kp,
         kd,
+        muscleNormalize,
       } =
         term;
       const numJoints = ctrlAdr.length;
@@ -1068,6 +1150,20 @@ export class mjswanRuntime {
           const ctrlIndex = ctrlAdr[i];
           if (ctrlIndex >= 0) {
             ctrl[ctrlIndex] = actionScale[i] * (allActions[actionIndices[i]] ?? 0);
+          }
+        }
+      } else if (controlType === 'muscle_activation') {
+        // Shared pre-step: raw = scale * action + offset.
+        // normalize=true:  MyoSuite-canonical sigmoid σ(5 * (raw - 0.5)).
+        // normalize=false: clip(raw, 0, 1) for models that already output excitation.
+        for (let i = 0; i < numJoints; i++) {
+          const ctrlIndex = ctrlAdr[i];
+          if (ctrlIndex < 0) continue;
+          const raw = (allActions[actionIndices[i]] ?? 0) * actionScale[i] + actionOffset[i];
+          if (muscleNormalize) {
+            ctrl[ctrlIndex] = 1 / (1 + Math.exp(-5 * (raw - 0.5)));
+          } else {
+            ctrl[ctrlIndex] = raw < 0 ? 0 : raw > 1 ? 1 : raw;
           }
         }
       }
@@ -1461,7 +1557,8 @@ export class mjswanRuntime {
 
     // Update runtime parameters
     this.timestep = this.mjModel.opt.timestep || 0.001;
-    this.decimation = Math.max(1, Math.round(0.02 / this.timestep));
+    const ctrlDtForDec = this.policyCtrlDt ?? 0.02;
+    this.decimation = Math.max(1, Math.round(ctrlDtForDec / this.timestep));
 
     // Clear and update cached state
     this.lastSimState.bodies.clear();

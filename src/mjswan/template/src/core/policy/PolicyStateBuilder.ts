@@ -122,6 +122,50 @@ export class PolicyStateBuilder {
     return { ctrlAdr, qposAdr, qvelAdr, actionIndices };
   }
 
+  /**
+   * Returns control mapping for actuators selected by name (not via joint
+   * transmission). Used for muscle/tendon actuators whose transmission type
+   * isn't `mjTRN_JOINT` and which therefore can't be located via the
+   * joint-name path. Patterns follow the same `^(?:...)$` regex convention as
+   * `getControlMappingFor`.
+   *
+   * Returns `null` if no actuators match.
+   */
+  getCtrlMappingByActuatorNames(patterns: string[]): {
+    ctrlAdr: number[];
+    actionIndices: number[];
+  } | null {
+    const actuatorNames = this.getActuatorNames(this.mjModel);
+    const regexps = patterns.map((p) => new RegExp(`^(?:${p})$`));
+    const matchesAny = (name: string): boolean =>
+      regexps.some((re) => re.test(name));
+
+    const ctrlAdr: number[] = [];
+    const actionIndices: number[] = [];
+    for (let i = 0; i < actuatorNames.length; i++) {
+      if (matchesAny(actuatorNames[i])) {
+        ctrlAdr.push(i);
+        actionIndices.push(ctrlAdr.length - 1);
+      }
+    }
+    return ctrlAdr.length > 0 ? { ctrlAdr, actionIndices } : null;
+  }
+
+  private getActuatorNames(mjModel: MjModel): string[] {
+    const namesArray = new Uint8Array(mjModel.names);
+    const decoder = new TextDecoder();
+    const names: string[] = [];
+    for (let i = 0; i < mjModel.nu; i++) {
+      let start = mjModel.name_actuatoradr[i];
+      let end = start;
+      while (end < namesArray.length && namesArray[end] !== 0) {
+        end++;
+      }
+      names.push(decoder.decode(namesArray.subarray(start, end)));
+    }
+    return names;
+  }
+
   private buildCtrlAdr(): number[] | null {
     if (this.mjModel.nu <= 0) {
       return null;
