@@ -37,7 +37,8 @@ from myosuite.envs.myo.backends.mjlab.register_mjlab_tasks import (
 
 TASK_ID = "myoMimicFullbody-v0"
 # WANDB_RUN_PATH = "ttktjmt-org/mjlab/v3q5ete6"
-WANDB_RUN_PATH = "ttktjmt-org/mjlab/9h3i2dkg"
+# WANDB_RUN_PATH = "ttktjmt-org/mjlab/srir3zxo"
+WANDB_RUN_PATH = "ttktjmt-org/mjlab/y38ix8cv"
 CLIP_REPO_ID = "amathislab/musclemimic-retargeted"
 CLIP_FILENAME = "MyoFullBody/gmr/KIT/167/walking_medium06_poses.npz"
 

@@ -67,7 +67,11 @@ def setup_builder() -> mjswan.Builder:
 
     clip_path = _bootstrap_mimic_task()
 
-    run_paths = ["ttktjmt-org/mjlab/v3q5ete6", "ttktjmt-org/mjlab/9h3i2dkg"]
+    run_paths = [
+        "ttktjmt-org/mjlab/v3q5ete6",
+        "ttktjmt-org/mjlab/srir3zxo",
+        "ttktjmt-org/mjlab/y38ix8cv",
+    ]
     task_id = "myoMimicFullbody-v0"
 
     builder = mjswan.Builder(debug=True)

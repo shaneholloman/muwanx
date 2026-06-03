@@ -108,6 +108,7 @@ export class mjswanRuntime {
   private running: boolean;
   private timestep: number;
   private decimation: number;
+  private policyCtrlDt: number | null;
   private loadingScene: Promise<void> | null;
   private resizeObserver: ResizeObserver | null;
   private dragStateManager: DragStateManager | null;
@@ -235,6 +236,7 @@ export class mjswanRuntime {
     this.running = false;
     this.timestep = 0.001;
     this.decimation = 1;
+    this.policyCtrlDt = null;
     this.loadingScene = null;
     this.dragStateManager = null;
     this.dragForceScale = 100.0;
@@ -442,7 +444,8 @@ export class mjswanRuntime {
       this.syncStaticBodiesFromData();
 
       this.timestep = this.mjModel.opt.timestep || 0.001;
-      this.decimation = Math.max(1, Math.round(0.02 / this.timestep));
+      const ctrlDtForDec = this.policyCtrlDt ?? 0.02;
+      this.decimation = Math.max(1, Math.round(ctrlDtForDec / this.timestep));
 
       this.lastSimState.bodies.clear();
       this.updateCachedState();
@@ -702,7 +705,7 @@ export class mjswanRuntime {
       this.policyRunner.reset(state);
       this.policyControl = this.buildPolicyControl(config, runner, this.policyStateBuilder);
 
-      // Infer decimation from ctrl_dt in obs terms (default heuristic targets 0.02s, some tasks train finer).
+      // Infer decimation from fps in obs terms (default heuristic targets 0.02s, some tasks train finer).
       {
         const obsGroups = config.observations;
         const allTerms: Array<Record<string, unknown>> = [];
@@ -714,10 +717,12 @@ export class mjswanRuntime {
           }
         }
         for (const term of allTerms) {
-          if (term && typeof term.ctrl_dt === 'number' && term.ctrl_dt > 0 && this.timestep > 0) {
-            const newDec = Math.max(1, Math.round(term.ctrl_dt / this.timestep));
+          if (!term || this.timestep <= 0) continue;
+          if (typeof term.fps === 'number' && term.fps > 0) {
+            this.policyCtrlDt = 1 / term.fps;
+            const newDec = Math.max(1, Math.round(this.policyCtrlDt / this.timestep));
             if (newDec !== this.decimation) {
-              console.log(`[PolicyRunner] Decimation updated: ${this.decimation} → ${newDec} (ctrl_dt=${term.ctrl_dt}, sim_dt=${this.timestep})`);
+              console.log(`[PolicyRunner] Decimation updated: ${this.decimation} → ${newDec} (fps=${term.fps}, sim_dt=${this.timestep})`);
               this.decimation = newDec;
             }
             break;
@@ -1552,7 +1557,8 @@ export class mjswanRuntime {
 
     // Update runtime parameters
     this.timestep = this.mjModel.opt.timestep || 0.001;
-    this.decimation = Math.max(1, Math.round(0.02 / this.timestep));
+    const ctrlDtForDec = this.policyCtrlDt ?? 0.02;
+    this.decimation = Math.max(1, Math.round(ctrlDtForDec / this.timestep));
 
     // Clear and update cached state
     this.lastSimState.bodies.clear();
