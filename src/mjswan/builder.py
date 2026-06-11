@@ -36,6 +36,93 @@ from .splat import SplatConfig
 from .utils import collect_spec_assets, name2id, to_zip_deflated
 
 
+def _build_uses_custom_js() -> bool:
+    """Whether the current build embeds author-supplied TypeScript.
+
+    Walks the four ``_custom_registry`` dicts (observations / terminations /
+    events / commands) and returns True iff any registered sentinel has a
+    non-None ``ts_src``. Surfaced at the top of ``config.json`` so downstream
+    consumers (notably mjswan Cloud) can enforce a declarative-only policy
+    without inspecting the bundled engine. See ADR 0003.
+    """
+    from .command import _custom_registry as _command_registry
+    from .envs.mdp.events import _custom_registry as _event_registry
+    from .envs.mdp.observations import _custom_registry as _obs_registry
+    from .envs.mdp.terminations import _custom_registry as _term_registry
+
+    for registry in (_obs_registry, _term_registry, _event_registry, _command_registry):
+        for sentinel in registry.values():
+            if getattr(sentinel, "ts_src", None) is not None:
+                return True
+    return False
+
+
+def _builtin_ts_names(module: object, sentinel_type: type) -> set[str]:
+    """Collect ts_names of declarative built-in sentinels in *module*."""
+    names: set[str] = set()
+    for value in vars(module).values():
+        if (
+            isinstance(value, sentinel_type)
+            and getattr(value, "ts_src", None) is None
+            and getattr(value, "ts_name", "")
+        ):
+            names.add(value.ts_name)
+    return names
+
+
+def _check_no_builtin_name_shadowing() -> None:
+    """Refuse builds where a custom (``ts_src``) sentinel shadows a built-in.
+
+    A `register_*_func` call with ``ts_src=<path>`` and a ``ts_name`` that
+    already names a declarative built-in produces a silent failure: locally
+    the engine's registry spread order (which differs across MDP types)
+    decides which class wins, and the resulting ``policy.json`` is
+    indistinguishable from a clean declarative reference.  See ADR 0003.
+    """
+    from .envs.mdp import events as _events_module
+    from .envs.mdp import observations as _obs_module
+    from .envs.mdp import terminations as _term_module
+    from .envs.mdp.events import EventFunc
+    from .envs.mdp.events import _custom_registry as _event_registry
+    from .envs.mdp.observations import ObsFunc
+    from .envs.mdp.observations import _custom_registry as _obs_registry
+    from .envs.mdp.terminations import TermFunc
+    from .envs.mdp.terminations import _custom_registry as _term_registry
+
+    checks: list[tuple[str, str, dict, set[str]]] = [
+        (
+            "observation",
+            "register_obs_func",
+            _obs_registry,
+            _builtin_ts_names(_obs_module, ObsFunc),
+        ),
+        (
+            "termination",
+            "register_termination_func",
+            _term_registry,
+            _builtin_ts_names(_term_module, TermFunc),
+        ),
+        (
+            "event",
+            "register_event_func",
+            _event_registry,
+            _builtin_ts_names(_events_module, EventFunc),
+        ),
+    ]
+    for kind, fn_name, registry, builtin_names in checks:
+        for key, sentinel in registry.items():
+            if getattr(sentinel, "ts_src", None) is None:
+                continue
+            ts_name = getattr(sentinel, "ts_name", "")
+            if ts_name and ts_name in builtin_names:
+                raise ValueError(
+                    f"{fn_name}({key!r}, ...) ts_name={ts_name!r} shadows a "
+                    f"declarative {kind} built-in.  Rename the class in your "
+                    f"ts_src file (and the ts_name argument), or drop the "
+                    f"registration to use the built-in.  See ADR 0003."
+                )
+
+
 class Builder:
     """Builder for creating mjswan applications.
 
@@ -179,6 +266,8 @@ class Builder:
                 "  app = builder.build()"
             )
 
+        _check_no_builtin_name_shadowing()
+
         # Get caller's file path
         frame = inspect.stack()[1]
         caller_file = frame.filename
@@ -208,6 +297,7 @@ class Builder:
         # Create root config with project metadata and structure info
         root_config = {
             "version": __version__,
+            "uses_custom_js": _build_uses_custom_js(),
             "projects": [
                 {
                     "name": project.name,
@@ -676,10 +766,15 @@ class Builder:
                                     for name, cfg in policy.actions.items()
                                 }
                             if policy.terminations:
+                                from .envs.mdp.terminations import TermFunc
+
                                 terminations = {
                                     name: cfg.to_dict()
                                     for name, cfg in policy.terminations.items()
-                                    if cfg.func.unsupported_reason is None
+                                    if not (
+                                        isinstance(cfg.func, TermFunc)
+                                        and cfg.func.unsupported_reason is not None
+                                    )
                                 }
                                 if terminations:
                                     data["terminations"] = terminations

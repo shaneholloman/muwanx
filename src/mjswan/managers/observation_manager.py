@@ -36,7 +36,7 @@ Example (identical to mjlab)::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..envs.mdp.observations import ObsFunc
 
@@ -50,10 +50,20 @@ class ObservationTermCfg:
     Processing pipeline in mjlab: compute -> noise -> clip -> scale -> delay -> history.
     In mjswan the TS runtime handles scale and history; noise and delay are
     training-only and therefore accepted but ignored.
+
+    ``func`` accepts either:
+
+    - A legacy :class:`ObsFunc` sentinel: the build emits the existing
+      ``{"name": ..., ...params}`` shape and the engine resolves the class
+      from its registry.
+    - A plain Python callable taking ``(env, **params)``: the build traces
+      the function against a symbolic env (see :mod:`mjswan.dsl`) and emits
+      the composition graph instead.  This is the declarative path described
+      in ADR 0003.
     """
 
-    func: ObsFunc
-    """Observation function sentinel that maps to a TS observation class."""
+    func: ObsFunc | Callable[..., Any]
+    """Observation function — ObsFunc sentinel (legacy) or DSL callable."""
 
     params: dict[str, Any] = field(default_factory=dict)
     """Additional keyword arguments forwarded to the TS observation constructor."""
@@ -86,18 +96,20 @@ class ObservationTermCfg:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for the TS ``PolicyRunner``.
 
-        Produces an ``ObservationConfigEntry`` of the form::
-
-            {"name": "BaseLinearVelocity", "scale": 0.5, "history_steps": 3, ...}
+        Legacy ``ObsFunc`` produces ``{"name": "BaseLinearVelocity", ...}``.
+        A DSL callable produces ``{"kind": "observation", "nodes": [...], ...}``.
         """
-        if self.func.unsupported_reason is not None:
-            raise NotImplementedError(self.func.unsupported_reason)
+        if isinstance(self.func, ObsFunc):
+            return self._to_dict_legacy()
+        return self._to_dict_traced()
 
-        entry: dict[str, Any] = {"name": self.func.ts_name}
+    def _to_dict_legacy(self) -> dict[str, Any]:
+        func: ObsFunc = self.func  # type: ignore[assignment]
+        if func.unsupported_reason is not None:
+            raise NotImplementedError(func.unsupported_reason)
 
-        # Merge function defaults with explicit params
-        merged: dict[str, Any] = {**self.func.defaults, **self.params}
-
+        entry: dict[str, Any] = {"name": func.ts_name}
+        merged: dict[str, Any] = {**func.defaults, **self.params}
         if self.scale is not None:
             merged["scale"] = (
                 list(self.scale) if isinstance(self.scale, tuple) else self.scale
@@ -106,9 +118,21 @@ class ObservationTermCfg:
             merged["clip"] = list(self.clip)
         if self.history_length > 0:
             merged["history_steps"] = self.history_length
-
         entry.update(merged)
         return entry
+
+    def _to_dict_traced(self) -> dict[str, Any]:
+        from ..dsl import trace_observation
+
+        # scale / clip / history are baked into the graph as trailing nodes so
+        # the engine interprets one self-contained graph (see ADR 0003).
+        return trace_observation(
+            self.func,  # type: ignore[arg-type]
+            self.params,
+            scale=self.scale,
+            clip=self.clip,
+            history_steps=self.history_length or None,
+        )
 
 
 @dataclass
@@ -144,7 +168,10 @@ class ObservationGroupCfg:
         """
         result = []
         for term_cfg in self.terms.values():
-            if term_cfg.func.unsupported_reason is not None:
+            if (
+                isinstance(term_cfg.func, ObsFunc)
+                and term_cfg.func.unsupported_reason is not None
+            ):
                 continue
             d = term_cfg.to_dict()
             # Group-level history overrides term-level

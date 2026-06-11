@@ -13,26 +13,47 @@ from mjswan.envs.mdp import observations as obs_fns
 
 _OBS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-register_obs_func(
-    "ee_to_object_distance",
-    ObsFunc(
-        ts_name="EeToObjectDistance",
-        ts_src=os.path.join(_OBS_DIR, "EeToObjectDistance.ts"),
-    ),
-)
 
-register_obs_func(
-    "object_to_goal_distance",
-    ObsFunc(
-        ts_name="ObjectToGoalDistance",
-        ts_src=os.path.join(_OBS_DIR, "ObjectToGoalDistance.ts"),
-    ),
-)
+# ---------------------------------------------------------------------------
+# Task-specific declarative observations (Lift-Cube).
+#
+# These are DSL builders (ADR 0003): mjlab-style functions taking a symbolic
+# ``env`` and returning a composition expression.  Registering them here keeps
+# task-specific terms out of the core mjswan library — the core only carries
+# generic terms.  Being ts_src-free, they stay declarative / Cloud-safe.
+# ---------------------------------------------------------------------------
 
-register_obs_func(
-    "pole_angle_cos_sin",
-    obs_fns.joint_pos_cos_sin,
-)
+
+def ee_to_object_distance(
+    env,
+    *,
+    object_name: str,
+    site_name: str | None = None,
+    entity_name: str = "robot",
+    **_,
+):
+    """EE→object distance in the robot base frame (mjlab manipulation)."""
+    from mjswan.dsl import body_pos, quat_apply_inv, site_pos
+
+    base_quat = env.entity(entity_name).data.root_link_quat_w
+    return quat_apply_inv(base_quat, body_pos(object_name) - site_pos(site_name or ""))
+
+
+def object_to_goal_distance(
+    env, *, object_name: str, command_name: str, entity_name: str = "robot", **_
+):
+    """Object→goal distance in the robot base frame (mjlab manipulation)."""
+    from mjswan.dsl import body_pos, command_value, quat_apply_inv
+
+    base_quat = env.entity(entity_name).data.root_link_quat_w
+    return quat_apply_inv(
+        base_quat, command_value(command_name) - body_pos(object_name)
+    )
+
+
+register_obs_func("ee_to_object_distance", ee_to_object_distance)
+register_obs_func("object_to_goal_distance", object_to_goal_distance)
+register_obs_func("pole_angle_cos_sin", obs_fns.joint_pos_cos_sin)
 
 
 def get_policy_observations(task_id: str, env_cfg: Any) -> dict[str, Any]:

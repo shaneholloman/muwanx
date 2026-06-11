@@ -16,12 +16,20 @@ Usage (identical to mjlab)::
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
-class ObsFunc:
-    """Sentinel representing a JS-side observation implementation.
+class ObsBinding:
+    """Binding from an mjlab observation name to its browser implementation.
+
+    See ADR 0003.  A binding is the *mjlab-name resolution* layer; authors of
+    new declarative terms pass a traceable ``func=`` callable straight to
+    ``ObservationTermCfg`` and bypass this entirely.  A binding carries either
+    a ``ts_src`` custom-JS escape hatch or an ``unsupported_reason`` marker;
+    declarative built-ins are plain callables, not bindings.
 
     Attributes:
         ts_name: The TypeScript observation class name in the
@@ -44,24 +52,40 @@ class ObsFunc:
     ts_src: str | None = None
 
 
+# Backwards-compatible alias (pre-ADR-0003 name). Kept so existing configs,
+# examples and external users importing ``ObsFunc`` keep working.
+ObsFunc = ObsBinding
+
+
 # ---------------------------------------------------------------------------
 # Custom observation registry
 # ---------------------------------------------------------------------------
 
-_custom_registry: dict[str, ObsFunc] = {}
-"""Maps mjlab observation function names to user-supplied ``ObsFunc`` sentinels.
+_custom_registry: dict[str, ObsBinding | Callable[..., Any]] = {}
+"""Maps mjlab observation function names to a user-supplied binding.
 
 Populated via :func:`register_obs_func`.  The mjlab adapter checks this
-registry as a fallback after the built-in sentinel lookup fails.
+registry as a fallback after the built-in lookup fails.  An entry is either
+an :class:`ObsBinding` (``ts_src`` escape hatch / unsupported marker) or a
+**DSL builder callable** ``func(env, **params)`` for a task-specific
+declarative term (ADR 0003).
 """
 
 
-def register_obs_func(mjlab_name: str, sentinel: ObsFunc) -> None:
-    """Register a custom ``ObsFunc`` sentinel for an mjlab observation function.
+def register_obs_func(
+    mjlab_name: str, sentinel: ObsBinding | Callable[..., Any]
+) -> None:
+    """Register a custom observation binding for an mjlab observation function.
 
-    Call this before :meth:`~mjswan.Builder.build` so the adapter can
-    resolve the function and the builder can inject any custom TypeScript
-    source into the browser bundle.
+    Call this before :meth:`~mjswan.Builder.build` so the adapter can resolve
+    the function.  ``sentinel`` may be:
+
+    - a **DSL builder callable** ``func(env, **params)`` — the build traces it
+      into a composition graph (declarative, no ``ts_src``); this is how
+      task-specific terms (e.g. a task's ``ee_to_object_distance``) stay out of
+      the core library while remaining Cloud-safe.
+    - an :class:`ObsBinding` with ``ts_src`` (custom-JS escape hatch) or
+      ``unsupported_reason`` (accepted-but-unsupported marker).
 
     Args:
         mjlab_name: The mjlab observation function name
@@ -93,75 +117,128 @@ def register_obs_func(mjlab_name: str, sentinel: ObsFunc) -> None:
 # Root state
 # ---------------------------------------------------------------------------
 
-base_lin_vel = ObsFunc("BaseLinearVelocity", {"world_frame": False})
-"""Linear velocity of the robot base in the base frame.
 
-mjlab: ``asset.data.root_link_lin_vel_b``
-"""
+def base_lin_vel(env, *, entity_name: str = "robot", **_unused):
+    """Linear velocity of the robot base in the base frame.
 
-base_ang_vel = ObsFunc("BaseAngularVelocity")
-"""Angular velocity of the robot base in the base frame.
+    Declarative DSL form (see ADR 0003).  ``entity_name`` defaults to
+    ``"robot"`` and is overridable so the mjlab adapter's ``asset_cfg``
+    promotion flows through.  ``**_unused`` swallows other adapter-promoted
+    kwargs (``world_frame``, etc.) that don't apply here.
 
-mjlab: ``asset.data.root_link_ang_vel_b``
-"""
+    mjlab: ``asset.data.root_link_lin_vel_b``
+    """
+    return env.entity(entity_name).data.root_link_lin_vel_b
 
-projected_gravity = ObsFunc("ProjectedGravityB")
-"""Gravity vector projected into the base frame.
 
-mjlab: ``asset.data.projected_gravity_b``
-"""
+def base_ang_vel(env, *, entity_name: str = "robot", **_unused):
+    """Angular velocity of the robot base in the base frame.
+
+    Declarative DSL form (see ADR 0003).
+
+    mjlab: ``asset.data.root_link_ang_vel_b``
+    """
+    return env.entity(entity_name).data.root_ang_vel_b
+
+
+def projected_gravity(env, *, entity_name: str = "robot", **_unused):
+    """Gravity vector projected into the base frame.
+
+    Declarative DSL form (see ADR 0003).
+
+    mjlab: ``asset.data.projected_gravity_b``
+    """
+    return env.entity(entity_name).data.projected_gravity_b
+
 
 # ---------------------------------------------------------------------------
 # Joint state
 # ---------------------------------------------------------------------------
 
-joint_pos_rel = ObsFunc(
-    "JointPos",
-    {
-        "subtract_default": True,
-        "history_steps": 1,
-        "entity_name": "robot",
-        "joint_names": "all",
-    },
-)
-"""Joint positions relative to the default pose.
 
-mjlab: ``asset.data.joint_pos - asset.data.default_joint_pos``
-"""
+def joint_pos_rel(
+    env,
+    *,
+    joint_names: str | list[str] = "all",
+    entity_name: str = "robot",
+    subtract_default: bool = True,
+    default_joint_pos: list[float] | None = None,
+    **_unused,
+):
+    """Joint positions relative to the default pose.
 
-joint_vel_rel = ObsFunc(
-    "JointVelocities",
-    {
-        "entity_name": "robot",
-        "joint_names": "all",
-    },
-)
-"""Joint velocities relative to the default velocities.
+    Declarative DSL form (see ADR 0003).  A ``joint_names`` list selects
+    specific joints; ``"all"`` reads the full policy joint vector.  When the
+    scene-spec enrichment supplies explicit ``default_joint_pos`` values (e.g.
+    a keyframe pose), those are subtracted as a constant; otherwise the engine
+    reads the model defaults.
 
-mjlab: ``asset.data.joint_vel - asset.data.default_joint_vel``
-"""
+    mjlab: ``asset.data.joint_pos - asset.data.default_joint_pos``
+    """
+    del env
+    from ...dsl import const_vec, joint_pos
+    from ...dsl import default_joint_pos as default_joint_pos_op
+
+    pos = joint_pos(joint_names, entity=entity_name)
+    if subtract_default:
+        if default_joint_pos is not None:
+            pos = pos - const_vec(default_joint_pos)
+        else:
+            pos = pos - default_joint_pos_op(joint_names, entity=entity_name)
+    return pos
+
+
+def joint_vel_rel(
+    env, *, joint_names: str | list[str] = "all", entity_name: str = "robot", **_unused
+):
+    """Joint velocities.
+
+    Declarative DSL form (see ADR 0003).
+
+    mjlab: ``asset.data.joint_vel`` (default velocities are zero)
+    """
+    del env
+    from ...dsl import joint_vel
+
+    return joint_vel(joint_names, entity=entity_name)
+
 
 # ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
 
-last_action = ObsFunc("PrevActions", {"history_steps": 1})
-"""The most recent action tensor.
 
-mjlab: ``env.action_manager.action``
-"""
+def last_action(env, **_unused):
+    """The most recent action tensor (stack via the term's ``history_length``).
+
+    Declarative DSL form (see ADR 0003).
+
+    mjlab: ``env.action_manager.action``
+    """
+    del env
+    from ...dsl import prev_action
+
+    return prev_action()
+
 
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 
-generated_commands = ObsFunc("GeneratedCommands")
-"""Current command tensor from a named command term.
 
-Requires ``params={"command_name": "<name>"}``.
+def generated_commands(env, *, command_name: str, **_unused):
+    """Current command tensor from a named command term.
 
-mjlab: ``env.command_manager.get_command(command_name)``
-"""
+    Declarative DSL form (see ADR 0003).  Requires
+    ``params={"command_name": "<name>"}``.
+
+    mjlab: ``env.command_manager.get_command(command_name)``
+    """
+    del env
+    from ...dsl import command_value
+
+    return command_value(command_name)
+
 
 # ---------------------------------------------------------------------------
 # Modern Isaac-compatible implementations
@@ -185,54 +262,167 @@ joint_positions_isaac = ObsFunc(
 mjlab: ``asset.data.joint_pos - asset.data.default_joint_pos``
 """
 
-previous_actions = ObsFunc("PreviousActions", {"history_steps": 1})
-"""Most recent action tensor (Isaac-compatible implementation).
 
-mjlab: ``env.action_manager.action``
-"""
+def previous_actions(env, **_unused):
+    """Most recent action tensor (Isaac-compatible alias of :func:`last_action`).
+
+    Declarative DSL form (see ADR 0003).
+
+    mjlab: ``env.action_manager.action``
+    """
+    del env
+    from ...dsl import prev_action
+
+    return prev_action()
+
 
 # ---------------------------------------------------------------------------
 # Command observations
 # ---------------------------------------------------------------------------
 
 velocity_command_with_oscillators = ObsFunc("VelocityCommandWithOscillators")
-"""Velocity command augmented with oscillator signals (16 dims)."""
+"""Velocity command augmented with oscillator signals (16 dims).
+
+.. note::
+    Still a legacy engine class: its 16-dim oscillator layout is not yet a
+    declarative composition.  See ADR 0003 "remaining legacy" terms.
+"""
 
 impedance_command = ObsFunc("ImpedanceCommand")
-"""Impedance control command as an observation term."""
+"""Impedance control command as an observation term (27 dims).
 
-joint_pos_cos_sin = ObsFunc("JointPosCosSin")
-"""Cosine and sine of a single joint angle. Shape: [num_envs, 2].
-
-Pass ``params={"joint_name": "<name>"}`` or ``params={"joint_index": <i>}``
-to select the target joint.
+.. note::
+    Still a legacy engine class (placeholder layout); not yet declarative.
 """
+
+
+def joint_pos_cos_sin(env, *, joint_name: str, entity_name: str = "robot", **_unused):
+    """Cosine and sine of a single joint angle. Shape: [2].
+
+    Declarative DSL form (see ADR 0003).  Requires
+    ``params={"joint_name": "<name>"}`` (the legacy ``joint_index`` selector
+    is not supported by the declarative path).
+    """
+    del env
+    from ...dsl import concat, cos, joint_pos, sin
+
+    angle = joint_pos([joint_name], entity=entity_name)
+    return concat([cos(angle), sin(angle)])
+
 
 # ---------------------------------------------------------------------------
 # Motion tracking
 # ---------------------------------------------------------------------------
 
-motion_anchor_pos_b = ObsFunc("MotionAnchorPosB")
-"""Reference anchor position relative to the robot anchor frame."""
 
-motion_anchor_ori_b = ObsFunc("MotionAnchorOriB")
-"""Reference anchor orientation relative to the robot anchor frame."""
+def motion_anchor_pos_b(env, **_unused):
+    """Reference anchor position relative to the current robot anchor frame.
 
-robot_body_pos_b = ObsFunc("RobotBodyPosB")
-"""Robot body positions expressed in the robot anchor frame."""
+    Declarative DSL form (see ADR 0003).  Equivalent to
+    ``quat_apply_inv(current_anchor_quat, ref_anchor_pos - current_anchor_pos)``.
+    """
+    del env
+    from ...dsl import (
+        quat_apply_inv,
+        tracking_anchor_pos,
+        tracking_current_anchor_pos,
+        tracking_current_anchor_quat,
+    )
 
-robot_body_ori_b = ObsFunc("RobotBodyOriB")
-"""Robot body orientations expressed in the robot anchor frame."""
+    diff = tracking_anchor_pos() - tracking_current_anchor_pos()
+    return quat_apply_inv(tracking_current_anchor_quat(), diff)
+
+
+def motion_anchor_ori_b(env, **_unused):
+    """Reference anchor orientation relative to the current robot anchor frame.
+
+    Declarative DSL form (see ADR 0003).  Returns a 6D rotation:
+    ``rot6d(current_anchor_quat^-1 * ref_anchor_quat)``.
+    """
+    del env
+    from ...dsl import (
+        quat_inv,
+        quat_mul,
+        quat_to_rot6d,
+        tracking_anchor_quat,
+        tracking_current_anchor_quat,
+    )
+
+    rel = quat_mul(quat_inv(tracking_current_anchor_quat()), tracking_anchor_quat())
+    return quat_to_rot6d(rel)
+
+
+def robot_body_pos_b(env, *, body_names: list[str], **_unused):
+    """Current robot body positions expressed in the current anchor frame.
+
+    Declarative DSL form (see ADR 0003).  Statically unrolled over
+    ``body_names`` (required at build time); concatenates
+    ``quat_apply_inv(anchor_quat, body_pos - anchor_pos)`` per body.
+    """
+    del env
+    from ...dsl import (
+        body_pos,
+        concat,
+        quat_apply_inv,
+        tracking_current_anchor_pos,
+        tracking_current_anchor_quat,
+    )
+
+    anchor_pos = tracking_current_anchor_pos()
+    anchor_quat = tracking_current_anchor_quat()
+    parts = [
+        quat_apply_inv(anchor_quat, body_pos(name) - anchor_pos) for name in body_names
+    ]
+    return concat(parts)
+
+
+def robot_body_ori_b(env, *, body_names: list[str], **_unused):
+    """Current robot body orientations expressed in the current anchor frame.
+
+    Declarative DSL form (see ADR 0003).  Statically unrolled over
+    ``body_names``; concatenates ``rot6d(anchor_quat^-1 * body_quat)`` per body.
+    """
+    del env
+    from ...dsl import (
+        body_quat,
+        concat,
+        quat_inv,
+        quat_mul,
+        quat_to_rot6d,
+        tracking_current_anchor_quat,
+    )
+
+    anchor_inv = quat_inv(tracking_current_anchor_quat())
+    parts = [
+        quat_to_rot6d(quat_mul(anchor_inv, body_quat(name))) for name in body_names
+    ]
+    return concat(parts)
+
+
+# Task-specific declarative observations (e.g. ee_to_object_distance,
+# object_to_goal_distance for manipulation) are NOT defined here — they live in
+# the task that uses them and register via ``register_obs_func`` with a DSL
+# builder callable.  The core library carries only generic terms.  See
+# examples/mjlab/defaults/observations/__init__.py and ADR 0003.
+
 
 # ---------------------------------------------------------------------------
 # Sensors (not supported in browser)
 # ---------------------------------------------------------------------------
 
-builtin_sensor = ObsFunc(
-    ts_name="BuiltinSensor",
-)
-"""Raw data from a named BuiltinSensor.
-"""
+
+def builtin_sensor(env, *, sensor_name: str, **_unused):
+    """Raw data from a named MuJoCo sensor.
+
+    Declarative DSL form (see ADR 0003).  Requires
+    ``params={"sensor_name": "<name>"}``; ``scale``/``clip`` apply via the
+    term pipeline.
+    """
+    del env
+    from ...dsl import sensor
+
+    return sensor(sensor_name)
+
 
 height_scan = ObsFunc(
     ts_name="",
@@ -251,6 +441,7 @@ height_scan = ObsFunc(
 
 
 __all__ = [
+    "ObsBinding",
     "ObsFunc",
     "register_obs_func",
     "_custom_registry",

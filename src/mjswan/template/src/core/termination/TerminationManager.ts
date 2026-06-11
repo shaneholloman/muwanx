@@ -1,6 +1,8 @@
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
 import type { TerminationConstructor } from './terminations';
+import { DslTermination } from './DslTermination';
 import type { PolicyState, TerminationConfigEntry } from '../policy/types';
+import type { PolicyRunner } from '../policy/PolicyRunner';
 
 export type TerminationResult = {
   done: boolean;
@@ -9,14 +11,35 @@ export type TerminationResult = {
   reasons: string[];
 };
 
+function isDslEntry(
+  entry: TerminationConfigEntry,
+): entry is Extract<TerminationConfigEntry, { kind: 'termination' }> {
+  return 'kind' in entry && entry.kind === 'termination';
+}
+
 export class TerminationManager {
   private terms: { name: string; term: TerminationBase; isTimeOut: boolean }[] = [];
 
   constructor(
     config: Record<string, TerminationConfigEntry>,
-    registry: Record<string, TerminationConstructor>
+    registry: Record<string, TerminationConstructor>,
+    runner: PolicyRunner,
   ) {
     for (const [name, entry] of Object.entries(config)) {
+      if (isDslEntry(entry)) {
+        const termConfig = {
+          name,
+          params: entry.params,
+          time_out: entry.time_out,
+          graph: { kind: 'termination' as const, nodes: entry.nodes, output: entry.output },
+        };
+        this.terms.push({
+          name,
+          term: new DslTermination(runner, termConfig),
+          isTimeOut: entry.time_out ?? false,
+        });
+        continue;
+      }
       const TermClass = registry[entry.name];
       if (!TermClass) {
         console.warn(`[TerminationManager] Unknown termination type: ${entry.name}`);

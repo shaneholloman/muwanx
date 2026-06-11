@@ -121,15 +121,25 @@ class CommandTermConfig:
 
 
 @dataclass(frozen=True)
-class CommandTermSpec:
-    """Python-side registry entry for a custom command term."""
+class CommandBinding:
+    """Binding from an mjlab command-cfg name to its browser command term.
+
+    See ADR 0003.  UI-driven commands (``velocity_command``/``ui_command``)
+    serialize as declarative UI data and need no binding; a binding maps an
+    mjlab command-cfg class name to a built-in term (e.g. ``TrackingCommand``)
+    or a ``ts_src`` escape hatch, with a ``serializer`` for its params.
+    """
 
     ts_name: str
     serializer: Callable[[Any], Mapping[str, Any]]
     ts_src: str | None = None
 
 
-_custom_registry: dict[str, CommandTermSpec] = {}
+# Backwards-compatible alias (pre-ADR-0003 name).
+CommandTermSpec = CommandBinding
+
+
+_custom_registry: dict[str, CommandBinding] = {}
 
 
 def register_command_term(mjlab_name: str, spec: CommandTermSpec) -> None:
@@ -225,6 +235,7 @@ __all__ = [
     "ButtonConfig",
     "Checkbox",
     "CheckboxConfig",
+    "CommandBinding",
     "CommandInput",
     "CommandTermConfig",
     "CommandTermSpec",

@@ -171,7 +171,8 @@ class ClientBuilder:
         custom_entries = {
             name: sentinel
             for name, sentinel in _custom_registry.items()
-            if sentinel.ts_src is not None and sentinel.ts_name
+            if getattr(sentinel, "ts_src", None) is not None
+            and getattr(sentinel, "ts_name", None)
         }
 
         if not custom_entries:
@@ -242,7 +243,8 @@ class ClientBuilder:
         custom_entries = {
             name: spec
             for name, spec in _custom_registry.items()
-            if spec.ts_src is not None and spec.ts_name
+            if getattr(spec, "ts_src", None) is not None
+            and getattr(spec, "ts_name", None)
         }
 
         if not custom_entries:
@@ -314,7 +316,8 @@ class ClientBuilder:
         custom_entries = {
             name: sentinel
             for name, sentinel in _custom_registry.items()
-            if sentinel.ts_src is not None and sentinel.ts_name
+            if getattr(sentinel, "ts_src", None) is not None
+            and getattr(sentinel, "ts_name", None)
         }
 
         if not custom_entries:
@@ -418,7 +421,8 @@ class ClientBuilder:
         custom_entries = {
             name: sentinel
             for name, sentinel in _custom_registry.items()
-            if sentinel.ts_src is not None and sentinel.ts_name
+            if getattr(sentinel, "ts_src", None) is not None
+            and getattr(sentinel, "ts_name", None)
         }
 
         if not custom_entries:

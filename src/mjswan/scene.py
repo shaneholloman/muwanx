@@ -123,16 +123,37 @@ def _enrich_joint_observations(
     if model is None:
         return
 
+    # Legacy ObsFunc terms are keyed by ts_name; DSL terms (ADR 0003) are
+    # plain callables keyed by their function name.  Both need joint_names /
+    # default_joint_pos resolved from the scene spec when not given explicitly.
+    legacy_pos = {"JointPos", "JointPositions"}
+    legacy_vel = {"JointVelocities"}
+    dsl_pos = {"joint_pos_rel", "joint_positions_isaac"}
+    dsl_vel = {"joint_vel_rel"}
+
     for group in observations.values():
         terms = getattr(group, "terms", None)
         if not isinstance(terms, dict):
             continue
         for term in terms.values():
-            ts_name = getattr(getattr(term, "func", None), "ts_name", None)
-            if ts_name not in {"JointPos", "JointPositions", "JointVelocities"}:
+            func = getattr(term, "func", None)
+            ts_name = getattr(func, "ts_name", None)
+            dsl_name = getattr(func, "__name__", None) if callable(func) else None
+
+            is_pos = ts_name in legacy_pos or dsl_name in dsl_pos
+            is_vel = ts_name in legacy_vel or dsl_name in dsl_vel
+            if not (is_pos or is_vel):
                 continue
+
             params = dict(getattr(term, "params", {}) or {})
-            merged = {**getattr(term.func, "defaults", {}), **params}
+            # DSL callables carry their defaults in the signature, not a dict;
+            # mirror the legacy joint_pos_rel/joint_vel_rel defaults here.
+            defaults = (
+                getattr(func, "defaults", {})
+                if ts_name
+                else {"joint_names": "all", "entity_name": "robot"}
+            )
+            merged = {**defaults, **params}
             if merged.get("joint_name") is not None:
                 continue
             resolved = _resolve_observation_joints(model, merged)
@@ -140,7 +161,7 @@ def _enrich_joint_observations(
                 continue
             joint_names, default_joint_pos = resolved
             params["joint_names"] = joint_names
-            if ts_name in {"JointPos", "JointPositions"}:
+            if is_pos:
                 params["default_joint_pos"] = default_joint_pos
             term.params = params
 

@@ -1210,6 +1210,177 @@ export class BuiltinSensor extends ObservationBase {
   }
 }
 
+function resolveBodyIdxWithEntityFallback(mjModel: MjModel, bodyName: string): number {
+  const namesArray = new Uint8Array(mjModel.names);
+  const decoder = new TextDecoder();
+  const allNames: string[] = [];
+  for (let b = 0; b < mjModel.nbody; b++) {
+    let start = mjModel.name_bodyadr[b];
+    let end = start;
+    while (namesArray[end] !== 0) end++;
+    const name = decoder.decode(namesArray.slice(start, end));
+    if (name === bodyName || name === `${bodyName}/${bodyName}`) return b;
+    allNames.push(name);
+  }
+  for (let b = 0; b < allNames.length; b++) {
+    if (allNames[b].startsWith(`${bodyName}/`)) return b + (allNames[0] === '' ? 1 : 0);
+  }
+  return 1;
+}
+
+function resolveSiteIdx(mjModel: MjModel, siteName: string): number {
+  const namesArray = new Uint8Array(mjModel.names);
+  const decoder = new TextDecoder();
+  for (let s = 0; s < mjModel.nsite; s++) {
+    let start = mjModel.name_siteadr[s];
+    let end = start;
+    while (namesArray[end] !== 0) end++;
+    const name = decoder.decode(namesArray.slice(start, end));
+    if (name === siteName) return s;
+  }
+  return 0;
+}
+
+/**
+ * Distance vector from end-effector site to an object body, expressed in the
+ * robot base frame.
+ *
+ * Mirrors mjlab's ``ee_to_object_distance`` observation.  Output shape: [3].
+ *
+ * Params:
+ *   object_name    — MuJoCo body name of the target object.
+ *   site_name      — MuJoCo site name of the end-effector.
+ *   base_body_name — (optional) robot root body name for frame transform.
+ *                    Defaults to body 1 (first non-world body).
+ */
+export class EeToObjectDistance extends ObservationBase {
+  private siteIdx: number;
+  private objectBodyIdx: number;
+  private baseBodyIdx: number;
+
+  constructor(runner: PolicyRunner, config: ObservationConfig) {
+    super(runner, config);
+    const mjModel = runner.getContext()?.mjModel ?? null;
+    if (mjModel === null) {
+      this.siteIdx = 0;
+      this.objectBodyIdx = 1;
+      this.baseBodyIdx = 1;
+    } else {
+      const siteName = config.site_name as string | undefined;
+      this.siteIdx = siteName !== undefined ? resolveSiteIdx(mjModel, siteName) : 0;
+      const objectName = config.object_name as string | undefined;
+      this.objectBodyIdx = objectName !== undefined
+        ? resolveBodyIdxWithEntityFallback(mjModel, objectName)
+        : 1;
+      const baseBodyName = config.base_body_name as string | undefined;
+      this.baseBodyIdx = baseBodyName !== undefined
+        ? resolveBodyIdxWithEntityFallback(mjModel, baseBodyName)
+        : 1;
+    }
+  }
+
+  get size(): number {
+    return 3;
+  }
+
+  compute(): Float32Array {
+    const mjData = this.runner.getContext()?.mjData;
+    if (mjData == null) return new Float32Array(3);
+
+    const si = this.siteIdx * 3;
+    const eePosW = new THREE.Vector3(
+      mjData.site_xpos[si],
+      mjData.site_xpos[si + 1],
+      mjData.site_xpos[si + 2],
+    );
+    const oi = this.objectBodyIdx * 3;
+    const objPosW = new THREE.Vector3(
+      mjData.xpos[oi],
+      mjData.xpos[oi + 1],
+      mjData.xpos[oi + 2],
+    );
+    const distW = objPosW.sub(eePosW);
+
+    const bi = this.baseBodyIdx * 4;
+    const baseQuat = new THREE.Quaternion(
+      mjData.xquat[bi + 1],
+      mjData.xquat[bi + 2],
+      mjData.xquat[bi + 3],
+      mjData.xquat[bi],
+    );
+    distW.applyQuaternion(baseQuat.invert());
+    return new Float32Array([distW.x, distW.y, distW.z]);
+  }
+}
+
+/**
+ * Distance vector from an object body to a command goal, expressed in the
+ * robot base frame.  Goal is read from the named command (3-element [x,y,z]).
+ *
+ * Mirrors mjlab's ``object_to_goal_distance`` observation.  Output shape: [3].
+ *
+ * Params:
+ *   object_name    — MuJoCo body name of the target object.
+ *   command_name   — name of the command term carrying [x, y, z] goal.
+ *   base_body_name — (optional) robot root body name.
+ */
+export class ObjectToGoalDistance extends ObservationBase {
+  private objectBodyIdx: number;
+  private baseBodyIdx: number;
+  private commandName: string;
+
+  constructor(runner: PolicyRunner, config: ObservationConfig) {
+    super(runner, config);
+    const mjModel = runner.getContext()?.mjModel ?? null;
+    this.commandName = (config.command_name as string | undefined) ?? '';
+    if (mjModel === null) {
+      this.objectBodyIdx = 1;
+      this.baseBodyIdx = 1;
+    } else {
+      const objectName = config.object_name as string | undefined;
+      this.objectBodyIdx = objectName !== undefined
+        ? resolveBodyIdxWithEntityFallback(mjModel, objectName)
+        : 1;
+      const baseBodyName = config.base_body_name as string | undefined;
+      this.baseBodyIdx = baseBodyName !== undefined
+        ? resolveBodyIdxWithEntityFallback(mjModel, baseBodyName)
+        : 1;
+    }
+  }
+
+  get size(): number {
+    return 3;
+  }
+
+  compute(): Float32Array {
+    const mjData = this.runner.getContext()?.mjData;
+    if (mjData == null) return new Float32Array(3);
+
+    const oi = this.objectBodyIdx * 3;
+    const objPosW = new THREE.Vector3(
+      mjData.xpos[oi],
+      mjData.xpos[oi + 1],
+      mjData.xpos[oi + 2],
+    );
+
+    const cmd = this.commandName ? getCommandManager().getCommand(this.commandName) : null;
+    const goalPosW = (cmd !== null && cmd.length >= 3)
+      ? new THREE.Vector3(cmd[0], cmd[1], cmd[2])
+      : new THREE.Vector3();
+    const distW = goalPosW.sub(objPosW);
+
+    const bi = this.baseBodyIdx * 4;
+    const baseQuat = new THREE.Quaternion(
+      mjData.xquat[bi + 1],
+      mjData.xquat[bi + 2],
+      mjData.xquat[bi + 3],
+      mjData.xquat[bi],
+    );
+    distW.applyQuaternion(baseQuat.invert());
+    return new Float32Array([distW.x, distW.y, distW.z]);
+  }
+}
+
 // Legacy aliases for config compatibility.
 export class ProjectedGravity extends ProjectedGravityB { }
 export class JointPositions extends JointPos { }
@@ -1245,4 +1416,6 @@ export const Observations = {
   ImpedanceCommand,
   JointPosCosSin,
   BuiltinSensor,
+  EeToObjectDistance,
+  ObjectToGoalDistance,
 };

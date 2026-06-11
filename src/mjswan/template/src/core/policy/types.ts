@@ -44,11 +44,19 @@ export type ActionConfigEntry = {
   [key: string]: unknown;
 };
 
-export type TerminationConfigEntry = {
-  name: string;
-  params?: Record<string, unknown>;
-  time_out?: boolean;
-};
+export type TerminationConfigEntry =
+  | {
+    name: string;
+    params?: Record<string, unknown>;
+    time_out?: boolean;
+  }
+  | {
+    kind: 'termination';
+    nodes: import('../dsl/types').DslNode[];
+    output: string;
+    params?: Record<string, unknown>;
+    time_out?: boolean;
+  };
 
 export type PolicyConfig = {
   policy_module?: string;

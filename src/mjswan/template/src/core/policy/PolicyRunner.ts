@@ -1,4 +1,6 @@
 import { ObservationBase } from '../observation/ObservationBase';
+import { DslObservation } from '../observation/DslObservation';
+import type { DslNode } from '../dsl/types';
 import { PolicyModule } from './PolicyModule';
 import type {
   ObservationConfigEntry,
@@ -235,15 +237,34 @@ export class PolicyRunner {
     this.historyBuffers = {};
     this.defaultObsKey = null;
 
+    const buildObservation = (entry: ObservationConfigEntry): ObservationBase => {
+      const dslEntry = entry as unknown as {
+        kind?: string;
+        nodes?: unknown[];
+        output?: string;
+        params?: Record<string, unknown>;
+      };
+      if (dslEntry.kind === 'observation' && Array.isArray(dslEntry.nodes)) {
+        return new DslObservation(this, {
+          name: 'DslObservation',
+          graph: {
+            kind: 'observation',
+            nodes: dslEntry.nodes as DslNode[],
+            output: dslEntry.output ?? '',
+          },
+          params: dslEntry.params,
+        });
+      }
+      const ObsClass = registry[entry.name];
+      if (!ObsClass) {
+        throw new Error(`Unknown observation type: ${entry.name}`);
+      }
+      return new ObsClass(this, entry);
+    };
+
     for (const [key, value] of Object.entries(obsConfig)) {
       if (Array.isArray(value)) {
-        const obsList = value.map((entry) => {
-          const ObsClass = registry[entry.name];
-          if (!ObsClass) {
-            throw new Error(`Unknown observation type: ${entry.name}`);
-          }
-          return new ObsClass(this, entry);
-        });
+        const obsList = value.map(buildObservation);
         this.registerGroup(key, obsList, value);
         continue;
       }
@@ -255,6 +276,23 @@ export class PolicyRunner {
         };
         if (Array.isArray(configValue.components)) {
           const obsList = configValue.components.map((entry) => {
+            const dslEntry = entry as unknown as {
+              kind?: string;
+              nodes?: unknown[];
+              output?: string;
+              params?: Record<string, unknown>;
+            };
+            if (dslEntry.kind === 'observation' && Array.isArray(dslEntry.nodes)) {
+              return new DslObservation(this, {
+                name: 'DslObservation',
+                graph: {
+                  kind: 'observation',
+                  nodes: dslEntry.nodes as DslNode[],
+                  output: dslEntry.output ?? '',
+                },
+                params: dslEntry.params,
+              });
+            }
             const ObsClass = registry[entry.name];
             if (!ObsClass) {
               throw new Error(`Unknown observation type: ${entry.name}`);

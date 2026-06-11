@@ -161,36 +161,16 @@ class ProjectHandle:
             handle.set_viewer_config(viewer_cfg)
         terrain_data = _extract_terrain_data(scene)
         if terrain_data:
+            # Expose terrain spawn positions as data.  Using them to override
+            # the spawn event (patch-based spawning) is a task-side concern —
+            # the spawn event itself is a mjswan browser enhancement, not an
+            # mjlab term — so core only surfaces the data here.  See
+            # examples/mjlab/defaults/events for the task-side wiring.
             handle._config.terrain_data = terrain_data
         events = getattr(env_cfg, "events", None)
         if events:
             handle.set_events(events)
-        if terrain_data and handle._config.events:
-            _upgrade_spawn_events_for_terrain(handle._config, terrain_data)
         return handle
-
-
-def _upgrade_spawn_events_for_terrain(
-    scene_config: SceneConfig, terrain_data: dict[str, Any]
-) -> None:
-    """Replace ResetRootStateUniform with ResetRootStateFromFlatPatches when flat patches exist.
-
-    During training, many parallel envs are distributed across terrain tiles so
-    per-env x/y randomization can be small. In the browser there is only one env,
-    so we upgrade to patch-based spawning to cover the full terrain.
-    """
-    flat_patches = terrain_data.get("flat_patches", {})
-    if not flat_patches:
-        return
-    patch_name = "spawn" if "spawn" in flat_patches else next(iter(flat_patches))
-    events = scene_config.events
-    if not events:
-        return
-    for i, event in enumerate(events):
-        if event.get("name") == "ResetRootStateUniform":
-            new_params: dict[str, Any] = dict(event.get("params") or {})
-            new_params["patch_name"] = patch_name
-            events[i] = {"name": "ResetRootStateFromFlatPatches", "params": new_params}
 
 
 def _extract_terrain_data(scene: Any) -> dict[str, Any] | None:
