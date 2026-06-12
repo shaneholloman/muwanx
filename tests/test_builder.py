@@ -425,20 +425,11 @@ class TestNoBuiltinNameShadowing:
         monkeypatch.setattr(events_mod, "_custom_registry", {})
         monkeypatch.setattr(command_mod, "_custom_registry", {})
 
-    def test_obs_ts_src_shadowing_builtin_is_rejected(self, minimal_model, monkeypatch):
-        # "ProjectedGravity" is still a named ObsFunc built-in (an exotic
-        # term not yet migrated to a composition graph), so it exercises the
-        # transitional collision check.  See ADR 0003.
-        self._isolate_registries(monkeypatch)
-        from mjswan.envs.mdp import observations as obs_mod
-
-        obs_mod._custom_registry["my_pg"] = obs_mod.ObsFunc(
-            ts_name="ProjectedGravity", ts_src="/tmp/MyProjectedGravity.ts"
-        )
-        builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
-        with pytest.raises(ValueError, match="shadows a declarative observation"):
-            builder.build()
+    # NOTE: no obs-shadowing rejection test either — after ADR 0003 no MDP
+    # category keeps a named built-in with a non-empty ts_name (all are DSL
+    # callables or empty-ts_name unsupported markers), so the transitional
+    # collision check has no surface left.  The "allowed" cases below still
+    # exercise that the check is permissive.
 
     def test_former_termination_name_no_longer_collides(self, monkeypatch):
         # All termination built-ins are now composition graphs (no ts_name),

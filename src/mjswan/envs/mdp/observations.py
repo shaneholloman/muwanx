@@ -240,60 +240,12 @@ def generated_commands(env, *, command_name: str, **_unused):
     return command_value(command_name)
 
 
-# ---------------------------------------------------------------------------
-# Modern Isaac-compatible implementations
-# ---------------------------------------------------------------------------
-
-projected_gravity_isaac = ObsFunc(
-    "ProjectedGravity", {"joint_name": "floating_base_joint"}
-)
-"""Gravity vector projected into the base frame (Isaac-compatible implementation).
-
-Uses ``floating_base_joint`` frame by default.
-Pass ``gravity`` via ``params`` to override the gravity vector.
-mjlab: ``asset.data.projected_gravity_b``
-"""
-
-joint_positions_isaac = ObsFunc(
-    "JointPositions", {"joint_names": "isaac", "subtract_default": True}
-)
-"""Joint positions with Isaac joint ordering, relative to the default pose.
-
-mjlab: ``asset.data.joint_pos - asset.data.default_joint_pos``
-"""
-
-
-def previous_actions(env, **_unused):
-    """Most recent action tensor (Isaac-compatible alias of :func:`last_action`).
-
-    Declarative DSL form (see ADR 0003).
-
-    mjlab: ``env.action_manager.action``
-    """
-    del env
-    from ...dsl import prev_action
-
-    return prev_action()
-
-
-# ---------------------------------------------------------------------------
-# Command observations
-# ---------------------------------------------------------------------------
-
-velocity_command_with_oscillators = ObsFunc("VelocityCommandWithOscillators")
-"""Velocity command augmented with oscillator signals (16 dims).
-
-.. note::
-    Still a legacy engine class: its 16-dim oscillator layout is not yet a
-    declarative composition.  See ADR 0003 "remaining legacy" terms.
-"""
-
-impedance_command = ObsFunc("ImpedanceCommand")
-"""Impedance control command as an observation term (27 dims).
-
-.. note::
-    Still a legacy engine class (placeholder layout); not yet declarative.
-"""
+# Isaac-named variants (projected_gravity_isaac, joint_positions_isaac,
+# previous_actions) were redundant aliases of the canonical core terms
+# (projected_gravity, joint_pos_rel, last_action) — the engine subclasses were
+# empty.  The demo now references the canonical names directly.  The demo-only
+# command obs (velocity_command_with_oscillators, impedance_command) live in
+# the demo as DSL builders.  See examples/demo/main.py and ADR 0003.
 
 
 # ``joint_pos_cos_sin`` is a single-task term (Cartpole pole angle) — it lives
@@ -443,11 +395,6 @@ __all__ = [
     "joint_vel_rel",
     "last_action",
     "generated_commands",
-    "projected_gravity_isaac",
-    "joint_positions_isaac",
-    "previous_actions",
-    "velocity_command_with_oscillators",
-    "impedance_command",
     "motion_anchor_pos_b",
     "motion_anchor_ori_b",
     "robot_body_pos_b",

@@ -128,7 +128,7 @@ def _enrich_joint_observations(
     # default_joint_pos resolved from the scene spec when not given explicitly.
     legacy_pos = {"JointPos", "JointPositions"}
     legacy_vel = {"JointVelocities"}
-    dsl_pos = {"joint_pos_rel", "joint_positions_isaac"}
+    dsl_pos = {"joint_pos_rel"}
     dsl_vel = {"joint_vel_rel"}
 
     for group in observations.values():

@@ -47,7 +47,6 @@ _OBS: dict[str, dict] = {
     "joint_pos_rel_named": {"joint_names": ["a", "b"], "default_joint_pos": [0.1, 0.2]},
     "joint_vel_rel": {},
     "last_action": {},
-    "previous_actions": {},
     "generated_commands": {"command_name": "velocity"},
     "motion_anchor_pos_b": {},
     "motion_anchor_ori_b": {},
