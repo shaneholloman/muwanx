@@ -296,18 +296,9 @@ impedance_command = ObsFunc("ImpedanceCommand")
 """
 
 
-def joint_pos_cos_sin(env, *, joint_name: str, entity_name: str = "robot", **_unused):
-    """Cosine and sine of a single joint angle. Shape: [2].
-
-    Declarative DSL form (see ADR 0003).  Requires
-    ``params={"joint_name": "<name>"}`` (the legacy ``joint_index`` selector
-    is not supported by the declarative path).
-    """
-    del env
-    from ...dsl import concat, cos, joint_pos, sin
-
-    angle = joint_pos([joint_name], entity=entity_name)
-    return concat([cos(angle), sin(angle)])
+# ``joint_pos_cos_sin`` is a single-task term (Cartpole pole angle) — it lives
+# task-side now, composed from core primitives (cos/sin/concat/joint_pos).  See
+# examples/mjlab/defaults/observations/__init__.py and ADR 0003.
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +448,6 @@ __all__ = [
     "previous_actions",
     "velocity_command_with_oscillators",
     "impedance_command",
-    "joint_pos_cos_sin",
     "motion_anchor_pos_b",
     "motion_anchor_ori_b",
     "robot_body_pos_b",

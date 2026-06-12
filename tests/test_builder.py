@@ -144,9 +144,10 @@ class TestClientBuilderCustomTerminations:
     def test_generate_custom_skips_dsl_callable_in_registry(
         self, tmp_path, monkeypatch
     ):
-        # A DSL term registered by mjlab-name (e.g. defaults' "pole_angle_cos_sin"
-        # → obs_fns.joint_pos_cos_sin) is a plain callable with no ts_src.
-        # generate_custom_observations must skip it, not crash on `.ts_src`.
+        # A DSL term registered by mjlab-name (a task registering a DSL builder
+        # callable, e.g. defaults' "ee_to_object_distance") is a plain callable
+        # with no ts_src.  generate_custom_observations must skip it, not crash
+        # on `.ts_src`.
         from mjswan.envs.mdp import observations as obs_mod
 
         project_dir = tmp_path / "template"
@@ -156,7 +157,7 @@ class TestClientBuilderCustomTerminations:
         monkeypatch.setattr(
             obs_mod,
             "_custom_registry",
-            {"pole_angle_cos_sin": obs_mod.joint_pos_cos_sin},
+            {"base_lin_vel": obs_mod.base_lin_vel},
         )
 
         # Must not raise AttributeError on the callable.
@@ -165,7 +166,7 @@ class TestClientBuilderCustomTerminations:
         generated = (output_dir / "custom_observations.ts").read_text()
         # No custom JS class is emitted for the callable (it's declarative).
         assert "CustomObservations" in generated
-        assert "joint_pos_cos_sin" not in generated
+        assert "base_lin_vel" not in generated
 
 
 # ===========================================================================

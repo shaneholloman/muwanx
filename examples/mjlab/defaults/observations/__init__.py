@@ -51,9 +51,17 @@ def object_to_goal_distance(
     )
 
 
+def joint_pos_cos_sin(env, *, joint_name: str, entity_name: str = "robot", **_):
+    """cos/sin of a single joint angle (Cartpole pole angle)."""
+    from mjswan.dsl import concat, cos, joint_pos, sin
+
+    angle = joint_pos([joint_name], entity=entity_name)
+    return concat([cos(angle), sin(angle)])
+
+
 register_obs_func("ee_to_object_distance", ee_to_object_distance)
 register_obs_func("object_to_goal_distance", object_to_goal_distance)
-register_obs_func("pole_angle_cos_sin", obs_fns.joint_pos_cos_sin)
+register_obs_func("pole_angle_cos_sin", joint_pos_cos_sin)
 
 
 def get_policy_observations(task_id: str, env_cfg: Any) -> dict[str, Any]:
@@ -77,7 +85,7 @@ def get_policy_observations(task_id: str, env_cfg: Any) -> dict[str, Any]:
                     history_length=getattr(terms["cart_pos"], "history_length", 0),
                 ),
                 "pole_angle": mjswan.ObservationTermCfg(
-                    func=obs_fns.joint_pos_cos_sin,
+                    func=joint_pos_cos_sin,
                     params={"joint_name": "cartpole/hinge_1"},
                     scale=getattr(terms["pole_angle"], "scale", None),
                     clip=getattr(terms["pole_angle"], "clip", None),

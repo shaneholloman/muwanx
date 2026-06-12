@@ -272,8 +272,16 @@ class TestMigratedObservations:
     def test_builtin_sensor(self):
         assert "Sensor" in self._ops(obs_fns.builtin_sensor, {"sensor_name": "imu"})
 
-    def test_joint_pos_cos_sin(self):
-        ops = self._ops(obs_fns.joint_pos_cos_sin, {"joint_name": "hinge"})
+    def test_joint_pos_cos_sin_pattern(self):
+        # joint_pos_cos_sin is a task-side term now (Cartpole); verify the
+        # cos/sin/concat composition still traces from core primitives.
+        def joint_pos_cos_sin(env, *, joint_name, entity_name="robot", **_):
+            from mjswan.dsl import concat, cos, joint_pos, sin
+
+            angle = joint_pos([joint_name], entity=entity_name)
+            return concat([cos(angle), sin(angle)])
+
+        ops = self._ops(joint_pos_cos_sin, {"joint_name": "hinge"})
         assert "Cos" in ops and "Sin" in ops and "Concat" in ops
 
     def test_motion_anchor_pos_b(self):

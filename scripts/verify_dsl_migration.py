@@ -49,7 +49,6 @@ _OBS: dict[str, dict] = {
     "last_action": {},
     "previous_actions": {},
     "generated_commands": {"command_name": "velocity"},
-    "joint_pos_cos_sin": {"joint_name": "hinge"},
     "motion_anchor_pos_b": {},
     "motion_anchor_ori_b": {},
     "robot_body_pos_b": {"body_names": ["pelvis", "torso"]},
