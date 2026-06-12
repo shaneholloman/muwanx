@@ -405,84 +405,9 @@ class TestUsesCustomJsFlag:
         assert self._read_config(tmp_path)["uses_custom_js"] is False
 
 
-# ===========================================================================
-# L1 — _check_no_builtin_name_shadowing (ADR 0003)
-# ===========================================================================
-class TestNoBuiltinNameShadowing:
-    """A ts_src custom sentinel that reuses a built-in ts_name produces a
-    silent local failure (registry spread-order decides which wins) and
-    Cloud rejection with no clear pointer.  Refuse at build time.
-    """
-
-    def _isolate_registries(self, monkeypatch):
-        from mjswan import command as command_mod
-        from mjswan.envs.mdp import events as events_mod
-        from mjswan.envs.mdp import observations as obs_mod
-        from mjswan.envs.mdp import terminations as term_mod
-
-        monkeypatch.setattr(obs_mod, "_custom_registry", {})
-        monkeypatch.setattr(term_mod, "_custom_registry", {})
-        monkeypatch.setattr(events_mod, "_custom_registry", {})
-        monkeypatch.setattr(command_mod, "_custom_registry", {})
-
-    # NOTE: no obs-shadowing rejection test either — after ADR 0003 no MDP
-    # category keeps a named built-in with a non-empty ts_name (all are DSL
-    # callables or empty-ts_name unsupported markers), so the transitional
-    # collision check has no surface left.  The "allowed" cases below still
-    # exercise that the check is permissive.
-
-    def test_former_termination_name_no_longer_collides(self, monkeypatch):
-        # All termination built-ins are now composition graphs (no ts_name),
-        # so a former termination class name like "BadAnchorPosZOnly" is free
-        # to reuse via ts_src — the collision check has nothing to match.
-        # See ADR 0003: the check is transitional and shrinks as built-ins
-        # migrate off named engine classes.
-        self._isolate_registries(monkeypatch)
-        from mjswan.builder import _check_no_builtin_name_shadowing
-        from mjswan.envs.mdp import terminations as term_mod
-
-        term_mod._custom_registry["my_to"] = term_mod.TermFunc(
-            ts_name="BadAnchorPosZOnly",
-            ts_src="/tmp/MyBadAnchorPosZOnly.ts",
-        )
-        _check_no_builtin_name_shadowing()  # no exception — name is free
-
-    # NOTE: there is no event-shadowing test — after ADR 0003 no named event
-    # built-in remains in core (all are DSL callables; patch-spawn moved to a
-    # task ts_src), so the collision check has no event surface to test.
-
-    def test_unique_ts_name_with_ts_src_is_allowed(self, minimal_model, monkeypatch):
-        """A custom sentinel with a fresh ts_name is fine — that is the
-        documented escape hatch."""
-        self._isolate_registries(monkeypatch)
-        from mjswan.envs.mdp import observations as obs_mod
-
-        obs_mod._custom_registry["my_unique"] = obs_mod.ObsFunc(
-            ts_name="MyUnique", ts_src="/tmp/MyUnique.ts"
-        )
-        builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
-        # _check_no_builtin_name_shadowing should pass.  The subsequent build
-        # would try to copy the (non-existent) ts_src; stop after the check
-        # so we don't depend on a frontend build.
-        from mjswan.builder import _check_no_builtin_name_shadowing
-
-        _check_no_builtin_name_shadowing()  # no exception
-
-    def test_declarative_override_with_same_ts_name_is_allowed(
-        self, minimal_model, monkeypatch
-    ):
-        """No ts_src means it is just a declarative param override; the
-        engine resolves the same built-in either way."""
-        self._isolate_registries(monkeypatch)
-        from mjswan.envs.mdp import observations as obs_mod
-
-        obs_mod._custom_registry["joint_pos_rel"] = obs_mod.ObsFunc(
-            ts_name="JointPos", defaults={"subtract_default": True}
-        )
-        from mjswan.builder import _check_no_builtin_name_shadowing
-
-        _check_no_builtin_name_shadowing()  # no exception
+# NOTE: the transitional name-collision check (TestNoBuiltinNameShadowing) was
+# removed along with the check itself — after ADR 0003 no MDP category keeps a
+# named built-in, so a ts_src term cannot shadow one.
 
 
 # ===========================================================================
