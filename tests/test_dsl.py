@@ -241,6 +241,24 @@ class TestTraceObservation:
         cv = next(n for n in graph["nodes"] if n["op"] == "ConstVec")
         assert cv["attrs"]["values"] == [0.1, 0.2, 0.3]
 
+    def test_transpose_sets_history_interleaved(self):
+        # last_action with history + transpose → interleaved (joint-major) History.
+        cfg = ObservationTermCfg(
+            func=obs_fns.last_action, history_length=3, params={"transpose": True}
+        )
+        out = cfg.to_dict()
+        hist = next(n for n in out["nodes"] if n["op"] == "History")
+        assert hist["attrs"]["steps"] == 3
+        assert hist["attrs"]["interleaved"] is True
+
+        # Without transpose → step-major (no interleaved attr).
+        out2 = ObservationTermCfg(func=obs_fns.last_action, history_length=3).to_dict()
+        hist2 = next(n for n in out2["nodes"] if n["op"] == "History")
+        assert "interleaved" not in hist2["attrs"]
+
+    def test_previous_actions_is_last_action_alias(self):
+        assert obs_fns.previous_actions is obs_fns.last_action
+
 
 class TestMigratedObservations:
     """Migrated observation built-ins trace to graphs with the expected ops."""

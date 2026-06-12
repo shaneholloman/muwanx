@@ -318,8 +318,17 @@ export const Primitives: Record<string, Primitive> = {
       buf[0].set(cur);
     }
     if (steps === 1) return new Float32Array(buf[0]);
-    const out = new Float32Array(cur.length * steps);
-    for (let i = 0; i < steps; i++) out.set(buf[i], i * cur.length);
+    const len = cur.length;
+    const out = new Float32Array(len * steps);
+    if (attrs.interleaved) {
+      // Joint-major (transpose): [v0_t, v0_{t-1}, …, v1_t, …] — Isaac convention.
+      for (let j = 0; j < len; j++) {
+        for (let i = 0; i < steps; i++) out[j * steps + i] = buf[i][j];
+      }
+    } else {
+      // Step-major: [all_t, all_{t-1}, …].
+      for (let i = 0; i < steps; i++) out.set(buf[i], i * len);
+    }
     return out;
   },
   Concat: (inputs) => {

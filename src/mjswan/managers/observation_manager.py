@@ -126,12 +126,15 @@ class ObservationTermCfg:
 
         # scale / clip / history are baked into the graph as trailing nodes so
         # the engine interprets one self-contained graph (see ADR 0003).
+        # ``transpose`` (Isaac joint-major action history) maps to the History
+        # node's interleaved layout.
         return trace_observation(
             self.func,  # type: ignore[arg-type]
             self.params,
             scale=self.scale,
             clip=self.clip,
             history_steps=self.history_length or None,
+            interleaved=bool(self.params.get("transpose")),
         )
 
 

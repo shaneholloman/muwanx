@@ -209,9 +209,11 @@ def joint_vel_rel(
 
 
 def last_action(env, **_unused):
-    """The most recent action tensor (stack via the term's ``history_length``).
+    """The most recent action tensor.
 
-    Declarative DSL form (see ADR 0003).
+    Declarative DSL form (see ADR 0003).  Stack past actions with the term's
+    ``history_length``; pass ``params={"transpose": True}`` for the Isaac
+    joint-major history layout (interleaved ``History``).
 
     mjlab: ``env.action_manager.action``
     """
@@ -219,6 +221,10 @@ def last_action(env, **_unused):
     from ...dsl import prev_action
 
     return prev_action()
+
+
+# Isaac-compatible alias (same as last_action; transpose via params).
+previous_actions = last_action
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +400,7 @@ __all__ = [
     "joint_pos_rel",
     "joint_vel_rel",
     "last_action",
+    "previous_actions",
     "generated_commands",
     "motion_anchor_pos_b",
     "motion_anchor_ori_b",

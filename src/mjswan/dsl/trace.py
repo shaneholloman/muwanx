@@ -72,11 +72,14 @@ def _bake_obs_postproc(
     scale: float | tuple[float, ...] | list[float] | None,
     clip: tuple[float, float] | list[float] | None,
     history_steps: int | None,
+    interleaved: bool = False,
 ) -> Node:
     """Append the mjlab obs pipeline (clip → scale → history) as graph nodes.
 
     Matches the mjlab ordering ``compute -> clip -> scale -> history`` so a
     declarative observation needs no special engine handling for these.
+    ``interleaved`` lays the history out joint-major (the Isaac ``transpose``
+    convention) instead of step-major.
     """
     out = root
     if clip is not None:
@@ -89,7 +92,10 @@ def _bake_obs_postproc(
             factor = Node(op="Const", attrs={"value": float(scale)})
         out = Node(op="Mul", inputs=[out, factor])
     if history_steps is not None and history_steps > 1:
-        out = Node(op="History", inputs=[out], attrs={"steps": int(history_steps)})
+        attrs: dict[str, Any] = {"steps": int(history_steps)}
+        if interleaved:
+            attrs["interleaved"] = True
+        out = Node(op="History", inputs=[out], attrs=attrs)
     return out
 
 
@@ -100,14 +106,18 @@ def trace_observation(
     scale: float | tuple[float, ...] | list[float] | None = None,
     clip: tuple[float, float] | list[float] | None = None,
     history_steps: int | None = None,
+    interleaved: bool = False,
 ) -> dict[str, Any]:
     """Trace *func* into an observation-kind term envelope.
 
     ``scale`` / ``clip`` / ``history_steps`` are baked into the graph as
     trailing nodes (see :func:`_bake_obs_postproc`), so the engine interprets
-    a single self-contained graph.
+    a single self-contained graph.  ``interleaved`` (the ``transpose`` history
+    layout) is forwarded to the baked ``History`` node.
     """
-    root = _bake_obs_postproc(_trace(func, params), scale, clip, history_steps)
+    root = _bake_obs_postproc(
+        _trace(func, params), scale, clip, history_steps, interleaved=interleaved
+    )
     nodes, output = _serialize_graph(root)
     return {"kind": "observation", "nodes": nodes, "output": output}
 
