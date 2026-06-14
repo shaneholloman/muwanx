@@ -31,6 +31,24 @@ A React + TypeScript application that runs MuJoCo physics simulations entirely i
 npm install mjswan
 ```
 
+## Embedding a published simulation (`mount`)
+
+The package ships a self-contained library build (`dist/mjswan.js`) that renders
+a published mjswan simulation into any element. It bundles every dependency and
+co-locates its WASM, so it can be loaded directly from a CDN:
+
+```js
+const { mount } = await import(
+  'https://cdn.jsdelivr.net/npm/mjswan@<version>/dist/mjswan.js'
+);
+// configUrl points at a published simulation's config.json; every other asset
+// (scene.mjz, policy.onnx/json, motion.npz, splats) resolves relative to it.
+await mount(container, 'https://cdn.mjswan.com/mjswan/scenes/<id>/config.json');
+```
+
+It runs single-threaded by default (no COOP/COEP needed) and works cross-origin.
+See mjswan-cloud ADR 0001.
+
 ## Development
 
 ```bash

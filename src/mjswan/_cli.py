@@ -100,6 +100,60 @@ def serve_cmd(
     )
 
 
+# ── publish ───────────────────────────────────────────────────
+
+
+@app.command("publish")
+def publish_cmd(
+    dist_dir: Annotated[
+        Path, typer.Argument(help="Path to a built mjswan dist directory.")
+    ],
+    title: Annotated[
+        Optional[str],
+        typer.Option(help="Simulation title. Defaults to the first project's name."),
+    ] = None,
+    description: Annotated[
+        Optional[str], typer.Option(help="Optional description.")
+    ] = None,
+    tag: Annotated[
+        Optional[list[str]],
+        typer.Option(help="Tag to attach (repeatable)."),
+    ] = None,
+    token: Annotated[
+        Optional[str],
+        typer.Option(help="Supabase access token. Falls back to $MJSWAN_TOKEN."),
+    ] = None,
+    api_base: Annotated[
+        Optional[str],
+        typer.Option(help="Cloud API base URL (default https://api.mjswan.com)."),
+    ] = None,
+) -> None:
+    """Publish a built dist directory's data files to mjswan Cloud."""
+    from mjswan.publish import DEFAULT_API_BASE, PublishError, publish_dist
+
+    resolved = dist_dir.expanduser().resolve()
+    if not resolved.exists():
+        console.print(f"[red]Error:[/red] Directory not found: {dist_dir}")
+        raise typer.Exit(1)
+
+    try:
+        result = publish_dist(
+            resolved,
+            title=title,
+            description=description,
+            tags=list(tag) if tag else None,
+            token=token,
+            api_base=api_base or DEFAULT_API_BASE,
+            on_progress=lambda msg: console.print(f"[dim]{msg}[/dim]"),
+        )
+    except PublishError as exc:
+        location = f" [dim]({exc.file})[/dim]" if exc.file else ""
+        console.print(f"[red]Publish failed:[/red] {exc}{location}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Published![/green] Simulation id: [bold]{result.id}[/bold]")
+
+
 # ── new ───────────────────────────────────────────────────────
 
 _TEMPLATES: dict[str, dict[str, str]] = {

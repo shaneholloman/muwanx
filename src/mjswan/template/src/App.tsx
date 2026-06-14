@@ -7,57 +7,17 @@ import type { SplatConfig } from './core/scene/splat';
 import { theme } from './AppTheme';
 import { LoadingProvider, useLoading } from './contexts/LoadingContext';
 import { Loader } from './components/Loader';
+import {
+  type AppConfig,
+  type ProjectConfig,
+  type SceneConfig,
+  pickMotion,
+  pickPolicy,
+  pickScene,
+  resolveProjectAsset,
+  resolveScenePath,
+} from './core/appConfig';
 import './App.css';
-
-interface PolicyConfig {
-  name: string;
-  metadata: Record<string, unknown>;
-  config?: string;
-  default?: boolean;
-  motions?: Array<{
-    name: string;
-    default?: boolean;
-  }>;
-}
-
-interface ViewerConfig {
-  lookat?: [number, number, number];
-  distance?: number;
-  fovy?: number;
-  elevation?: number;
-  azimuth?: number;
-  originType?: 'AUTO' | 'WORLD' | 'ASSET_ROOT' | 'ASSET_BODY';
-  entityName?: string;
-  bodyName?: string;
-  enableReflections?: boolean;
-  enableShadows?: boolean;
-  height?: number;
-  width?: number;
-}
-
-interface SceneConfig {
-  name: string;
-  metadata: Record<string, unknown>;
-  policies: PolicyConfig[];
-  path?: string;
-  splats?: SplatConfig[];
-  splatSection?: boolean;
-  camera?: ViewerConfig;
-  events?: import('./core/event/EventBase').EventConfig[];
-  terrainData?: import('./core/event/EventBase').TerrainData;
-}
-
-interface ProjectConfig {
-  name: string;
-  id: string | null;
-  metadata: Record<string, unknown>;
-  scenes: SceneConfig[];
-}
-
-interface AppConfig {
-  version: string;
-  projects: ProjectConfig[];
-}
 
 const PANEL_QUERY_PARAM = 'panel';
 const REF_QUERY_PARAM = 'ref';
@@ -89,10 +49,6 @@ function getProjectIdFromLocation(): string | null {
     return null;
   }
   return projectId;
-}
-
-function sanitizeName(name: string): string {
-  return name.toLowerCase().replace(/ /g, '_').replace(/-/g, '_');
 }
 
 function buildConfigCandidates(baseUrl: string, projectId: string | null): string[] {
@@ -181,51 +137,6 @@ async function loadConfig(baseUrl: string, projectId: string | null): Promise<Ap
   }
 
   throw lastError ?? new Error('Failed to load config.json.');
-}
-
-function pickScene(project: ProjectConfig, sceneQuery: string | null): SceneConfig | null {
-  if (!project.scenes.length) {
-    return null;
-  }
-  if (!sceneQuery) {
-    return project.scenes[0];
-  }
-  const normalized = sceneQuery.trim().toLowerCase();
-  return (
-    project.scenes.find((scene) => scene.name.toLowerCase() === normalized) ||
-    project.scenes.find((scene) => sanitizeName(scene.name) === normalized) ||
-    project.scenes[0]
-  );
-}
-
-function pickPolicy(scene: SceneConfig, policyQuery: string | null): string | null {
-  if (!scene.policies.length) {
-    return null;
-  }
-  const fallback = scene.policies.find((policy) => policy.default) ?? scene.policies[0];
-  if (!policyQuery) {
-    return fallback.name;
-  }
-  const normalized = policyQuery.trim().toLowerCase();
-  const found =
-    scene.policies.find((policy) => policy.name.toLowerCase() === normalized) ||
-    scene.policies.find((policy) => sanitizeName(policy.name) === normalized);
-  return found?.name ?? fallback.name;
-}
-
-function pickMotion(policy: PolicyConfig | null, motionQuery: string | null): string | null {
-  if (!policy?.motions?.length) {
-    return null;
-  }
-  const fallback = policy.motions.find((motion) => motion.default) ?? policy.motions[0];
-  if (!motionQuery) {
-    return fallback.name;
-  }
-  const normalized = motionQuery.trim().toLowerCase();
-  const found =
-    policy.motions.find((motion) => motion.name.toLowerCase() === normalized) ||
-    policy.motions.find((motion) => sanitizeName(motion.name) === normalized);
-  return found?.name ?? fallback.name;
 }
 
 function isPanelVisibleFromSearch(search: string): boolean {
@@ -353,11 +264,7 @@ function AppContent() {
     if (!currentProject || !currentScene) {
       return null;
     }
-    const projectDir = currentProject.id ? currentProject.id : 'main';
-    const sceneRelPath = currentScene.path
-      ? currentScene.path
-      : `scene/${sanitizeName(currentScene.name)}/scene.xml`;
-    return `${projectDir}/assets/${sceneRelPath}`.replace(/\/+/g, '/');
+    return resolveScenePath(currentProject, currentScene);
   }, [currentProject, currentScene]);
   const selectedPolicyConfig = useMemo(() => {
     if (!currentScene || !selectedPolicy) {
@@ -369,8 +276,7 @@ function AppContent() {
     if (!currentProject || !selectedPolicyConfig?.config) {
       return null;
     }
-    const projectDir = currentProject.id ? currentProject.id : 'main';
-    return `${projectDir}/assets/${selectedPolicyConfig.config}`.replace(/\/+/g, '/');
+    return resolveProjectAsset(currentProject, selectedPolicyConfig.config);
   }, [currentProject, selectedPolicyConfig]);
   const motionOptions = useMemo(() => {
     if (!selectedPolicyConfig?.motions?.length) {
@@ -387,14 +293,9 @@ function AppContent() {
   // When config.json uses "url" (external), pass it through unchanged.
   const resolvedSplats = useMemo(() => {
     if (!currentProject || !currentScene?.splats?.length) return [] as SplatConfig[];
-    const projectDir = currentProject.id ? currentProject.id : 'main';
-    return currentScene.splats.map((splat) => {
-      if (splat.path) {
-        const resolvedUrl = `${projectDir}/assets/${splat.path}`.replace(/\/+/g, '/');
-        return { ...splat, url: resolvedUrl };
-      }
-      return splat;
-    });
+    return currentScene.splats.map((splat) =>
+      splat.path ? { ...splat, url: resolveProjectAsset(currentProject, splat.path) } : splat
+    );
   }, [currentProject, currentScene?.splats]);
 
   const resolvedSplatConfig = useMemo(() => {
