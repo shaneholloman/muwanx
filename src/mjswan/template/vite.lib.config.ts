@@ -147,6 +147,16 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(getVersionFromPython()),
     // The library build is always single-threaded (COOP/COEP-independent).
     __MUJOCO_MT__: JSON.stringify(false),
+    // Vite library mode (unlike app mode) does NOT auto-replace
+    // `process.env.NODE_ENV`, so React/Mantine's dev-only checks (e.g.
+    // `process.env.NODE_ENV === "development"`) ship as unguarded bare `process`
+    // references. Loaded from a CDN with `@vite-ignore`, the consuming bundler
+    // never substitutes them either, so they throw `ReferenceError: process is
+    // not defined` in the browser at mount time. Statically fold them to
+    // "production" here. Remaining `process`/`Buffer` references in the bundle
+    // are runtime-guarded (`typeof process < "u"`, `typeof Buffer < "u"`) Node
+    // code paths that never execute single-threaded in the browser.
+    'process.env.NODE_ENV': JSON.stringify('production'),
   },
   resolve: {
     alias: {

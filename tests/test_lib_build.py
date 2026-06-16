@@ -107,3 +107,30 @@ class TestLibBuild:
     def test_styles_inlined(self, lib_dist: Path):
         # The CSS is injected by JS so a single import brings its own styles.
         assert "mjswan-styles" in (lib_dist / "mjswan.js").read_text()
+
+    def test_no_unfolded_process_env_node_env(self, lib_dist: Path):
+        """The bundle must be browser-self-contained: no unfolded `process`.
+
+        mjswan Cloud loads this bundle straight from a CDN with `@vite-ignore`,
+        so the consuming bundler never substitutes globals away. An eager,
+        unguarded `process.env.NODE_ENV` (shipped by React/Mantine dev checks)
+        therefore throws `ReferenceError: process is not defined` at mount time
+        in the browser. `vite.lib.config.ts` statically folds it to
+        "production"; this asserts none survives. The engine — not the host —
+        owns this invariant (the host must not need a `process` shim). See
+        vite.lib.config.ts `define` and mjswan-cloud ADR 0001.
+
+        Residual `process.*` references (e.g. setimmediate's `process.nextTick`)
+        are allowed only because they sit behind runtime guards and never
+        evaluate single-threaded in the browser.
+        """
+        offenders = [
+            js.name
+            for js in lib_dist.glob("*.js")
+            if "process.env.NODE_ENV" in js.read_text()
+        ]
+        assert not offenders, (
+            f"unfolded process.env.NODE_ENV in {offenders}; the Vite `define` "
+            "in vite.lib.config.ts must fold it to a literal so the CDN-loaded "
+            "engine needs no host-side `process` shim."
+        )
