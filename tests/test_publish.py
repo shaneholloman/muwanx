@@ -16,13 +16,23 @@ from mjswan.publish import (
     MAX_FILE_BYTES,
     MAX_FILES,
     MAX_TOTAL_BYTES,
+    USER_AGENT,
     HttpResponse,
     HttpTransport,
     PublishError,
     plan_publish,
     publish_dist,
+    resolve_api_base,
     resolve_token,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_credentials(tmp_path, monkeypatch):
+    """Keep token resolution from picking up a developer's real `mjswan login`
+    session (~/.config/mjswan) — point credential storage at an empty tmp dir."""
+    monkeypatch.setenv("MJSWAN_CONFIG_HOME", str(tmp_path / "mjswan-cfg"))
+
 
 # ── Fakes ──────────────────────────────────────────────────────────────────
 
@@ -128,6 +138,40 @@ def _make_dist(tmp_path: Path, *, uses_custom_js: bool = False) -> Path:
     (dist / "main" / "index.html").write_text("<!doctype html>")
     (dist / "main" / "manifest.json").write_text(json.dumps({"name": "mjswan"}))
     return dist
+
+
+# ── HttpTransport User-Agent (Cloudflare 1010 guard) ─────────────────────────
+
+
+class TestHttpTransportUserAgent:
+    def test_post_and_put_set_a_non_default_user_agent(self, monkeypatch):
+        """Cloudflare 403s the stdlib's Python-urllib agent; we must override it."""
+        seen: list = []
+
+        class _Resp:
+            status = 200
+
+            def read(self):
+                return b"{}"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req):
+            seen.append(req.get_header("User-agent"))
+            return _Resp()
+
+        monkeypatch.setattr("mjswan.publish.urllib.request.urlopen", fake_urlopen)
+        t = HttpTransport()
+        t.post_json("https://api.mjswan.com/x", {}, "tok")
+        t.put_bytes("https://r2.example.com/x", b"data", "application/json")
+
+        assert seen == [USER_AGENT, USER_AGENT]
+        assert "Python-urllib" not in USER_AGENT
+        assert USER_AGENT.startswith("mjswan/")
 
 
 # ── plan_publish ─────────────────────────────────────────────────────────────
@@ -237,6 +281,30 @@ class TestResolveToken:
             resolve_token(None)
 
 
+class TestResolveApiBase:
+    def test_explicit_wins(self, monkeypatch):
+        monkeypatch.setenv("MJSWAN_API_BASE", "https://env.example.com")
+        assert (
+            resolve_api_base("https://flag.example.com/") == "https://flag.example.com"
+        )
+
+    def test_env_var(self, monkeypatch):
+        monkeypatch.setenv("MJSWAN_API_BASE", "https://v2-api.example.com/")
+        assert resolve_api_base(None) == "https://v2-api.example.com"
+
+    def test_default(self, monkeypatch):
+        monkeypatch.delenv("MJSWAN_API_BASE", raising=False)
+        assert resolve_api_base(None) == "https://api-v2.mjswan.com"
+
+    def test_publish_dist_uses_env_base(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("MJSWAN_API_BASE", "https://v2-api.example.com")
+        transport = FakeTransport()
+        publish_dist(_make_dist(tmp_path), token="tok", transport=transport)
+        assert transport.posts[0][0] == (
+            "https://v2-api.example.com/api/simulations/upload-session"
+        )
+
+
 # ── publish_dist (full flow with fake transport) ─────────────────────────────
 
 
@@ -338,6 +406,31 @@ class TestPublishDist:
         with pytest.raises(PublishError, match="Upload failed"):
             publish_dist(dist, token="tok", transport=transport)
 
+    def test_invalid_presigned_url_surfaced(self, tmp_path: Path):
+        """Server with unset R2 creds signs undefined.r2... URLs — fail clearly,
+        before attempting a PUT that would surface as an opaque TLS error."""
+
+        class BadUrlTransport(FakeTransport):
+            def post_json(self, url, body, token):
+                resp = super().post_json(url, body, token)
+                if url.endswith("/upload-session"):
+                    payload = resp.json()
+                    payload["uploads"] = [
+                        {
+                            "path": e["path"],
+                            "url": "https://undefined.r2.cloudflarestorage.com/"
+                            f"{e['path']}?X-Amz-Credential=undefined",
+                        }
+                        for e in body["manifest"]
+                    ]
+                    return HttpResponse(200, json.dumps(payload).encode())
+                return resp
+
+        transport = BadUrlTransport()
+        with pytest.raises(PublishError, match="server-side misconfiguration"):
+            publish_dist(_make_dist(tmp_path), token="tok", transport=transport)
+        assert transport.puts == []  # never attempted the doomed PUT
+
     def test_progress_callback(self, tmp_path: Path):
         dist = _make_dist(tmp_path)
         messages: list[str] = []
@@ -401,6 +494,8 @@ class TestPublishCli:
             [
                 "publish",
                 str(dist),
+                "--token",
+                "tok",  # supplied → no auto-login
                 "--title",
                 "Demo",
                 "--tag",
@@ -421,6 +516,53 @@ class TestPublishCli:
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
+    def test_publish_auto_logs_in_when_no_token(self, tmp_path: Path, monkeypatch):
+        """No --token, no env, no stored session → publish triggers login first."""
+        from mjswan import auth
+        from mjswan._cli import app
+        from mjswan.publish import PublishResult
+
+        monkeypatch.setenv("MJSWAN_CONFIG_HOME", str(tmp_path / "cfg"))
+        monkeypatch.delenv("MJSWAN_TOKEN", raising=False)
+
+        login_called = {"n": 0}
+
+        def fake_login(*, open_browser, on_progress=None):
+            login_called["n"] += 1
+            creds = auth.Credentials(
+                "tok", "r", expires_at=__import__("time").time() + 3600, username="ada"
+            )
+            auth.save_credentials(creds)
+            return creds
+
+        monkeypatch.setattr("mjswan.auth.login", fake_login)
+        monkeypatch.setattr(
+            "mjswan.publish.publish_dist",
+            lambda dist_dir, **kw: PublishResult(id="s1", sim_id="s1", upload_id="u"),
+        )
+
+        result = self._runner().invoke(app, ["publish", str(_make_dist(tmp_path))])
+        assert result.exit_code == 0, result.output
+        assert login_called["n"] == 1
+        assert "ada" in result.output  # signed-in account surfaced
+
+    def test_publish_skips_login_when_token_given(self, tmp_path: Path, monkeypatch):
+        from mjswan._cli import app
+        from mjswan.publish import PublishResult
+
+        monkeypatch.setattr(
+            "mjswan.auth.login",
+            lambda **k: pytest.fail("login must not run when a token is provided"),
+        )
+        monkeypatch.setattr(
+            "mjswan.publish.publish_dist",
+            lambda dist_dir, **kw: PublishResult(id="s1", sim_id="s1", upload_id="u"),
+        )
+        result = self._runner().invoke(
+            app, ["publish", str(_make_dist(tmp_path)), "--token", "explicit"]
+        )
+        assert result.exit_code == 0, result.output
+
     def test_publish_error_surfaced(self, tmp_path: Path, monkeypatch):
         from mjswan._cli import app
         from mjswan.publish import PublishError
@@ -431,7 +573,7 @@ class TestPublishCli:
         monkeypatch.setattr("mjswan.publish.publish_dist", fake_publish_dist)
         dist = _make_dist(tmp_path)
 
-        result = self._runner().invoke(app, ["publish", str(dist)])
+        result = self._runner().invoke(app, ["publish", str(dist), "--token", "tok"])
         assert result.exit_code == 1
         assert "nope, custom-JS" in result.output
         assert "policy.json" in result.output

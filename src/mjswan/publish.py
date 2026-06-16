@@ -50,8 +50,40 @@ MAX_FILE_BYTES: int = 50 * 1024 * 1024
 MAX_TOTAL_BYTES: int = 200 * 1024 * 1024
 MAX_FILES: int = 64
 
-DEFAULT_API_BASE: str = "https://api.mjswan.com"
+DEFAULT_API_BASE: str = "https://api-v2.mjswan.com"
 TOKEN_ENV_VAR: str = "MJSWAN_TOKEN"
+API_BASE_ENV_VAR: str = "MJSWAN_API_BASE"
+
+
+def resolve_api_base(api_base: str | None) -> str:
+    """Resolve the Cloud API base URL.
+
+    Order: explicit ``api_base`` → ``$MJSWAN_API_BASE`` → :data:`DEFAULT_API_BASE`
+    (the mjswan Cloud v2 API). The env var lets a publish target a local
+    ``wrangler dev`` (``http://localhost:8787``) or a different deployment.
+    """
+    return (api_base or os.environ.get(API_BASE_ENV_VAR) or DEFAULT_API_BASE).rstrip(
+        "/"
+    )
+
+
+def _user_agent() -> str:
+    """A non-default User-Agent.
+
+    The API is fronted by Cloudflare, which rejects the stdlib's default
+    ``Python-urllib/X.Y`` agent with HTTP 403 (error 1010, "banned by browser
+    signature"). Any real agent string passes, so identify the CLI explicitly.
+    """
+    try:
+        from importlib.metadata import version
+
+        ver = version("mjswan")
+    except Exception:  # pragma: no cover - packaging edge cases
+        ver = "0"
+    return f"mjswan/{ver} (+https://github.com/ttktjmt/mjswan)"
+
+
+USER_AGENT: str = _user_agent()
 
 _CONTENT_TYPES: dict[str, str] = {
     ".json": "application/json",
@@ -109,6 +141,7 @@ class HttpTransport:
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
             },
         )
         return self._send(req)
@@ -118,7 +151,7 @@ class HttpTransport:
             url,
             data=data,
             method="PUT",
-            headers={"Content-Type": content_type},
+            headers={"Content-Type": content_type, "User-Agent": USER_AGENT},
         )
         return self._send(req)
 
@@ -276,18 +309,33 @@ def _validate_plan(plan: PublishPlan) -> None:
 def resolve_token(token: str | None) -> str:
     """Resolve the Supabase access token (GitHub OAuth).
 
-    Order: explicit ``token`` argument → ``MJSWAN_TOKEN`` environment variable.
-    An interactive login flow is not implemented here; the error explains how
-    to obtain a token.
+    Order: explicit ``token`` argument → ``MJSWAN_TOKEN`` environment variable →
+    credentials stored by ``mjswan login`` (refreshed transparently if near
+    expiry). The error explains how to obtain a token.
     """
     resolved = token or os.environ.get(TOKEN_ENV_VAR)
-    if not resolved:
+    if resolved:
+        return resolved
+
+    # Fall back to a stored `mjswan login` session (imported lazily so publish
+    # has no hard dependency on the auth flow).
+    from mjswan import auth
+
+    try:
+        stored = auth.current_access_token()
+    except auth.AuthError as exc:
         raise PublishError(
-            "No mjswan Cloud access token found. Set the "
-            f"{TOKEN_ENV_VAR} environment variable to a Supabase access token "
-            "(GitHub OAuth), or pass token=... explicitly."
+            f"Stored mjswan Cloud session could not be refreshed: {exc} "
+            "Run `mjswan login` to sign in again."
         )
-    return resolved
+    if stored:
+        return stored
+
+    raise PublishError(
+        "No mjswan Cloud access token found. Run `mjswan login` to sign in, set "
+        f"the {TOKEN_ENV_VAR} environment variable to a Supabase access token "
+        "(GitHub OAuth), or pass token=... explicitly."
+    )
 
 
 # ── The publish flow ───────────────────────────────────────────────────────────
@@ -307,7 +355,7 @@ def publish_dist(
     description: str | None = None,
     tags: list[str] | None = None,
     token: str | None = None,
-    api_base: str = DEFAULT_API_BASE,
+    api_base: str | None = None,
     transport: HttpTransport | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> PublishResult:
@@ -319,7 +367,8 @@ def publish_dist(
         description: Optional description.
         tags: Optional list of tags.
         token: Supabase access token. Falls back to ``$MJSWAN_TOKEN``.
-        api_base: Cloud API base URL. Defaults to ``https://api.mjswan.com``.
+        api_base: Cloud API base URL. Falls back to ``$MJSWAN_API_BASE``, then
+            ``https://api-v2.mjswan.com``.
         transport: HTTP transport (injectable for tests).
         on_progress: Optional callback invoked with human-readable status lines.
 
@@ -330,7 +379,7 @@ def publish_dist(
         PublishError: on any client-side validation failure or server rejection.
     """
     transport = transport or HttpTransport()
-    base = api_base.rstrip("/")
+    base = resolve_api_base(api_base)
     notify = on_progress or (lambda _msg: None)
 
     plan = plan_publish(Path(dist_dir))
@@ -367,6 +416,7 @@ def publish_dist(
             raise PublishError(
                 f"Server requested upload for unknown file: {path}", file=path
             )
+        _check_presigned_url(url, path)
         notify(f"Uploading {path} ({f.size} bytes)…")
         put_resp = transport.put_bytes(
             url, f.source.read_bytes(), _content_type_for(path)
@@ -391,6 +441,29 @@ def publish_dist(
     )
 
 
+def _check_presigned_url(url: str, path: str) -> None:
+    """Reject an unusable presigned upload URL with an actionable message.
+
+    A misconfigured server (missing ``R2_ACCOUNT_ID`` / ``R2_ACCESS_KEY_ID`` /
+    ``R2_SECRET_ACCESS_KEY``) signs URLs like
+    ``https://undefined.r2.cloudflarestorage.com/…?X-Amz-Credential=undefined…``.
+    PUTting to that host surfaces as an opaque TLS handshake error; catch it here
+    and point at the real cause (server-side storage credentials).
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if parsed.scheme not in ("http", "https") or not host or "undefined" in url:
+        raise PublishError(
+            f"Server returned an invalid upload URL for {path} ({url!r}). "
+            "This is a server-side misconfiguration — the mjswan Cloud API could "
+            "not sign an R2 upload URL (its R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / "
+            "R2_SECRET_ACCESS_KEY are likely unset). No client change can fix this.",
+            file=path,
+        )
+
+
 def _default_title(config: dict) -> str:
     projects = config.get("projects") or []
     if projects and projects[0].get("name"):
@@ -411,12 +484,14 @@ def _raise_for_status(resp: HttpResponse, step: str) -> None:
 
 
 __all__ = [
+    "API_BASE_ENV_VAR",
     "DATA_EXTENSIONS",
     "DEFAULT_API_BASE",
     "MAX_FILES",
     "MAX_FILE_BYTES",
     "MAX_TOTAL_BYTES",
     "TOKEN_ENV_VAR",
+    "USER_AGENT",
     "HttpResponse",
     "HttpTransport",
     "PublishError",
@@ -424,5 +499,6 @@ __all__ = [
     "PublishResult",
     "plan_publish",
     "publish_dist",
+    "resolve_api_base",
     "resolve_token",
 ]

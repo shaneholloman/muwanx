@@ -168,4 +168,4 @@ Apache-2.0
 ## Links
 
 - **Repository**: [github.com/ttktjmt/mjswan](https://github.com/ttktjmt/mjswan)
-- **Author**: Tatsuki Tsujimoto (tatsuki.tsujimoto@gmail.com)
+- **Author**: Tatsuki Tsujimoto
