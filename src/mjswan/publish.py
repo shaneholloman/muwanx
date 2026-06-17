@@ -39,7 +39,7 @@ from typing import Callable
 #: (``.html`` / ``.js`` / ``.css`` / ``.wasm`` / fonts / images) is the engine
 #: shell and is never sent — the platform loads a pinned engine from its CDN.
 DATA_EXTENSIONS: frozenset[str] = frozenset(
-    {".json", ".mjz", ".onnx", ".npz", ".ply", ".splat"}
+    {".json", ".mjz", ".onnx", ".npz", ".ply", ".spz"}
 )
 
 #: App-shell files that happen to share a data extension but are not simulation
@@ -91,7 +91,7 @@ _CONTENT_TYPES: dict[str, str] = {
     ".onnx": "application/octet-stream",
     ".npz": "application/octet-stream",
     ".ply": "application/octet-stream",
-    ".splat": "application/octet-stream",
+    ".spz": "application/octet-stream",
 }
 
 

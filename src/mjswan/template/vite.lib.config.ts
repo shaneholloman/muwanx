@@ -33,22 +33,17 @@ function getVersionFromPython(): string {
   return pkg.version || '0.0.0';
 }
 
-// Vite library mode force-inlines `new URL('x.wasm', import.meta.url)` assets as
-// base64 `data:` URLs regardless of assetsInlineLimit, which bloats the bundle to
-// ~70 MB and defeats streaming compilation. This plugin reverses that: it pulls
-// each inlined WASM back out into a co-located file in dist/ and rewrites the
-// reference to `new URL('./<file>.wasm', import.meta.url)` so it resolves
-// relative to the bundle on the CDN (the load-bearing requirement for the
-// engine library — see vite.lib.config.ts header and mjswan-cloud ADR 0001).
+// Vite library mode force-inlines `new URL('x.wasm', import.meta.url)` as base64
+// `data:` URLs (ignoring assetsInlineLimit), bloating the bundle to ~70 MB. This
+// extracts each back to a co-located dist/ file resolved via `import.meta.url` so
+// it loads relative to the CDN bundle. See mjswan-cloud ADR 0001.
 function extractInlinedWasmPlugin(): Plugin {
   const B64 = '([A-Za-z0-9+/=]+)';
-  // Shapes that occur in the bundle, all with a (CDN-broken) base argument we
-  // discard. Quoted (`"`, `'`, or backtick — backreferenced so the closing
-  // quote matches) on the main thread, and an escaped `\"data:...\"` embedded
-  // inside a dormant pthread-worker string (never spawned single-threaded — its
-  // string literal must stay syntactically valid, so keep the escaping).
+  // Two inlined shapes, each with a base arg re-checked below: normally quoted
+  // (`"`/`'`/backtick, backreferenced), and — inside a dormant pthread-worker
+  // string — escaped `\"data:...\"` (keep the escaping so the literal stays valid).
   const QUOTED = new RegExp(
-    `new URL\\(\\s*(["'\`])data:application/wasm;base64,${B64}\\1\\s*,\\s*[^)]*\\)`,
+    `new URL\\(\\s*(["'\`])data:application/wasm;base64,${B64}\\1\\s*,\\s*([^)]*)\\)`,
     'g'
   );
   const ESCAPED = new RegExp(`new URL\\(\\s*\\\\"data:application/wasm;base64,${B64}\\\\"\\s*,\\s*[^)]*\\)`, 'g');
@@ -76,8 +71,13 @@ function extractInlinedWasmPlugin(): Plugin {
         code
           .replace(
             QUOTED,
-            (_m, _quote: string, b64: string) =>
-              `new URL(${JSON.stringify('./' + fileFor(b64))}, import.meta.url)`
+            (m, _quote: string, b64: string, base: string) => {
+              // Only de-inline main-thread wasm (base `import.meta.url`). A
+              // `self.location.href` base means a classic Blob worker (Spark's
+              // Splat sort) where `import.meta` is a syntax error — leave inline.
+              if (!/import\.meta\.url/.test(base)) return m;
+              return `new URL(${JSON.stringify('./' + fileFor(b64))}, import.meta.url)`;
+            }
           )
           .replace(
             ESCAPED,
@@ -155,15 +155,10 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(getVersionFromPython()),
     // The library build is always single-threaded (COOP/COEP-independent).
     __MUJOCO_MT__: JSON.stringify(false),
-    // Vite library mode (unlike app mode) does NOT auto-replace
-    // `process.env.NODE_ENV`, so React/Mantine's dev-only checks (e.g.
-    // `process.env.NODE_ENV === "development"`) ship as unguarded bare `process`
-    // references. Loaded from a CDN with `@vite-ignore`, the consuming bundler
-    // never substitutes them either, so they throw `ReferenceError: process is
-    // not defined` in the browser at mount time. Statically fold them to
-    // "production" here. Remaining `process`/`Buffer` references in the bundle
-    // are runtime-guarded (`typeof process < "u"`, `typeof Buffer < "u"`) Node
-    // code paths that never execute single-threaded in the browser.
+    // Library mode (unlike app mode) does NOT replace `process.env.NODE_ENV`, so
+    // React/Mantine's bare `process` references would throw `ReferenceError` when
+    // loaded from a CDN. Fold to "production"; other `process`/`Buffer` refs are
+    // runtime-guarded (`typeof process < "u"`) Node paths that never run here.
     'process.env.NODE_ENV': JSON.stringify('production'),
     // Lib-build only: redirect ort's dynamic fetches to its own CDN package.
     __ORT_CDN_BASE__: JSON.stringify(getOrtCdnBase()),

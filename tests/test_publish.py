@@ -259,7 +259,7 @@ class TestPlanPublish:
         assert MAX_TOTAL_BYTES == 200 * 1024 * 1024
         assert MAX_FILES == 64
         assert DATA_EXTENSIONS == frozenset(
-            {".json", ".mjz", ".onnx", ".npz", ".ply", ".splat"}
+            {".json", ".mjz", ".onnx", ".npz", ".ply", ".spz"}
         )
 
 
