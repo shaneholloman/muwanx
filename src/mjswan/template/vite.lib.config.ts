@@ -9,6 +9,14 @@ import fs from 'fs';
 // ONNX WASM co-located flat in `dist/` so they resolve relative to the bundle
 // on a public CDN (jsDelivr). See src/mount.tsx and mjswan-cloud ADR 0001.
 
+function getOrtCdnBase(): string {
+  // Bake the installed ort version into the bundle so OnnxModule.ts can redirect
+  // ort's dynamic file fetches to its own CDN package (*.jsep.mjs, *.wasm, etc.).
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ortPkg = require('./node_modules/onnxruntime-web/package.json');
+  return `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortPkg.version}/dist/`;
+}
+
 function getVersionFromPython(): string {
   const initPath = path.resolve(__dirname, '../__init__.py');
   try {
@@ -157,6 +165,8 @@ export default defineConfig({
     // are runtime-guarded (`typeof process < "u"`, `typeof Buffer < "u"`) Node
     // code paths that never execute single-threaded in the browser.
     'process.env.NODE_ENV': JSON.stringify('production'),
+    // Lib-build only: redirect ort's dynamic fetches to its own CDN package.
+    __ORT_CDN_BASE__: JSON.stringify(getOrtCdnBase()),
   },
   resolve: {
     alias: {
