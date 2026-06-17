@@ -24,6 +24,8 @@ from mjswan.publish import (
     publish_dist,
     resolve_api_base,
     resolve_token,
+    resolve_web_base,
+    simulation_url,
 )
 
 
@@ -303,6 +305,26 @@ class TestResolveApiBase:
         assert transport.posts[0][0] == (
             "https://v2-api.example.com/api/simulations/upload-session"
         )
+
+
+class TestResolveWebBase:
+    def test_explicit_wins(self, monkeypatch):
+        monkeypatch.setenv("MJSWAN_WEB_BASE", "https://env.example.com")
+        assert (
+            resolve_web_base("https://flag.example.com/") == "https://flag.example.com"
+        )
+
+    def test_env_var(self, monkeypatch):
+        monkeypatch.setenv("MJSWAN_WEB_BASE", "https://web.example.com/")
+        assert resolve_web_base() == "https://web.example.com"
+
+    def test_default(self, monkeypatch):
+        monkeypatch.delenv("MJSWAN_WEB_BASE", raising=False)
+        assert resolve_web_base() == "https://v2.mjswan.com"
+
+    def test_simulation_url(self, monkeypatch):
+        monkeypatch.delenv("MJSWAN_WEB_BASE", raising=False)
+        assert simulation_url("7kuhIq6") == "https://v2.mjswan.com/s/7kuhIq6"
 
 
 # ── publish_dist (full flow with fake transport) ─────────────────────────────

@@ -51,8 +51,10 @@ MAX_TOTAL_BYTES: int = 200 * 1024 * 1024
 MAX_FILES: int = 64
 
 DEFAULT_API_BASE: str = "https://api-v2.mjswan.com"
+DEFAULT_WEB_BASE: str = "https://v2.mjswan.com"
 TOKEN_ENV_VAR: str = "MJSWAN_TOKEN"
 API_BASE_ENV_VAR: str = "MJSWAN_API_BASE"
+WEB_BASE_ENV_VAR: str = "MJSWAN_WEB_BASE"
 
 
 def resolve_api_base(api_base: str | None) -> str:
@@ -65,6 +67,22 @@ def resolve_api_base(api_base: str | None) -> str:
     return (api_base or os.environ.get(API_BASE_ENV_VAR) or DEFAULT_API_BASE).rstrip(
         "/"
     )
+
+
+def resolve_web_base(web_base: str | None = None) -> str:
+    """Resolve the web app base URL (the human-facing site, not the API).
+
+    Order: explicit ``web_base`` → ``$MJSWAN_WEB_BASE`` → :data:`DEFAULT_WEB_BASE`.
+    Used to turn a published sim id into a viewable page URL.
+    """
+    return (web_base or os.environ.get(WEB_BASE_ENV_VAR) or DEFAULT_WEB_BASE).rstrip(
+        "/"
+    )
+
+
+def simulation_url(sim_id: str, web_base: str | None = None) -> str:
+    """The web app page URL for a published simulation."""
+    return f"{resolve_web_base(web_base)}/s/{sim_id}"
 
 
 def _user_agent() -> str:
@@ -487,11 +505,13 @@ __all__ = [
     "API_BASE_ENV_VAR",
     "DATA_EXTENSIONS",
     "DEFAULT_API_BASE",
+    "DEFAULT_WEB_BASE",
     "MAX_FILES",
     "MAX_FILE_BYTES",
     "MAX_TOTAL_BYTES",
     "TOKEN_ENV_VAR",
     "USER_AGENT",
+    "WEB_BASE_ENV_VAR",
     "HttpResponse",
     "HttpTransport",
     "PublishError",
@@ -501,4 +521,6 @@ __all__ = [
     "publish_dist",
     "resolve_api_base",
     "resolve_token",
+    "resolve_web_base",
+    "simulation_url",
 ]

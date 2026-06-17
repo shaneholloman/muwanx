@@ -132,7 +132,12 @@ def publish_cmd(
     ] = None,
 ) -> None:
     """Publish a built dist directory's data files to mjswan Cloud."""
-    from mjswan.publish import TOKEN_ENV_VAR, PublishError, publish_dist
+    from mjswan.publish import (
+        TOKEN_ENV_VAR,
+        PublishError,
+        publish_dist,
+        simulation_url,
+    )
 
     resolved = dist_dir.expanduser().resolve()
     if not resolved.exists():
@@ -165,7 +170,8 @@ def publish_cmd(
         console.print(f"[red]Publish failed:[/red] {exc}{location}")
         raise typer.Exit(1)
 
-    console.print(f"[green]Published![/green] Simulation id: [bold]{result.id}[/bold]")
+    url = simulation_url(result.id)
+    console.print(f"[green]Published![/green] [bold][link={url}]{url}[/link][/bold]")
 
 
 # ── login / logout / whoami ────────────────────────────────────
