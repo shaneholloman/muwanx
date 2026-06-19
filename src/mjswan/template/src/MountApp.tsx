@@ -7,6 +7,7 @@ import type { SplatConfig } from './core/scene/splat';
 import { theme } from './AppTheme';
 import { LoadingProvider, useLoading } from './contexts/LoadingContext';
 import { Loader } from './components/Loader';
+import { signalReady, signalError } from './core/utils/readySignal';
 import {
   type AppConfig,
   type ProjectConfig,
@@ -127,6 +128,7 @@ function MountAppContent({ config, baseUrl, onReady, onError }: MountAppProps) {
     (err: Error) => {
       setError(err.message);
       hideLoading();
+      signalError();
       onError?.(err);
     },
     [hideLoading, onError]
@@ -134,6 +136,7 @@ function MountAppContent({ config, baseUrl, onReady, onError }: MountAppProps) {
 
   const handleViewerReady = useCallback(() => {
     hideLoading();
+    signalReady();
     onReady?.();
   }, [hideLoading, onReady]);
 

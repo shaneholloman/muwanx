@@ -84,13 +84,29 @@ class TestLibBuild:
         assert not offenders, f"bare imports found: {offenders}"
 
     def test_wasm_co_located_not_inlined(self, lib_dist: Path):
+        """Main-thread WASM is co-located, never inlined as a base64 data URL.
+
+        `extractInlinedWasmPlugin` in vite.lib.config.ts pulls every
+        `new URL('data:application/wasm…', import.meta.url)` back out into a
+        flat dist/ file. It deliberately leaves ONE class inlined: Spark's
+        Gaussian Splat sorter runs in a classic Blob worker whose base is
+        `self.location.href`, where `import.meta` is a syntax error — that
+        dormant single-threaded worker keeps its base64 WASM. So forbid only
+        `import.meta.url`-based (MuJoCo/ONNX main-thread) inlining.
+        """
         wasm_files = list(lib_dist.glob("*.wasm"))
         assert wasm_files, "no co-located .wasm files emitted in dist/"
-        # No multi-MB base64 WASM left inlined in any JS file.
+        inlined = re.compile(
+            r"""new URL\(\s*(["'`])data:application/wasm;base64,"""
+            r"""[A-Za-z0-9+/=]+\1\s*,\s*([^)]*)\)"""
+        )
         for js in lib_dist.glob("*.js"):
-            assert "data:application/wasm" not in js.read_text(), (
-                f"{js.name} still contains an inlined WASM data URL"
-            )
+            for m in inlined.finditer(js.read_text()):
+                base = m.group(2)
+                assert "import.meta.url" not in base, (
+                    f"{js.name} still inlines main-thread WASM as a data URL "
+                    f"(base {base!r}); it must be extracted to a co-located file"
+                )
 
     def test_wasm_referenced_relative_to_bundle(self, lib_dist: Path):
         """WASM is fetched via `new URL('./x.wasm', import.meta.url)`."""
