@@ -128,6 +128,15 @@ class ClientBuilder:
                 json.dump(package_data, f, indent=2)
                 f.write("\n")
 
+    def _has_script(self, script_name: str) -> bool:
+        package_json = self.project_dir / "package.json"
+        try:
+            with open(package_json) as f:
+                package_data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return False
+        return script_name in package_data.get("scripts", {})
+
     def run_build_script(
         self, script_name: str = "build", env: dict[str, str] | None = None
     ) -> None:
@@ -533,7 +542,11 @@ class ClientBuilder:
                 env["MJSWAN_MT"] = "1"
             if debug:
                 env["MJSWAN_DEBUG"] = "1"
-            self.run_build_script("build", env=env)
+            # The standalone app needs only the SPA build. The library build
+            # (`mjswan.js` mount entry, consumed by mjswan Cloud) is produced by
+            # the full `build` script during npm publish — see vite.lib.config.ts.
+            script = "build:spa" if self._has_script("build:spa") else "build"
+            self.run_build_script(script, env=env)
             print("✓ Build completed successfully")
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Build failed with exit code {e.returncode}") from e

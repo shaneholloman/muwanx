@@ -2,6 +2,12 @@ import * as ort from 'onnxruntime-web';
 
 ort.env.wasm.proxy = false;
 ort.env.wasm.numThreads = 1;
+// Lib build: redirect ort's dynamic file fetches to its own CDN package.
+// __ORT_CDN_BASE__ is defined only by vite.lib.config.ts (no-op in the SPA).
+declare const __ORT_CDN_BASE__: string | undefined;
+if (typeof __ORT_CDN_BASE__ !== 'undefined') {
+  ort.env.wasm.wasmPaths = __ORT_CDN_BASE__;
+}
 
 export type OnnxConfig = {
   path: string;

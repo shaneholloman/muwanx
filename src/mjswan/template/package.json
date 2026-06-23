@@ -1,7 +1,7 @@
 {
   "name": "mjswan",
   "type": "module",
-  "version": "0.6.0",
+  "version": "0.7.0-beta.4",
   "repository": {
     "type": "git",
     "url": "https://github.com/ttktjmt/mjswan.git"
@@ -9,11 +9,20 @@
   "files": [
     "dist",
     "src/core",
+    "lib.d.ts",
     "index.html",
     "README.md",
     "LICENSE"
   ],
+  "main": "./dist/mjswan.js",
+  "module": "./dist/mjswan.js",
+  "types": "./lib.d.ts",
   "exports": {
+    ".": {
+      "types": "./lib.d.ts",
+      "import": "./dist/mjswan.js",
+      "default": "./dist/mjswan.js"
+    },
     "./observation": "./src/core/observation/index.ts",
     "./command": "./src/core/command/index.ts",
     "./math": "./src/core/observation/math.ts",
@@ -26,7 +35,9 @@
   },
   "scripts": {
     "dev": "vite --host",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && vite build --config vite.lib.config.ts",
+    "build:spa": "tsc && vite build",
+    "build:lib": "vite build --config vite.lib.config.ts",
     "preview": "vite preview",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",

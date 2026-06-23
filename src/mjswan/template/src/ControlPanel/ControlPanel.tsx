@@ -335,7 +335,7 @@ function ControlPanel(props: ControlPanelProps) {
       styles={{ body: { textAlign: 'center' } }}
     >
       <Stack gap="md" align="center">
-        <Image src="./logo-color.svg" style={{ width: '8em', height: 'auto' }} />
+        <Image src={`${import.meta.env.BASE_URL || '/'}logo.svg`} style={{ width: '8em', height: 'auto' }} />
         <Text size="xl" fw={700}>powered by mjswan</Text>
         <Text size="sm" c="dimmed">version {MJSWAN_VERSION}</Text>
         <Text size="sm" c="dimmed">MuJoco Simulation on Web Assembly with Neural netwroks</Text>
@@ -392,7 +392,7 @@ function ControlPanel(props: ControlPanelProps) {
             onTouchStart={(e) => e.stopPropagation()}
             style={{ position: "absolute", cursor: "pointer", display: "flex", top: "0.8em", left: "0.9em" }}
           >
-            <Image src="./logo.svg" style={{ width: "1.2em", height: "auto" }} />
+            <Image src={`${import.meta.env.BASE_URL || '/'}logo.svg`} style={{ width: "1.2em", height: "auto" }} />
           </Box>
         </Tooltip>
         <div style={{ width: "1.1em" }} />

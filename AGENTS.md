@@ -13,6 +13,7 @@ See [CONTEXT.md](CONTEXT.md) for a full codebase map, object model, module descr
 
 - Write clean, readable, maintainable code.
 - Don't reinvent what already exists upstream. Prefer mjlab ([GitHub](https://github.com/mujocolab/mjlab), [local](.venv/lib/python3.12/site-packages/mjlab)) or other dependencies over new boilerplate in mjswan.
+- Keep comments minimal and concise. Only comment the non-obvious *why*, not the *what*. When touching existing comments, strip anything redundant or self-evident.
 
 ## Layout
 

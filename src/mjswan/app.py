@@ -7,6 +7,10 @@ that can be saved to disk or launched in a web browser.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .publish import PublishResult
 
 
 def _detect_colab() -> bool:
@@ -27,6 +31,48 @@ class mjswanApp:
 
     def __init__(self, app_dir: Path) -> None:
         self._app_dir = app_dir
+
+    def publish(
+        self,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        token: str | None = None,
+        api_base: str | None = None,
+    ) -> "PublishResult":
+        """Publish this built app's data files to mjswan Cloud.
+
+        Extracts only data files (config.json, scene/policy/motion/splat assets)
+        from the built ``dist/`` and uploads them via the presigned-upload
+        protocol. Refuses builds that use custom-JS MDP terms
+        (``uses_custom_js: true``), which mjswan Cloud cannot render.
+
+        Args:
+            title: Simulation title. Defaults to the first project's name.
+            description: Optional description.
+            tags: Optional list of tags.
+            token: Supabase access token (GitHub OAuth). Falls back to
+                ``$MJSWAN_TOKEN``.
+            api_base: Cloud API base URL. Defaults to ``https://api-v2.mjswan.com``.
+
+        Returns:
+            The publish result, including the new simulation id.
+
+        Raises:
+            mjswan.publish.PublishError: on validation failure or server rejection.
+        """
+        from .publish import DEFAULT_API_BASE, publish_dist
+
+        return publish_dist(
+            self._app_dir,
+            title=title,
+            description=description,
+            tags=tags,
+            token=token,
+            api_base=api_base or DEFAULT_API_BASE,
+            on_progress=print,
+        )
 
     def launch(
         self,
