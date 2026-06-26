@@ -88,7 +88,9 @@ jobs:
     uses: ./.github/workflows/publish-npm.yml
     with:
       ref: v${{ inputs.version }}
-    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read
 
   create-release:
     needs:

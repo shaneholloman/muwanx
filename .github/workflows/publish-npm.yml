@@ -12,6 +12,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: npm
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v5
@@ -27,8 +30,11 @@ jobs:
       - name: Setup Node.js for template build
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest # Trusted publishing requires npm >= 11.5.1
 
       - name: Build web template
         working-directory: src/mjswan/template
@@ -38,6 +44,4 @@ jobs:
 
       - name: Publish to npm
         working-directory: src/mjswan/template
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_API_TOKEN }}
-        run: npm publish --access public
+        run: npm publish --access public # Auth via OIDC trusted publishing
