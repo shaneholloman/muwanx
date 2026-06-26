@@ -127,7 +127,7 @@ def publish_cmd(
         Optional[str],
         typer.Option(
             help="Cloud API base URL. Falls back to $MJSWAN_API_BASE, then "
-            "https://api-v2.mjswan.com."
+            "https://api.mjswan.com."
         ),
     ] = None,
 ) -> None:

@@ -20,9 +20,9 @@ The flow (PKCE):
 5. Persist both (plus ``expires_at``) to ``~/.config/mjswan/credentials.json``
    with ``0600`` permissions.
 
-The Supabase **anon key** is public (published with the web app), so it is
-embedded here; no secret is exposed. The loopback ``redirect_to`` must be in the
-Supabase project's Redirect URLs allowlist (mjswan-cloud ADR 0001 §6.1).
+The Supabase **publishable key** is public (published with the web app), so it
+is embedded here; no secret is exposed. The loopback ``redirect_to`` must be in
+the Supabase project's Redirect URLs allowlist (mjswan-cloud ADR 0006).
 """
 
 from __future__ import annotations
@@ -46,25 +46,16 @@ from mjswan.publish import USER_AGENT
 
 # ── Supabase configuration (public; overridable via env) ──────────────────────
 
-#: Supabase project URL (mjswan Cloud v2). The project ref is a public
-#: identifier — it ships to every browser in the web app's PUBLIC_SUPABASE_URL
-#: and is embedded in the anon key's `ref` claim — so it is safe to commit.
-#: Override with $MJSWAN_SUPABASE_URL to target a different project.
-DEFAULT_SUPABASE_URL: str = "https://ojwmplnmbfzdhxawzvhz.supabase.co"
+#: Supabase project URL
+DEFAULT_SUPABASE_URL: str = "https://rrjgpdagemlmncaugwlx.supabase.co"
 
-#: Public anon key for the project above (the same one the web app ships to
-#: browsers). Supabase anon keys are public by design — data is protected by
-#: RLS, and this key never grants service-role access. Paste the v2 project's
-#: anon key here (Supabase dashboard → Settings → API → "anon public"), or set
-#: $MJSWAN_SUPABASE_ANON_KEY to override without editing this file.
-DEFAULT_SUPABASE_ANON_KEY: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qd21wbG5tYmZ6ZGh4YXd6dmh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzODU1MDgsImV4cCI6MjA5Njk2MTUwOH0.dFRn8i071Hgg0vlgPcJ6n-3CnuRraVYTS2u5eC6vE60"
+#: Public publishable key
+DEFAULT_SUPABASE_PUBLISHABLE_KEY: str = "sb_publishable_4vWIuMHT8NZr9zYLvbxjxg_86WfP9_0"
 
 SUPABASE_URL_ENV_VAR: str = "MJSWAN_SUPABASE_URL"
-SUPABASE_ANON_KEY_ENV_VAR: str = "MJSWAN_SUPABASE_ANON_KEY"
+SUPABASE_PUBLISHABLE_KEY_ENV_VAR: str = "MJSWAN_SUPABASE_PUBLISHABLE_KEY"
 
-#: Fixed loopback port. Must match the Supabase Redirect URLs allowlist entry
-#: (``http://127.0.0.1:8765/callback``). Overridable for local experimentation,
-#: but a non-default port requires a matching allowlist entry.
+#: Loopback port
 DEFAULT_LOOPBACK_PORT: int = 8765
 LOOPBACK_PORT_ENV_VAR: str = "MJSWAN_LOGIN_PORT"
 LOOPBACK_HOST: str = "127.0.0.1"
@@ -81,13 +72,16 @@ def supabase_url() -> str:
     return os.environ.get(SUPABASE_URL_ENV_VAR, DEFAULT_SUPABASE_URL).rstrip("/")
 
 
-def supabase_anon_key() -> str:
-    key = os.environ.get(SUPABASE_ANON_KEY_ENV_VAR, DEFAULT_SUPABASE_ANON_KEY)
+def supabase_publishable_key() -> str:
+    key = os.environ.get(
+        SUPABASE_PUBLISHABLE_KEY_ENV_VAR, DEFAULT_SUPABASE_PUBLISHABLE_KEY
+    )
     if not key:
         raise AuthError(
-            "No Supabase anon key configured. Set the DEFAULT_SUPABASE_ANON_KEY "
-            f"constant in mjswan/auth.py, or set ${SUPABASE_ANON_KEY_ENV_VAR}, to "
-            f"the anon key for {supabase_url()}."
+            "No Supabase publishable key configured. Set the "
+            "DEFAULT_SUPABASE_PUBLISHABLE_KEY constant in mjswan/auth.py, or set "
+            f"${SUPABASE_PUBLISHABLE_KEY_ENV_VAR}, to the publishable key for "
+            f"{supabase_url()}."
         )
     return key
 
@@ -272,8 +266,8 @@ def _token_request(
 ) -> Credentials:
     url = f"{supabase_url()}/auth/v1/token?grant_type={grant_type}"
     headers = {
-        "apikey": supabase_anon_key(),
-        "Authorization": f"Bearer {supabase_anon_key()}",
+        "apikey": supabase_publishable_key(),
+        "Authorization": f"Bearer {supabase_publishable_key()}",
         "Content-Type": "application/json",
     }
     resp = transport.post_json(url, body, headers)
@@ -369,7 +363,7 @@ def fetch_identity(transport: AuthTransport | None = None) -> Identity | None:
         return None
     resp = transport.get(
         f"{supabase_url()}/auth/v1/user",
-        {"apikey": supabase_anon_key(), "Authorization": f"Bearer {token}"},
+        {"apikey": supabase_publishable_key(), "Authorization": f"Bearer {token}"},
     )
     if resp.status != 200:
         raise AuthError(
@@ -499,7 +493,7 @@ def login(
 
 __all__ = [
     "DEFAULT_LOOPBACK_PORT",
-    "DEFAULT_SUPABASE_ANON_KEY",
+    "DEFAULT_SUPABASE_PUBLISHABLE_KEY",
     "DEFAULT_SUPABASE_URL",
     "EXPIRY_SKEW_SECONDS",
     "AuthError",
@@ -516,6 +510,6 @@ __all__ = [
     "login",
     "refresh_credentials",
     "save_credentials",
-    "supabase_anon_key",
+    "supabase_publishable_key",
     "supabase_url",
 ]

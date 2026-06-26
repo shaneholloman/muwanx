@@ -54,7 +54,7 @@ class mjswanApp:
             tags: Optional list of tags.
             token: Supabase access token (GitHub OAuth). Falls back to
                 ``$MJSWAN_TOKEN``.
-            api_base: Cloud API base URL. Defaults to ``https://api-v2.mjswan.com``.
+            api_base: Cloud API base URL. Defaults to ``https://api.mjswan.com``.
 
         Returns:
             The publish result, including the new simulation id.

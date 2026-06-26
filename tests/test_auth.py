@@ -37,9 +37,9 @@ def _isolated_config(tmp_path, monkeypatch):
     """Point credentials storage at a tmp dir for every test."""
     monkeypatch.setenv("MJSWAN_CONFIG_HOME", str(tmp_path / "cfg"))
     # Pin Supabase config to deterministic test values so tests don't depend on
-    # the committed defaults (the anon key default is an empty placeholder).
+    # the committed defaults (the publishable key default is a placeholder).
     monkeypatch.setenv("MJSWAN_SUPABASE_URL", "https://test-project.supabase.co")
-    monkeypatch.setenv("MJSWAN_SUPABASE_ANON_KEY", "test-anon-key")
+    monkeypatch.setenv("MJSWAN_SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
     monkeypatch.delenv("MJSWAN_LOGIN_PORT", raising=False)
 
 
@@ -153,16 +153,16 @@ class TestPkce:
 class TestSupabaseConfig:
     def test_url_and_key_from_env_override(self, monkeypatch):
         monkeypatch.setenv("MJSWAN_SUPABASE_URL", "https://proj.supabase.co/")
-        monkeypatch.setenv("MJSWAN_SUPABASE_ANON_KEY", "k123")
+        monkeypatch.setenv("MJSWAN_SUPABASE_PUBLISHABLE_KEY", "k123")
         assert auth.supabase_url() == "https://proj.supabase.co"  # trailing / stripped
-        assert auth.supabase_anon_key() == "k123"
+        assert auth.supabase_publishable_key() == "k123"
 
-    def test_missing_anon_key_raises(self, monkeypatch):
+    def test_missing_publishable_key_raises(self, monkeypatch):
         # Empty default + no override → actionable error rather than a blank key.
-        monkeypatch.delenv("MJSWAN_SUPABASE_ANON_KEY", raising=False)
-        monkeypatch.setattr(auth, "DEFAULT_SUPABASE_ANON_KEY", "")
-        with pytest.raises(AuthError, match="anon key"):
-            auth.supabase_anon_key()
+        monkeypatch.delenv("MJSWAN_SUPABASE_PUBLISHABLE_KEY", raising=False)
+        monkeypatch.setattr(auth, "DEFAULT_SUPABASE_PUBLISHABLE_KEY", "")
+        with pytest.raises(AuthError, match="publishable key"):
+            auth.supabase_publishable_key()
 
 
 # ── Credential storage ──────────────────────────────────────────────────────
@@ -224,7 +224,7 @@ class TestExpiryAndRefresh:
         url, body, headers = transport.calls[0]
         assert url.endswith("grant_type=refresh_token")
         assert body == {"refresh_token": "old-r"}
-        assert headers["apikey"] == auth.supabase_anon_key()
+        assert headers["apikey"] == auth.supabase_publishable_key()
 
     def test_refresh_failure_raises(self):
         old = Credentials("a", "r", expires_at=time.time() - 1)

@@ -296,7 +296,7 @@ class TestResolveApiBase:
 
     def test_default(self, monkeypatch):
         monkeypatch.delenv("MJSWAN_API_BASE", raising=False)
-        assert resolve_api_base(None) == "https://api-v2.mjswan.com"
+        assert resolve_api_base(None) == "https://api.mjswan.com"
 
     def test_publish_dist_uses_env_base(self, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("MJSWAN_API_BASE", "https://v2-api.example.com")
@@ -320,11 +320,11 @@ class TestResolveWebBase:
 
     def test_default(self, monkeypatch):
         monkeypatch.delenv("MJSWAN_WEB_BASE", raising=False)
-        assert resolve_web_base() == "https://v2.mjswan.com"
+        assert resolve_web_base() == "https://mjswan.com"
 
     def test_simulation_url(self, monkeypatch):
         monkeypatch.delenv("MJSWAN_WEB_BASE", raising=False)
-        assert simulation_url("7kuhIq6") == "https://v2.mjswan.com/s/7kuhIq6"
+        assert simulation_url("7kuhIq6") == "https://mjswan.com/s/7kuhIq6"
 
 
 # ── publish_dist (full flow with fake transport) ─────────────────────────────

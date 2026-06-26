@@ -50,8 +50,8 @@ MAX_FILE_BYTES: int = 50 * 1024 * 1024
 MAX_TOTAL_BYTES: int = 200 * 1024 * 1024
 MAX_FILES: int = 64
 
-DEFAULT_API_BASE: str = "https://api-v2.mjswan.com"
-DEFAULT_WEB_BASE: str = "https://v2.mjswan.com"
+DEFAULT_API_BASE: str = "https://api.mjswan.com"
+DEFAULT_WEB_BASE: str = "https://mjswan.com"
 TOKEN_ENV_VAR: str = "MJSWAN_TOKEN"
 API_BASE_ENV_VAR: str = "MJSWAN_API_BASE"
 WEB_BASE_ENV_VAR: str = "MJSWAN_WEB_BASE"
@@ -61,8 +61,8 @@ def resolve_api_base(api_base: str | None) -> str:
     """Resolve the Cloud API base URL.
 
     Order: explicit ``api_base`` → ``$MJSWAN_API_BASE`` → :data:`DEFAULT_API_BASE`
-    (the mjswan Cloud v2 API). The env var lets a publish target a local
-    ``wrangler dev`` (``http://localhost:8787``) or a different deployment.
+    (the mjswan Cloud Production API). The env var lets a publish target a local
+    ``wrangler dev`` (``http://localhost:8787``) or the RC API (``api-rc.mjswan.com``).
     """
     return (api_base or os.environ.get(API_BASE_ENV_VAR) or DEFAULT_API_BASE).rstrip(
         "/"
@@ -386,7 +386,7 @@ def publish_dist(
         tags: Optional list of tags.
         token: Supabase access token. Falls back to ``$MJSWAN_TOKEN``.
         api_base: Cloud API base URL. Falls back to ``$MJSWAN_API_BASE``, then
-            ``https://api-v2.mjswan.com``.
+            ``https://api.mjswan.com``.
         transport: HTTP transport (injectable for tests).
         on_progress: Optional callback invoked with human-readable status lines.
 
@@ -420,7 +420,7 @@ def publish_dist(
         f"{base}/api/simulations/upload-session", body, resolved_token
     )
     _raise_for_status(session_resp, "upload-session")
-    session = session_resp.json()
+    session = _parse_json(session_resp, "upload-session")
 
     upload_id = session.get("upload_id")
     if not upload_id:
@@ -449,7 +449,7 @@ def publish_dist(
         f"{base}/api/simulations/commit", {"upload_id": upload_id}, resolved_token
     )
     _raise_for_status(commit_resp, "commit")
-    commit = commit_resp.json()
+    commit = _parse_json(commit_resp, "commit")
     sim_id = commit.get("id")
     if not sim_id:
         raise PublishError("commit response missing id.")
@@ -499,6 +499,27 @@ def _raise_for_status(resp: HttpResponse, step: str) -> None:
         payload = {}
     error = payload.get("error") or f"{step} failed with HTTP {resp.status}"
     raise PublishError(error, file=payload.get("file"))
+
+
+def _parse_json(resp: HttpResponse, step: str) -> dict:
+    """Parse a successful response body as JSON, or raise an actionable error.
+
+    A 2xx whose body is *not* JSON usually means the request was intercepted
+    before it reached the API — most often an access proxy's login/redirect page
+    (e.g. Cloudflare Access), or ``$MJSWAN_API_BASE`` pointing at the wrong host.
+    Surface that instead of a raw ``JSONDecodeError``.
+    """
+    try:
+        return resp.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        snippet = resp.body[:160].decode("utf-8", "replace").strip().replace("\n", " ")
+        raise PublishError(
+            f"{step}: expected a JSON response but got non-JSON (HTTP "
+            f"{resp.status}). The request was likely intercepted — e.g. a "
+            "login/redirect page from an access proxy (Cloudflare Access), or "
+            "$MJSWAN_API_BASE points somewhere that isn't the mjswan Cloud API. "
+            f"First bytes: {snippet!r}"
+        )
 
 
 __all__ = [
