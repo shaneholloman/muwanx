@@ -36,6 +36,33 @@ from .splat import SplatConfig
 from .utils import collect_spec_assets, name2id, to_zip_deflated
 
 
+def _build_uses_custom_js() -> bool:
+    """Whether the current build embeds author-supplied TypeScript.
+
+    Walks the four ``_custom_registry`` dicts (observations / terminations /
+    events / commands) and returns True iff any registered sentinel has a
+    non-None ``ts_src``. Surfaced at the top of ``config.json`` so downstream
+    consumers (notably mjswan Cloud) can enforce a declarative-only policy
+    without inspecting the bundled engine. See ADR 0003.
+    """
+    from .command import _custom_registry as _command_registry
+    from .envs.mdp.events import _custom_registry as _event_registry
+    from .envs.mdp.observations import _custom_registry as _obs_registry
+    from .envs.mdp.terminations import _custom_registry as _term_registry
+
+    for registry in (_obs_registry, _term_registry, _event_registry, _command_registry):
+        for sentinel in registry.values():
+            if getattr(sentinel, "ts_src", None) is not None:
+                return True
+    return False
+
+
+# NOTE: a transitional name-collision check (ts_src ts_name vs a named
+# declarative built-in) lived here.  After ADR 0003, all built-in obs/term/event
+# are composition graphs with no named classes, so a ts_src term cannot shadow a
+# built-in — the check had no surface left and was removed.
+
+
 class Builder:
     """Builder for creating mjswan applications.
 
@@ -208,6 +235,7 @@ class Builder:
         # Create root config with project metadata and structure info
         root_config = {
             "version": __version__,
+            "uses_custom_js": _build_uses_custom_js(),
             "projects": [
                 {
                     "name": project.name,
@@ -676,10 +704,15 @@ class Builder:
                                     for name, cfg in policy.actions.items()
                                 }
                             if policy.terminations:
+                                from .envs.mdp.terminations import TermFunc
+
                                 terminations = {
                                     name: cfg.to_dict()
                                     for name, cfg in policy.terminations.items()
-                                    if cfg.func.unsupported_reason is None
+                                    if not (
+                                        isinstance(cfg.func, TermFunc)
+                                        and cfg.func.unsupported_reason is not None
+                                    )
                                 }
                                 if terminations:
                                     data["terminations"] = terminations

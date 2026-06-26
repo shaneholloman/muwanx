@@ -22,7 +22,9 @@ from mjlab.tasks.registry import load_env_cfg
 
 import mjswan
 
-from . import terminations  # noqa: F401 - registers custom terminations
+# Tracking terminations (bad_anchor_pos_z_only, bad_anchor_ori,
+# bad_motion_body_pos_z_only, base_ang_vel_exceed) are declarative built-ins
+# in mjswan.envs.mdp.terminations — no registration needed.
 
 
 def setup_builder() -> mjswan.Builder:

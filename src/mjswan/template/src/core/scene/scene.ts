@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { MainModule, MjData, MjModel } from 'mujoco';
 import { mujocoAssetCollector } from '../utils/mujocoAssetCollector';
-import { normalizeScenePath } from '../utils/pathUtils';
+import { collapseSlashes, normalizeScenePath } from '../utils/pathUtils';
 import { loadMjzFile } from '../utils/mjzLoader';
 import { createLights } from './lights';
 import { createTexture, createSkyboxTexture } from './textures';
@@ -821,7 +821,7 @@ export async function downloadExampleScenesFolder(
     } catch {
       try {
         const manifestResponse = await fetch(
-          `${basePrefix}/${xmlDirectory}/index.json`.replace(/\/+/g, '/')
+          collapseSlashes(`${basePrefix}/${xmlDirectory}/index.json`)
         );
         if (!manifestResponse.ok) {
           throw new Error(
@@ -878,7 +878,7 @@ export async function downloadExampleScenesFolder(
     console.log(`[downloadExampleScenesFolder] Downloading ${uniqueAssets.length} unique assets for ${xmlDirectory}`);
 
     const requests = uniqueAssets.map(({ normalizedPath }) => {
-      const fullPath = `${basePrefix}/${normalizedPath}`.replace(/\/+/g, '/');
+      const fullPath = collapseSlashes(`${basePrefix}/${normalizedPath}`);
       return fetch(fullPath);
     });
 

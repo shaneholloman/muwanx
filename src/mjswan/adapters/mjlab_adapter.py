@@ -95,6 +95,9 @@ def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObsFunc:
         return _custom_registry[name]
     if isinstance(sentinel, ObsFunc) and sentinel.unsupported_reason is None:
         return sentinel
+    # DSL callable (ADR 0003) — pass through; the build will trace it.
+    if callable(sentinel):
+        return sentinel  # type: ignore[return-value]
     # Fall back to term name when the function name is missing or unsupported
     if term_name:
         if term_name in _custom_registry:
@@ -102,6 +105,8 @@ def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObsFunc:
         fallback = getattr(_obs_module, term_name, None)
         if isinstance(fallback, ObsFunc):
             return fallback
+        if callable(fallback):
+            return fallback  # type: ignore[return-value]
     if isinstance(sentinel, ObsFunc):
         return sentinel
     # Fall back to user-registered custom sentinels
@@ -226,6 +231,9 @@ def _adapt_term_func(func: Any, term_name: str | None = None) -> TermFunc:
     sentinel = getattr(_term_module, name, None) if name else None
     if isinstance(sentinel, TermFunc):
         return sentinel
+    # DSL callable (ADR 0003) — pass through; the build will trace it.
+    if callable(sentinel):
+        return sentinel  # type: ignore[return-value]
     if name and name in _custom_term_registry:
         return _custom_term_registry[name]
     # Fall back to term_name when the function name is a closure (e.g. '_fn')
@@ -471,6 +479,9 @@ def _adapt_event_func(func: Any) -> EventFunc:
     sentinel = getattr(_events_module, name, None) if name else None
     if isinstance(sentinel, EventFunc):
         return sentinel
+    # DSL mutation builder (ADR 0003) — pass through; the build will trace it.
+    if callable(sentinel):
+        return sentinel  # type: ignore[return-value]
     if name and name in _custom_event_registry:
         return _custom_event_registry[name]
     raise ValueError(

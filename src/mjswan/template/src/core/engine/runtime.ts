@@ -732,7 +732,7 @@ export class mjswanRuntime {
 
       // Initialize termination manager if termination config is present
       if (config.terminations && Object.keys(config.terminations).length > 0) {
-        this.terminationManager = new TerminationManager(config.terminations, Terminations);
+        this.terminationManager = new TerminationManager(config.terminations, Terminations, runner);
         console.log(`[TerminationManager] ${this.terminationManager.size} termination term(s) loaded`);
       }
 

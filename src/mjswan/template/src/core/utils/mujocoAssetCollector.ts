@@ -1,3 +1,5 @@
+import { collapseSlashes } from './pathUtils';
+
 export class MuJoCoAssetCollector {
   private REFERENCE_ATTRS: Set<string>;
   private TAG_DIRECTORY_HINTS: Record<string, string[]>;
@@ -75,7 +77,7 @@ export class MuJoCoAssetCollector {
 
     const walk = async (filePath: string, parentHints: Record<string, string> = {}) => {
       const normalizedPath = this._normalizePath(filePath);
-      const fullFilePath = `${baseUrl}/${normalizedPath}`.replace(/\/+/g, '/');
+      const fullFilePath = collapseSlashes(`${baseUrl}/${normalizedPath}`);
 
       if (visited.has(normalizedPath)) {
         return;
@@ -245,7 +247,7 @@ export class MuJoCoAssetCollector {
       return { path: resolved };
     }
 
-    const fullPath = `${baseUrl}/${resolved}`.replace(/\/+/g, '/');
+    const fullPath = collapseSlashes(`${baseUrl}/${resolved}`);
     try {
       const response = await fetch(fullPath, { method: 'HEAD' });
       if (!response.ok) {

@@ -18,7 +18,7 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "examples.mjlab.defaults"
 
 from . import commands  # noqa: F401 - for command registrations
-from .events import register_custom_events
+from .events import apply_terrain_spawn, register_custom_events
 from .observations import get_policy_observations, register_custom_observations
 from .terminations import register_custom_terminations
 
@@ -99,6 +99,9 @@ def main():
         register_custom_observations(env_cfg)
         register_custom_terminations(env_cfg)
         scene = project.add_mjlab_scene(task_id, play=True)
+        # Task-side browser enhancement: spawn the single env on a random flat
+        # terrain patch (no-op for non-terrain tasks).  See events/__init__.py.
+        apply_terrain_spawn(scene)
         if viewer_cfg := TASK_VIEWER_CONFIG_MAP.get(task_id):
             scene.set_viewer_config(viewer_cfg)
         run_ids = wandb_run_id

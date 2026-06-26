@@ -141,6 +141,33 @@ class TestClientBuilderCustomTerminations:
         assert "export function helper" not in generated
         assert "export class FooTermination extends TerminationBase" in generated
 
+    def test_generate_custom_skips_dsl_callable_in_registry(
+        self, tmp_path, monkeypatch
+    ):
+        # A DSL term registered by mjlab-name (a task registering a DSL builder
+        # callable, e.g. defaults' "ee_to_object_distance") is a plain callable
+        # with no ts_src.  generate_custom_observations must skip it, not crash
+        # on `.ts_src`.
+        from mjswan.envs.mdp import observations as obs_mod
+
+        project_dir = tmp_path / "template"
+        output_dir = project_dir / "src" / "core" / "observation"
+        output_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            obs_mod,
+            "_custom_registry",
+            {"base_lin_vel": obs_mod.base_lin_vel},
+        )
+
+        # Must not raise AttributeError on the callable.
+        ClientBuilder(project_dir).generate_custom_observations()
+
+        generated = (output_dir / "custom_observations.ts").read_text()
+        # No custom JS class is emitted for the callable (it's declarative).
+        assert "CustomObservations" in generated
+        assert "base_lin_vel" not in generated
+
 
 # ===========================================================================
 # L1 — validation
@@ -301,6 +328,89 @@ class TestSaveConfigJson:
 
 
 # ===========================================================================
+# L1 — uses_custom_js manifest flag (ADR 0003)
+# ===========================================================================
+class TestUsesCustomJsFlag:
+    """Builds with any `ts_src`-bearing sentinel must mark themselves
+    custom-JS so mjswan Cloud can refuse them.  Declarative-only builds must
+    be marked clean.
+    """
+
+    def _read_config(self, tmp_path: Path) -> dict:
+        return json.loads((tmp_path / "assets" / "config.json").read_text())
+
+    def _isolate_registries(self, monkeypatch):
+        """Swap each MDP custom-registry for an empty dict so the test does
+        not see registrations leaked in from other tests / modules."""
+        from mjswan import command as command_mod
+        from mjswan.envs.mdp import events as events_mod
+        from mjswan.envs.mdp import observations as obs_mod
+        from mjswan.envs.mdp import terminations as term_mod
+
+        monkeypatch.setattr(obs_mod, "_custom_registry", {})
+        monkeypatch.setattr(term_mod, "_custom_registry", {})
+        monkeypatch.setattr(events_mod, "_custom_registry", {})
+        monkeypatch.setattr(command_mod, "_custom_registry", {})
+
+    def test_clean_build_is_false(self, tmp_path, minimal_model, monkeypatch):
+        self._isolate_registries(monkeypatch)
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder._save_config_json(tmp_path)
+        assert self._read_config(tmp_path)["uses_custom_js"] is False
+
+    def test_custom_obs_ts_src_flips_flag_true(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
+        self._isolate_registries(monkeypatch)
+        from mjswan.envs.mdp import observations as obs_mod
+
+        obs_mod._custom_registry["my_term"] = obs_mod.ObsFunc(
+            ts_name="MyTerm", ts_src="/tmp/whatever.ts"
+        )
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder._save_config_json(tmp_path)
+        assert self._read_config(tmp_path)["uses_custom_js"] is True
+
+    def test_custom_term_ts_src_flips_flag_true(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
+        self._isolate_registries(monkeypatch)
+        from mjswan.envs.mdp import terminations as term_mod
+
+        term_mod._custom_registry["my_term"] = term_mod.TermFunc(
+            ts_name="MyTerm", ts_src="/tmp/whatever.ts"
+        )
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder._save_config_json(tmp_path)
+        assert self._read_config(tmp_path)["uses_custom_js"] is True
+
+    def test_declarative_override_does_not_flip_flag(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
+        """Registered sentinel without ts_src is a declarative param override —
+        the build is still declarative-only."""
+        self._isolate_registries(monkeypatch)
+        from mjswan.envs.mdp import terminations as term_mod
+
+        term_mod._custom_registry["out_of_terrain_bounds"] = term_mod.TermFunc(
+            ts_name="OutOfTerrainBounds",
+            defaults={"limit_x": 5.0, "limit_y": 5.0},
+        )
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder._save_config_json(tmp_path)
+        assert self._read_config(tmp_path)["uses_custom_js"] is False
+
+
+# NOTE: the transitional name-collision check (TestNoBuiltinNameShadowing) was
+# removed along with the check itself — after ADR 0003 no MDP category keeps a
+# named built-in, so a ts_src term cannot shadow one.
+
+
+# ===========================================================================
 # L1 — _save_web: actions/terminations serialization into policy JSON
 # ===========================================================================
 class TestSaveWebPolicyJson:
@@ -373,8 +483,11 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         assert "terminations" in data
         assert "time_out" in data["terminations"]
-        assert data["terminations"]["time_out"]["name"] == "TimeOut"
-        assert data["terminations"]["time_out"]["time_out"] is True
+        # `time_out` is a DSL term (ADR 0003); time_out flag still set.
+        entry = data["terminations"]["time_out"]
+        assert entry["kind"] == "termination"
+        assert "StepCount" in [n["op"] for n in entry["nodes"]]
+        assert entry["time_out"] is True
 
     def test_no_config_path_both_blocks_emitted(
         self, tmp_path, minimal_model, minimal_onnx
@@ -398,8 +511,10 @@ class TestSaveWebPolicyJson:
         assert "actions" in data
         assert "terminations" in data
         assert data["actions"]["effort"]["type"] == "torque"
-        assert data["terminations"]["fallen"]["name"] == "BadOrientation"
-        assert data["terminations"]["fallen"]["params"]["limit_angle"] == 1.2
+        # `bad_orientation` is a DSL term (ADR 0003).
+        fallen = data["terminations"]["fallen"]
+        assert fallen["kind"] == "termination"
+        assert "Acos" in [n["op"] for n in fallen["nodes"]]
 
     def test_no_config_path_actions_absent_when_not_set(
         self, tmp_path, minimal_model, minimal_onnx
@@ -545,8 +660,14 @@ class TestSaveWebPolicyJson:
 
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         joint_pos = data["observations"]["policy"][0]
-        assert joint_pos["joint_names"] == ["robot/joint1", "robot/joint2"]
-        assert joint_pos["default_joint_pos"] == [0.25, -0.5]
+        # joint_pos_rel is a DSL term (ADR 0003): joint_names is enriched into
+        # the JointPos source node's attrs, and the keyframe default pose is
+        # subtracted as a ConstVec.
+        assert joint_pos["kind"] == "observation"
+        jp_node = next(n for n in joint_pos["nodes"] if n["op"] == "JointPos")
+        assert jp_node["attrs"]["joint_names"] == ["robot/joint1", "robot/joint2"]
+        const_node = next(n for n in joint_pos["nodes"] if n["op"] == "ConstVec")
+        assert const_node["attrs"]["values"] == [0.25, -0.5]
 
     # -----------------------------------------------------------------------
     # config_path branch
@@ -598,8 +719,10 @@ class TestSaveWebPolicyJson:
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         assert "terminations" in data
-        assert data["terminations"]["fallen"]["name"] == "BadOrientation"
-        assert data["terminations"]["fallen"]["params"]["limit_angle"] == 0.8
+        # `bad_orientation` is a DSL term (ADR 0003).
+        fallen = data["terminations"]["fallen"]
+        assert fallen["kind"] == "termination"
+        assert "Acos" in [n["op"] for n in fallen["nodes"]]
         assert data["existing_key"] == "kept"
 
     def test_config_path_both_blocks_merged(
@@ -626,8 +749,12 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         assert data["actions"]["effort"]["type"] == "torque"
         assert data["actions"]["effort"]["scale"] == 1.5
-        assert data["terminations"]["height"]["name"] == "RootHeightBelowMinimum"
-        assert data["terminations"]["height"]["params"]["minimum_height"] == 0.3
+        # `root_height_below_minimum` is a DSL term (ADR 0003) — emits a
+        # composition graph instead of a legacy {name, params} entry.
+        height_entry = data["terminations"]["height"]
+        assert height_entry["kind"] == "termination"
+        ops = [n["op"] for n in height_entry["nodes"]]
+        assert "RootLinkPosW" in ops and "Lt" in ops
 
     def test_config_path_overwrites_existing_actions_block(
         self, tmp_path, minimal_model, minimal_onnx
@@ -757,9 +884,10 @@ class TestSaveWebPolicyJson:
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         term = data["terminations"]["time_out"]
-        assert term["name"] == "TimeOut"
+        # `time_out` is a DSL term (ADR 0003); time_out flag still set.
+        assert term["kind"] == "termination"
+        assert "StepCount" in [n["op"] for n in term["nodes"]]
         assert term.get("time_out") is True
-        assert "params" not in term
 
     def test_bad_orientation_params_serialized(
         self, tmp_path, minimal_model, minimal_onnx
@@ -777,8 +905,13 @@ class TestSaveWebPolicyJson:
             },
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
-        assert data["terminations"]["fallen"]["params"]["limit_angle"] == 1.57
-        assert "time_out" not in data["terminations"]["fallen"]
+        # `bad_orientation` is a DSL term (ADR 0003); params are inlined as
+        # Const nodes during trace.
+        fallen = data["terminations"]["fallen"]
+        assert fallen["kind"] == "termination"
+        consts = [n["attrs"]["value"] for n in fallen["nodes"] if n["op"] == "Const"]
+        assert 1.57 in consts
+        assert "time_out" not in fallen
 
 
 # ===========================================================================

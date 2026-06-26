@@ -10,7 +10,8 @@ mjswan is a Python framework that packages browser-based MuJoCo simulations with
 ```
 src/mjswan/          Python package source
   builder.py           Builder — top-level entry point
-  app.py               mjswanApp — launch / serve built apps
+  app.py               mjswanApp — launch / serve / publish built apps
+  publish.py           Publish a built dist/ to mjswan Cloud (data-file upload protocol)
   project.py           ProjectConfig / ProjectHandle
   scene.py             SceneConfig / SceneHandle
   policy.py            PolicyConfig / PolicyHandle
@@ -118,6 +119,10 @@ TypeScript + React + Vite + three.js. Built by `Builder.build()` via `_build_cli
 
 Multi-threaded mode (`Builder(mt=True)`) requires COOP/COEP headers; the builder writes a `_headers` file (Netlify / Cloudflare Pages / Vercel) and a service-worker script (required for GitHub Pages).
 
+The template has two Vite build outputs (both written to `template/dist/`):
+- **SPA** (`vite.config.ts`, `npm run build:spa`) — the standalone app the Python `Builder` assembles. Entry `src/index.tsx`.
+- **Library** (`vite.lib.config.ts`, `npm run build:lib`) — a single self-contained ESM `dist/mjswan.js` exposing `mount(element, configUrl)` (`src/mount.tsx` → `MountApp.tsx`), consumed by mjswan Cloud from a CDN. Every dependency is bundled (no bare imports) and the MuJoCo/ONNX WASM is emitted as co-located files referenced via `new URL('./x.wasm', import.meta.url)`. Vite lib mode force-inlines those WASM as base64; a `generateBundle` plugin in `vite.lib.config.ts` extracts them back into co-located files. `npm run build` runs both. Shared config-shape + selection helpers live in `src/core/appConfig.ts` (used by both entries). See mjswan-cloud ADR 0001.
+
 
 ## CLI entry points
 
@@ -130,6 +135,7 @@ The primary CLI is `mjswan` (Typer-based, defined in `_cli.py:app`). Subcommands
 | `mjswan new <name> [--template hello-world\|policy\|mjlab]` | Scaffold a new project from a template |
 | `mjswan demo [name]` / `--list` | Run a built-in demo (`simple`, `main`, `mjlab`) |
 | `mjswan info <dist-dir>` | Show a tree of projects/scenes/policies and asset sizes |
+| `mjswan publish <dist-dir>` | Upload a built dist's data files to mjswan Cloud (rejects custom-JS builds) |
 
 Legacy entry points (kept for backward compatibility): `main`, `simple`, `mjlab`, `serve <dist-dir>` — each runs the corresponding `examples/` module.
 

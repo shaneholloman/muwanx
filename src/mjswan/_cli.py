@@ -100,6 +100,153 @@ def serve_cmd(
     )
 
 
+# ── publish ───────────────────────────────────────────────────
+
+
+@app.command("publish")
+def publish_cmd(
+    dist_dir: Annotated[
+        Path, typer.Argument(help="Path to a built mjswan dist directory.")
+    ],
+    title: Annotated[
+        Optional[str],
+        typer.Option(help="Simulation title. Defaults to the first project's name."),
+    ] = None,
+    description: Annotated[
+        Optional[str], typer.Option(help="Optional description.")
+    ] = None,
+    tag: Annotated[
+        Optional[list[str]],
+        typer.Option(help="Tag to attach (repeatable)."),
+    ] = None,
+    token: Annotated[
+        Optional[str],
+        typer.Option(help="Supabase access token. Falls back to $MJSWAN_TOKEN."),
+    ] = None,
+    api_base: Annotated[
+        Optional[str],
+        typer.Option(
+            help="Cloud API base URL. Falls back to $MJSWAN_API_BASE, then "
+            "https://api.mjswan.com."
+        ),
+    ] = None,
+) -> None:
+    """Publish a built dist directory's data files to mjswan Cloud."""
+    from mjswan.publish import (
+        TOKEN_ENV_VAR,
+        PublishError,
+        publish_dist,
+        simulation_url,
+    )
+
+    resolved = dist_dir.expanduser().resolve()
+    if not resolved.exists():
+        console.print(f"[red]Error:[/red] Directory not found: {dist_dir}")
+        raise typer.Exit(1)
+
+    # Auto-login when there is no token to use (no flag, no env, no stored
+    # session). The browser flow runs first, then publish proceeds normally.
+    import os
+
+    from mjswan import auth
+
+    if not token and not os.environ.get(TOKEN_ENV_VAR) and not auth.load_credentials():
+        console.print("[dim]Not logged in — signing in to mjswan Cloud first…[/dim]")
+        if not _do_login(open_browser=True):
+            raise typer.Exit(1)
+
+    try:
+        result = publish_dist(
+            resolved,
+            title=title,
+            description=description,
+            tags=list(tag) if tag else None,
+            token=token,
+            api_base=api_base,
+            on_progress=lambda msg: console.print(f"[dim]{msg}[/dim]"),
+        )
+    except PublishError as exc:
+        location = f" [dim]({exc.file})[/dim]" if exc.file else ""
+        console.print(f"[red]Publish failed:[/red] {exc}{location}")
+        raise typer.Exit(1)
+
+    url = simulation_url(result.id)
+    console.print(f"[green]Published![/green] [bold][link={url}]{url}[/link][/bold]")
+
+
+# ── login / logout / whoami ────────────────────────────────────
+
+
+def _do_login(*, open_browser: bool) -> bool:
+    """Run the OAuth flow and report which account signed in.
+
+    Returns ``True`` on success, ``False`` (with an error printed) on failure.
+    Shared by ``mjswan login`` and ``mjswan publish``'s auto-login.
+    """
+    from mjswan.auth import AuthError, login
+
+    try:
+        creds = login(
+            open_browser=open_browser,
+            on_progress=lambda msg: console.print(f"[dim]{msg}[/dim]"),
+        )
+    except AuthError as exc:
+        console.print(f"[red]Login failed:[/red] {exc}")
+        return False
+
+    who = f" as [bold]{creds.username}[/bold]" if creds.username else ""
+    console.print(f"[green]Logged in to mjswan Cloud{who}.[/green]")
+    return True
+
+
+@app.command("login")
+def login_cmd(
+    no_open: Annotated[
+        bool,
+        typer.Option(
+            "--no-open", help="Do not open the browser; print the URL instead."
+        ),
+    ] = False,
+) -> None:
+    """Sign in to mjswan Cloud via GitHub (loopback OAuth)."""
+    if not _do_login(open_browser=not no_open):
+        raise typer.Exit(1)
+
+
+@app.command("whoami")
+def whoami_cmd() -> None:
+    """Show the mjswan Cloud account you are signed in as."""
+    from mjswan.auth import AuthError, fetch_identity
+
+    try:
+        identity = fetch_identity()
+    except AuthError as exc:
+        # Session exists locally but is no longer valid server-side.
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    if identity is None:
+        console.print("[dim]Not logged in. Run [bold]mjswan login[/bold].[/dim]")
+        raise typer.Exit(1)
+
+    name = identity.username or identity.user_id
+    detail = f" [dim]({identity.email})[/dim]" if identity.email else ""
+    console.print(f"Logged in as [bold]{name}[/bold]{detail}")
+
+
+@app.command("logout")
+def logout_cmd() -> None:
+    """Remove the stored mjswan Cloud session."""
+    from mjswan.auth import clear_credentials, credentials_path
+
+    if clear_credentials():
+        console.print("[green]Logged out.[/green]")
+    else:
+        console.print(
+            f"[dim]Not logged in (no credentials at {credentials_path()}).[/dim]"
+        )
+
+
 # ── new ───────────────────────────────────────────────────────
 
 _TEMPLATES: dict[str, dict[str, str]] = {

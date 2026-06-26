@@ -15,5 +15,22 @@ mjlab import patterns translate directly::
 """
 
 from . import actions, observations, terminations
+from .events import EventBinding
+from .observations import ObsBinding
+from .terminations import TermBinding
 
-__all__ = ["actions", "observations", "terminations"]
+# Umbrella type for the mjlab-name → browser-implementation binding layer
+# (see ADR 0003).  Per-kind bindings (ObsBinding / TermBinding / EventBinding,
+# plus mjswan.command.CommandBinding) share this role: resolving an mjlab name
+# to a declarative builder, a ts_src escape hatch, or an unsupported marker.
+MjlabMdpBinding = ObsBinding | TermBinding | EventBinding
+
+__all__ = [
+    "EventBinding",
+    "MjlabMdpBinding",
+    "ObsBinding",
+    "TermBinding",
+    "actions",
+    "observations",
+    "terminations",
+]

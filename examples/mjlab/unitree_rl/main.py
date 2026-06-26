@@ -3,7 +3,6 @@
 Follow the instructions in the README to run this demo.
 """
 
-import importlib
 import pathlib
 import sys
 
@@ -15,7 +14,10 @@ from mjlab.tasks.registry import load_env_cfg
 import mjswan
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-importlib.import_module("terminations")  # noqa: F401 - registers custom terminations
+
+# Tracking terminations (bad_anchor_pos_z_only, bad_anchor_ori,
+# bad_motion_body_pos_z_only, base_ang_vel_exceed) are declarative built-ins
+# in mjswan.envs.mdp.terminations — no registration needed.
 
 
 def setup_builder() -> mjswan.Builder:

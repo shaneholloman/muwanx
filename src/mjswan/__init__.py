@@ -3,7 +3,7 @@
 Interactive MuJoCo simulations with ONNX policies running entirely in the browser.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0-beta.4"
 
 from .app import mjswanApp
 from .builder import Builder
@@ -12,6 +12,7 @@ from .command import (
     ButtonConfig,
     Checkbox,
     CheckboxConfig,
+    CommandBinding,
     CommandInput,
     CommandTermConfig,
     CommandTermSpec,
@@ -22,14 +23,15 @@ from .command import (
     ui_command,
     velocity_command,
 )
+from .envs.mdp import MjlabMdpBinding
 from .envs.mdp.actions import (
     ActionTermCfg,
     JointEffortActionCfg,
     JointPositionActionCfg,
 )
-from .envs.mdp.events import EventFunc, register_event_func
-from .envs.mdp.observations import ObsFunc, register_obs_func
-from .envs.mdp.terminations import TermFunc, register_termination_func
+from .envs.mdp.events import EventBinding, EventFunc, register_event_func
+from .envs.mdp.observations import ObsBinding, ObsFunc, register_obs_func
+from .envs.mdp.terminations import TermBinding, TermFunc, register_termination_func
 from .managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from .managers.termination_manager import TerminationTermCfg
 from .motion import MotionConfig, MotionHandle
@@ -56,11 +58,16 @@ __all__ = [
     "SplatConfig",
     "PolicyConfig",
     "MotionConfig",
-    # Custom observation registry
+    # MDP bindings (mjlab-name → browser impl; see ADR 0003).
+    # *Func names are kept as backwards-compatible aliases.
+    "MjlabMdpBinding",
+    "ObsBinding",
     "ObsFunc",
     "register_obs_func",
+    "EventBinding",
     "EventFunc",
     "register_event_func",
+    "TermBinding",
     "TermFunc",
     "register_termination_func",
     # MDP config (mjlab-compatible)
@@ -79,6 +86,7 @@ __all__ = [
     "CheckboxConfig",
     "CommandInput",
     "CommandTermConfig",
+    "CommandBinding",
     "CommandTermSpec",
     "CommandUiConfig",
     "register_command_term",

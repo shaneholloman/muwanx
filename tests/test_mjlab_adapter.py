@@ -154,6 +154,7 @@ class TestAdaptObservations:
         assert result["policy"] is group
 
     def test_mjlab_obs_term_converted(self):
+        # `base_lin_vel` is a DSL term (ADR 0003) — adapter resolves to a callable.
         mjlab_func = _make_mjlab_obs_func("base_lin_vel")
         mjlab_term = FakeMjlabObsTermCfg(func=mjlab_func, params={"world_frame": True})
         mjlab_group = FakeMjlabObsGroupCfg(
@@ -168,7 +169,7 @@ class TestAdaptObservations:
         assert "base_vel" in group.terms
         term = group.terms["base_vel"]
         assert isinstance(term, ObservationTermCfg)
-        assert term.func.ts_name == "BaseLinearVelocity"
+        assert callable(term.func)
         assert term.params == {"world_frame": True}
 
     def test_mjlab_obs_scale_and_history(self):
@@ -207,6 +208,8 @@ class TestAdaptObservations:
             adapt_observations({"policy": mjlab_group})
 
     def test_multiple_groups(self):
+        # `base_ang_vel` and `projected_gravity` are DSL terms (ADR 0003) —
+        # the adapter resolves them to callables.
         f1 = _make_mjlab_obs_func("base_ang_vel")
         f2 = _make_mjlab_obs_func("projected_gravity")
         g1 = FakeMjlabObsGroupCfg(terms={"ang": FakeMjlabObsTermCfg(func=f1)})
@@ -214,8 +217,8 @@ class TestAdaptObservations:
 
         result = adapt_observations({"policy": g1, "critic": g2})
         assert result is not None
-        assert result["policy"].terms["ang"].func.ts_name == "BaseAngularVelocity"
-        assert result["critic"].terms["grav"].func.ts_name == "ProjectedGravityB"
+        assert callable(result["policy"].terms["ang"].func)
+        assert callable(result["critic"].terms["grav"].func)
 
     def test_tracking_observation_functions_are_mapped(self):
         motion_anchor = _make_mjlab_obs_func("motion_anchor_pos_b")
@@ -230,9 +233,11 @@ class TestAdaptObservations:
                 )
             }
         )
+        # Tracking observations are DSL terms (ADR 0003) — the adapter
+        # resolves them to callables instead of ObsFunc sentinels.
         assert result is not None
-        assert result["policy"].terms["anchor"].func.ts_name == "MotionAnchorPosB"
-        assert result["policy"].terms["body"].func.ts_name == "RobotBodyPosB"
+        assert callable(result["policy"].terms["anchor"].func)
+        assert callable(result["policy"].terms["body"].func)
 
 
 # ===================================================================
@@ -252,6 +257,8 @@ class TestAdaptTerminations:
         assert result["time_out"] is cfg
 
     def test_mjlab_term_converted(self):
+        # `bad_orientation` is a DSL term (ADR 0003) — the adapter
+        # resolves it to a callable instead of a TermFunc sentinel.
         mjlab_func = _make_mjlab_term_func("bad_orientation")
         mjlab_cfg = FakeMjlabTermTermCfg(
             func=mjlab_func,
@@ -263,18 +270,19 @@ class TestAdaptTerminations:
         assert result is not None
         term = result["fallen"]
         assert isinstance(term, TerminationTermCfg)
-        assert term.func.ts_name == "BadOrientation"
+        assert callable(term.func)
         assert term.params == {"limit_angle": 1.0}
         assert term.time_out is False
 
     def test_mjlab_time_out_flag(self):
+        # `time_out` is a DSL term (ADR 0003) — resolved to a callable.
         mjlab_func = _make_mjlab_term_func("time_out")
         mjlab_cfg = FakeMjlabTermTermCfg(func=mjlab_func, time_out=True)
 
         result = adapt_terminations({"timeout": mjlab_cfg})
         assert result is not None
         assert result["timeout"].time_out is True
-        assert result["timeout"].func.ts_name == "TimeOut"
+        assert callable(result["timeout"].func)
 
     def test_mjlab_term_strips_asset_cfg_from_params(self):
         mjlab_func = _make_mjlab_term_func("bad_orientation")
@@ -405,6 +413,9 @@ class TestAdaptedSerialization:
     """Ensure adapted objects serialize correctly via to_dict() / to_list()."""
 
     def test_adapted_obs_serializes(self):
+        # ``last_action`` is a DSL observation (ADR 0003) — the adapter passes
+        # the callable through and serialization emits a composition graph
+        # (with PrevAction as the source op) instead of a legacy named entry.
         mjlab_func = _make_mjlab_obs_func("last_action")
         mjlab_term = FakeMjlabObsTermCfg(func=mjlab_func)
         mjlab_group = FakeMjlabObsGroupCfg(terms={"la": mjlab_term})
@@ -413,10 +424,14 @@ class TestAdaptedSerialization:
         assert result is not None
         entries = result["policy"].to_list()
         assert len(entries) == 1
-        assert entries[0]["name"] == "PrevActions"
-        assert entries[0]["history_steps"] == 1  # from ObsFunc defaults
+        assert entries[0]["kind"] == "observation"
+        assert "name" not in entries[0]
+        assert "PrevAction" in [n["op"] for n in entries[0]["nodes"]]
 
     def test_adapted_term_serializes(self):
+        # ``root_height_below_minimum`` is a DSL term (ADR 0003) — the
+        # adapter passes the callable through and serialization emits a
+        # composition graph instead of a legacy {name, params} entry.
         mjlab_func = _make_mjlab_term_func("root_height_below_minimum")
         mjlab_cfg = FakeMjlabTermTermCfg(
             func=mjlab_func,
@@ -426,8 +441,9 @@ class TestAdaptedSerialization:
         result = adapt_terminations({"fallen": mjlab_cfg})
         assert result is not None
         d = result["fallen"].to_dict()
-        assert d["name"] == "RootHeightBelowMinimum"
-        assert d["params"]["minimum_height"] == 0.2
+        assert d["kind"] == "termination"
+        ops = [n["op"] for n in d["nodes"]]
+        assert "RootLinkPosW" in ops and "Lt" in ops
 
     def test_adapted_action_serializes(self):
         mjlab_cfg = FakeMjlabJointPositionActionCfg(

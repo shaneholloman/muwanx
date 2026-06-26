@@ -2,6 +2,7 @@
 
 This is a demo application showcasing the usage of mjswan.
 The demo app is hosted on GitHub Pages: https://ttktjmt.github.io/mjswan/
+Run `uv pip install git+https://github.com/ttktjmt/mjlab_myochallenge.git` before running this script.
 """
 
 import os
@@ -37,6 +38,30 @@ from mjswan.managers.observation_manager import (  # noqa: E402
     ObservationTermCfg,
 )
 from mjswan.managers.termination_manager import TerminationTermCfg  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Demo-specific declarative observations (ADR 0003).
+#
+# These are used only by the demo's go2 policies, so they live here as DSL
+# builders rather than core built-ins (the core library carries only generic
+# terms).  Both are ts_src-free, so the demo stays declarative / Cloud-safe.
+# ---------------------------------------------------------------------------
+
+
+def velocity_command_with_oscillators(env, *, command_name: str = "velocity", **_):
+    """Velocity command (3) padded with zeros to 16 dims (oscillator slots)."""
+    del env
+    from mjswan.dsl import command_value, concat, const_vec
+
+    return concat([command_value(command_name), const_vec([0.0] * 13)])
+
+
+def impedance_command(env, **_):
+    """Impedance command placeholder: 27 zeros."""
+    del env
+    from mjswan.dsl import const_vec
+
+    return const_vec([0.0] * 27)
 
 
 def _fix_unitree_mujoco_macos() -> None:
@@ -91,97 +116,97 @@ def _fix_unitree_mujoco_macos() -> None:
 
 # fmt: off
 _G1_JOINT_SCALE = {
-    "left_hip_pitch_joint":      0.5475464629911068,
-    "left_hip_roll_joint":       0.35066146637882434,
-    "left_hip_yaw_joint":        0.5475464629911068,
-    "left_knee_joint":           0.35066146637882434,
-    "left_ankle_pitch_joint":    0.43857731392336724,
-    "left_ankle_roll_joint":     0.43857731392336724,
-    "right_hip_pitch_joint":     0.5475464629911068,
-    "right_hip_roll_joint":      0.35066146637882434,
-    "right_hip_yaw_joint":       0.5475464629911068,
-    "right_knee_joint":          0.35066146637882434,
-    "right_ankle_pitch_joint":   0.43857731392336724,
-    "right_ankle_roll_joint":    0.43857731392336724,
-    "waist_yaw_joint":           0.5475464629911068,
-    "waist_roll_joint":          0.43857731392336724,
-    "waist_pitch_joint":         0.43857731392336724,
-    "left_shoulder_pitch_joint": 0.43857731392336724,
-    "left_shoulder_roll_joint":  0.43857731392336724,
-    "left_shoulder_yaw_joint":   0.43857731392336724,
-    "left_elbow_joint":          0.43857731392336724,
-    "left_wrist_roll_joint":     0.43857731392336724,
-    "left_wrist_pitch_joint":    0.07450087032950714,
-    "left_wrist_yaw_joint":      0.07450087032950714,
+    "left_hip_pitch_joint":       0.5475464629911068,
+    "left_hip_roll_joint":        0.35066146637882434,
+    "left_hip_yaw_joint":         0.5475464629911068,
+    "left_knee_joint":            0.35066146637882434,
+    "left_ankle_pitch_joint":     0.43857731392336724,
+    "left_ankle_roll_joint":      0.43857731392336724,
+    "right_hip_pitch_joint":      0.5475464629911068,
+    "right_hip_roll_joint":       0.35066146637882434,
+    "right_hip_yaw_joint":        0.5475464629911068,
+    "right_knee_joint":           0.35066146637882434,
+    "right_ankle_pitch_joint":    0.43857731392336724,
+    "right_ankle_roll_joint":     0.43857731392336724,
+    "waist_yaw_joint":            0.5475464629911068,
+    "waist_roll_joint":           0.43857731392336724,
+    "waist_pitch_joint":          0.43857731392336724,
+    "left_shoulder_pitch_joint":  0.43857731392336724,
+    "left_shoulder_roll_joint":   0.43857731392336724,
+    "left_shoulder_yaw_joint":    0.43857731392336724,
+    "left_elbow_joint":           0.43857731392336724,
+    "left_wrist_roll_joint":      0.43857731392336724,
+    "left_wrist_pitch_joint":     0.07450087032950714,
+    "left_wrist_yaw_joint":       0.07450087032950714,
     "right_shoulder_pitch_joint": 0.43857731392336724,
-    "right_shoulder_roll_joint": 0.43857731392336724,
-    "right_shoulder_yaw_joint":  0.43857731392336724,
-    "right_elbow_joint":         0.43857731392336724,
-    "right_wrist_roll_joint":    0.43857731392336724,
-    "right_wrist_pitch_joint":   0.07450087032950714,
-    "right_wrist_yaw_joint":     0.07450087032950714,
+    "right_shoulder_roll_joint":  0.43857731392336724,
+    "right_shoulder_yaw_joint":   0.43857731392336724,
+    "right_elbow_joint":          0.43857731392336724,
+    "right_wrist_roll_joint":     0.43857731392336724,
+    "right_wrist_pitch_joint":    0.07450087032950714,
+    "right_wrist_yaw_joint":      0.07450087032950714,
 }
 _G1_JOINT_STIFFNESS = {
-    "left_hip_pitch_joint":      40.17923863450712,
-    "left_hip_roll_joint":       99.09842777666111,
-    "left_hip_yaw_joint":        40.17923863450712,
-    "left_knee_joint":           99.09842777666111,
-    "left_ankle_pitch_joint":    28.50124619574858,
-    "left_ankle_roll_joint":     28.50124619574858,
-    "right_hip_pitch_joint":     40.17923863450712,
-    "right_hip_roll_joint":      99.09842777666111,
-    "right_hip_yaw_joint":       40.17923863450712,
-    "right_knee_joint":          99.09842777666111,
-    "right_ankle_pitch_joint":   28.50124619574858,
-    "right_ankle_roll_joint":    28.50124619574858,
-    "waist_yaw_joint":           40.17923863450712,
-    "waist_roll_joint":          28.50124619574858,
-    "waist_pitch_joint":         28.50124619574858,
-    "left_shoulder_pitch_joint": 14.25062309787429,
-    "left_shoulder_roll_joint":  14.25062309787429,
-    "left_shoulder_yaw_joint":   14.25062309787429,
-    "left_elbow_joint":          14.25062309787429,
-    "left_wrist_roll_joint":     14.25062309787429,
-    "left_wrist_pitch_joint":    16.77832748089279,
-    "left_wrist_yaw_joint":      16.77832748089279,
+    "left_hip_pitch_joint":       40.17923863450712,
+    "left_hip_roll_joint":        99.09842777666111,
+    "left_hip_yaw_joint":         40.17923863450712,
+    "left_knee_joint":            99.09842777666111,
+    "left_ankle_pitch_joint":     28.50124619574858,
+    "left_ankle_roll_joint":      28.50124619574858,
+    "right_hip_pitch_joint":      40.17923863450712,
+    "right_hip_roll_joint":       99.09842777666111,
+    "right_hip_yaw_joint":        40.17923863450712,
+    "right_knee_joint":           99.09842777666111,
+    "right_ankle_pitch_joint":    28.50124619574858,
+    "right_ankle_roll_joint":     28.50124619574858,
+    "waist_yaw_joint":            40.17923863450712,
+    "waist_roll_joint":           28.50124619574858,
+    "waist_pitch_joint":          28.50124619574858,
+    "left_shoulder_pitch_joint":  14.25062309787429,
+    "left_shoulder_roll_joint":   14.25062309787429,
+    "left_shoulder_yaw_joint":    14.25062309787429,
+    "left_elbow_joint":           14.25062309787429,
+    "left_wrist_roll_joint":      14.25062309787429,
+    "left_wrist_pitch_joint":     16.77832748089279,
+    "left_wrist_yaw_joint":       16.77832748089279,
     "right_shoulder_pitch_joint": 14.25062309787429,
-    "right_shoulder_roll_joint": 14.25062309787429,
-    "right_shoulder_yaw_joint":  14.25062309787429,
-    "right_elbow_joint":         14.25062309787429,
-    "right_wrist_roll_joint":    14.25062309787429,
-    "right_wrist_pitch_joint":   16.77832748089279,
-    "right_wrist_yaw_joint":     16.77832748089279,
+    "right_shoulder_roll_joint":  14.25062309787429,
+    "right_shoulder_yaw_joint":   14.25062309787429,
+    "right_elbow_joint":          14.25062309787429,
+    "right_wrist_roll_joint":     14.25062309787429,
+    "right_wrist_pitch_joint":    16.77832748089279,
+    "right_wrist_yaw_joint":      16.77832748089279,
 }
 _G1_JOINT_DAMPING = {
-    "left_hip_pitch_joint":      2.557889775413375,
-    "left_hip_roll_joint":       6.308801853496639,
-    "left_hip_yaw_joint":        2.557889775413375,
-    "left_knee_joint":           6.308801853496639,
-    "left_ankle_pitch_joint":    1.814445686584846,
-    "left_ankle_roll_joint":     1.814445686584846,
-    "right_hip_pitch_joint":     2.557889775413375,
-    "right_hip_roll_joint":      6.308801853496639,
-    "right_hip_yaw_joint":       2.557889775413375,
-    "right_knee_joint":          6.308801853496639,
-    "right_ankle_pitch_joint":   1.814445686584846,
-    "right_ankle_roll_joint":    1.814445686584846,
-    "waist_yaw_joint":           2.557889775413375,
-    "waist_roll_joint":          1.814445686584846,
-    "waist_pitch_joint":         1.814445686584846,
-    "left_shoulder_pitch_joint": 0.907222843292423,
-    "left_shoulder_roll_joint":  0.907222843292423,
-    "left_shoulder_yaw_joint":   0.907222843292423,
-    "left_elbow_joint":          0.907222843292423,
-    "left_wrist_roll_joint":     0.907222843292423,
-    "left_wrist_pitch_joint":    1.06814150219,
-    "left_wrist_yaw_joint":      1.06814150219,
+    "left_hip_pitch_joint":       2.557889775413375,
+    "left_hip_roll_joint":        6.308801853496639,
+    "left_hip_yaw_joint":         2.557889775413375,
+    "left_knee_joint":            6.308801853496639,
+    "left_ankle_pitch_joint":     1.814445686584846,
+    "left_ankle_roll_joint":      1.814445686584846,
+    "right_hip_pitch_joint":      2.557889775413375,
+    "right_hip_roll_joint":       6.308801853496639,
+    "right_hip_yaw_joint":        2.557889775413375,
+    "right_knee_joint":           6.308801853496639,
+    "right_ankle_pitch_joint":    1.814445686584846,
+    "right_ankle_roll_joint":     1.814445686584846,
+    "waist_yaw_joint":            2.557889775413375,
+    "waist_roll_joint":           1.814445686584846,
+    "waist_pitch_joint":          1.814445686584846,
+    "left_shoulder_pitch_joint":  0.907222843292423,
+    "left_shoulder_roll_joint":   0.907222843292423,
+    "left_shoulder_yaw_joint":    0.907222843292423,
+    "left_elbow_joint":           0.907222843292423,
+    "left_wrist_roll_joint":      0.907222843292423,
+    "left_wrist_pitch_joint":     1.06814150219,
+    "left_wrist_yaw_joint":       1.06814150219,
     "right_shoulder_pitch_joint": 0.907222843292423,
-    "right_shoulder_roll_joint": 0.907222843292423,
-    "right_shoulder_yaw_joint":  0.907222843292423,
-    "right_elbow_joint":         0.907222843292423,
-    "right_wrist_roll_joint":    0.907222843292423,
-    "right_wrist_pitch_joint":   1.06814150219,
-    "right_wrist_yaw_joint":     1.06814150219,
+    "right_shoulder_roll_joint":  0.907222843292423,
+    "right_shoulder_yaw_joint":   0.907222843292423,
+    "right_elbow_joint":          0.907222843292423,
+    "right_wrist_roll_joint":     0.907222843292423,
+    "right_wrist_pitch_joint":    1.06814150219,
+    "right_wrist_yaw_joint":      1.06814150219,
 }
 # fmt: on
 
@@ -272,19 +297,19 @@ def _add_g1_scene(project) -> None:
                         func=obs_fns.base_ang_vel, history_length=1
                     ),
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity_isaac,
+                        func=obs_fns.projected_gravity,
                         history_length=1,
                         params={"gravity": [0, 0, -1.0]},
                     ),
                     "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_positions_isaac, history_length=1
+                        func=obs_fns.joint_pos_rel, history_length=1
                     ),
                     "joint_vel": ObservationTermCfg(
                         func=obs_fns.joint_vel_rel,
                         params={"joint_names": "isaac"},
                         history_length=1,
                     ),
-                    "prev_actions": ObservationTermCfg(func=obs_fns.previous_actions),
+                    "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }
             )
         },
@@ -317,10 +342,10 @@ def _add_go2_scene(project) -> None:
         "policy": ObservationGroupCfg(
             terms={
                 "projected_gravity": ObservationTermCfg(
-                    func=obs_fns.projected_gravity_isaac, history_length=3
+                    func=obs_fns.projected_gravity, history_length=3
                 ),
                 "joint_pos": ObservationTermCfg(
-                    func=obs_fns.joint_positions_isaac, history_length=3
+                    func=obs_fns.joint_pos_rel, history_length=3
                 ),
                 "joint_vel": ObservationTermCfg(
                     func=obs_fns.joint_vel_rel,
@@ -328,7 +353,7 @@ def _add_go2_scene(project) -> None:
                     history_length=3,
                 ),
                 "prev_actions": ObservationTermCfg(
-                    func=obs_fns.previous_actions,
+                    func=obs_fns.last_action,
                     history_length=3,
                     params={"transpose": True},
                 ),
@@ -337,7 +362,7 @@ def _add_go2_scene(project) -> None:
         "command_": ObservationGroupCfg(
             terms={
                 "velocity_cmd": ObservationTermCfg(
-                    func=obs_fns.velocity_command_with_oscillators
+                    func=velocity_command_with_oscillators
                 ),
             }
         ),
@@ -352,10 +377,10 @@ def _add_go2_scene(project) -> None:
             "policy": ObservationGroupCfg(
                 terms={
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity_isaac, history_length=3
+                        func=obs_fns.projected_gravity, history_length=3
                     ),
                     "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_positions_isaac,
+                        func=obs_fns.joint_pos_rel,
                         history_length=3,
                         params={"subtract_default": False},
                     ),
@@ -365,7 +390,7 @@ def _add_go2_scene(project) -> None:
                         history_length=3,
                     ),
                     "prev_actions": ObservationTermCfg(
-                        func=obs_fns.previous_actions,
+                        func=obs_fns.last_action,
                         history_length=3,
                         params={"transpose": True},
                     ),
@@ -373,7 +398,7 @@ def _add_go2_scene(project) -> None:
             ),
             "command": ObservationGroupCfg(
                 terms={
-                    "impedance_cmd": ObservationTermCfg(func=obs_fns.impedance_command),
+                    "impedance_cmd": ObservationTermCfg(func=impedance_command),
                 }
             ),
         },
@@ -441,7 +466,7 @@ def _add_go1_scene(project) -> None:
             "obs_history": ObservationGroupCfg(
                 terms={
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity_isaac, history_length=1
+                        func=obs_fns.projected_gravity, history_length=1
                     ),
                     "velocity_cmd": ObservationTermCfg(
                         func=obs_fns.generated_commands,
@@ -449,7 +474,7 @@ def _add_go1_scene(project) -> None:
                         scale=(2.0, 2.0, 0.25),
                     ),
                     "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_positions_isaac, history_length=1
+                        func=obs_fns.joint_pos_rel, history_length=1
                     ),
                     "joint_vel": ObservationTermCfg(
                         func=obs_fns.joint_vel_rel,
@@ -457,7 +482,7 @@ def _add_go1_scene(project) -> None:
                         scale=0.05,
                         history_length=1,
                     ),
-                    "prev_actions": ObservationTermCfg(func=obs_fns.previous_actions),
+                    "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }
             )
         },

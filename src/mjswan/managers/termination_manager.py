@@ -22,7 +22,7 @@ Example (identical to mjlab)::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..envs.mdp.terminations import TermFunc
 
@@ -32,13 +32,23 @@ class TerminationTermCfg:
     """Configuration for a single termination term.
 
     Mirrors ``mjlab.managers.termination_manager.TerminationTermCfg``.
+
+    ``func`` accepts either:
+
+    - A legacy :class:`TermFunc` sentinel: the build emits the existing
+      ``{"name": ..., "params": ...}`` shape and the engine resolves the
+      class from its registry.
+    - A plain Python callable taking ``(env, **params)``: the build traces
+      the function against a symbolic env (see :mod:`mjswan.dsl`) and emits
+      the composition graph instead.  This is the declarative path described
+      in ADR 0003.
     """
 
-    func: TermFunc
-    """Termination function sentinel that maps to a TS termination class."""
+    func: TermFunc | Callable[..., Any]
+    """Termination function — TermFunc sentinel (legacy) or DSL callable."""
 
     params: dict[str, Any] = field(default_factory=dict)
-    """Additional keyword arguments forwarded to the TS termination constructor."""
+    """Additional keyword arguments forwarded to the function or TS constructor."""
 
     time_out: bool = False
     """Whether this term is a truncation (time-based) rather than a
@@ -47,23 +57,32 @@ class TerminationTermCfg:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for the TS ``TerminationManager``.
 
-        Produces an entry of the form::
-
-            {"name": "BadOrientation", "params": {"limit_angle": 1.0}, "time_out": true}
+        Legacy ``TermFunc`` produces ``{"name": ..., "params": ..., "time_out": ...}``.
+        A DSL callable produces ``{"kind": "termination", "nodes": [...], ...}``.
         """
-        if self.func.unsupported_reason is not None:
-            raise NotImplementedError(self.func.unsupported_reason)
+        if isinstance(self.func, TermFunc):
+            return self._to_dict_legacy()
+        return self._to_dict_traced()
 
-        entry: dict[str, Any] = {"name": self.func.ts_name}
+    def _to_dict_legacy(self) -> dict[str, Any]:
+        func: TermFunc = self.func  # type: ignore[assignment]
+        if func.unsupported_reason is not None:
+            raise NotImplementedError(func.unsupported_reason)
 
-        # Merge function defaults with explicit params
-        merged: dict[str, Any] = {**self.func.defaults, **self.params}
+        entry: dict[str, Any] = {"name": func.ts_name}
+        merged: dict[str, Any] = {**func.defaults, **self.params}
         if merged:
             entry["params"] = merged
-
         if self.time_out:
             entry["time_out"] = True
+        return entry
 
+    def _to_dict_traced(self) -> dict[str, Any]:
+        from ..dsl import trace_termination
+
+        entry = trace_termination(self.func, self.params)  # type: ignore[arg-type]
+        if self.time_out:
+            entry["time_out"] = True
         return entry
 
 

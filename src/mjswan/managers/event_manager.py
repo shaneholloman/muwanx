@@ -7,7 +7,7 @@ position randomization.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..envs.mdp.events import EventFunc
 
@@ -18,24 +18,35 @@ class EventTermCfg:
 
     Mirrors ``mjlab.managers.event_manager.EventTermCfg``.
     Only ``mode="reset"`` events are supported in the browser runtime.
+
+    ``func`` accepts either:
+
+    - A legacy :class:`EventFunc` sentinel: emits ``{"name": ..., "params": ...}``
+      and the engine resolves the class from its registry.
+    - A DSL builder ``func(env, **params) -> list[Mutation]``: the build traces
+      it into a ``{"kind": "event", "mutations": [...]}`` envelope (ADR 0003).
     """
 
-    func: EventFunc
-    """Event function sentinel that maps to a TS event class."""
+    func: EventFunc | Callable[..., Any]
+    """Event function — EventFunc sentinel (legacy) or DSL mutation builder."""
 
     mode: str = "reset"
     """Event trigger mode. Only ``"reset"`` is handled by the browser runtime."""
 
     params: dict[str, Any] = field(default_factory=dict)
-    """Parameters forwarded to the TS event constructor."""
+    """Parameters forwarded to the TS event constructor or DSL builder."""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for the TS ``EventManager``."""
-        entry: dict[str, Any] = {"name": self.func.ts_name}
-        merged: dict[str, Any] = {**self.func.defaults, **self.params}
-        if merged:
-            entry["params"] = merged
-        return entry
+        if isinstance(self.func, EventFunc):
+            entry: dict[str, Any] = {"name": self.func.ts_name}
+            merged: dict[str, Any] = {**self.func.defaults, **self.params}
+            if merged:
+                entry["params"] = merged
+            return entry
+        from ..dsl import trace_event
+
+        return trace_event(self.func, self.params)
 
 
 __all__ = ["EventTermCfg"]
