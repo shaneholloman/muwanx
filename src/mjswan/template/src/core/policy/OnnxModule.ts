@@ -101,6 +101,12 @@ export class OnnxModule {
     return [result, carry];
   }
 
+  /** Release the ONNX Runtime session, freeing its WASM memory. */
+  dispose(): void {
+    void this.session?.release?.();
+    this.session = null;
+  }
+
   private inferInputKeys(): void {
     if (!this.session) {
       return;

@@ -119,7 +119,7 @@ const MjswanViewer = ({
 
     return () => {
       cancelled = true;
-      runtimeRef.current?.dispose();
+      void runtimeRef.current?.dispose();
       runtimeRef.current = null;
     };
   }, [scenePath, baseUrl, policyConfigPath, cameraConfig, eventsConfig, terrainData, onStatusChange, onError, onReady]);

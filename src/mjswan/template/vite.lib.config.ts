@@ -81,10 +81,11 @@ function extractInlinedWasmPlugin(): Plugin {
           )
           .replace(
             ESCAPED,
-            (_m, b64: string) =>
-              // Inside an escaped worker string: keep `\"` quoting; base is
-              // dormant (worker never runs single-threaded).
-              `new URL(\\"./${fileFor(b64)}\\", self.location.href)`
+            (m, b64: string) => {
+              // Keep small active-worker wasm (Spark) inline; only extract large dormant wasm.
+              if (b64.length < 1_000_000) return m;
+              return `new URL(\\"./${fileFor(b64)}\\", self.location.href)`;
+            }
           );
 
       for (const [fileName, chunk] of Object.entries(bundle)) {

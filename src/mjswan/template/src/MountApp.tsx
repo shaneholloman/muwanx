@@ -26,9 +26,11 @@ interface MountAppProps {
   baseUrl: string;
   onReady?: () => void;
   onError?: (error: Error) => void;
+  /** Surfaces the runtime to the caller (used by `mount()` for `captureThumbnail`). */
+  onRuntimeReady?: (runtime: mjswanRuntime) => void;
 }
 
-function MountAppContent({ config, baseUrl, onReady, onError }: MountAppProps) {
+function MountAppContent({ config, baseUrl, onReady, onError, onRuntimeReady }: MountAppProps) {
   const initialProject = useMemo(
     () => config.projects.find((p) => p.id === null) ?? config.projects[0] ?? null,
     [config]
@@ -150,9 +152,13 @@ function MountAppContent({ config, baseUrl, onReady, onError }: MountAppProps) {
     [setLoadingMessage]
   );
 
-  const handleRuntimeReady = useCallback((runtime: mjswanRuntime) => {
-    runtimeRef.current = runtime;
-  }, []);
+  const handleRuntimeReady = useCallback(
+    (runtime: mjswanRuntime) => {
+      runtimeRef.current = runtime;
+      onRuntimeReady?.(runtime);
+    },
+    [onRuntimeReady]
+  );
 
   const handleProjectChange = useCallback(
     (value: string | null) => {

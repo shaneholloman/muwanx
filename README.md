@@ -41,7 +41,7 @@
 
 ## News
 
-- **2026-05-06**: Adopted for the [MuscleMimic](https://github.com/amathislab/musclemimic) live demo [[Demo](https://mjswan-musclemimic.pages.dev/)]
+- **2026-06-02**: Adopted for the [MuscleMimic](https://github.com/amathislab/musclemimic) live demo [[Demo](https://mjswan-musclemimic.pages.dev/)]
 - **2026-05-06**: Adopted for the [GentleHumanoid](https://gentle-humanoid.axell.top/#/) live demo [[Demo](https://mjswan-gentlehumanoid.pages.dev/), [X](https://x.com/Axell_wppr/status/2051878574874148953)]
 - **2026-04-08**: Featured in the [MuJoCo README](https://github.com/google-deepmind/mujoco#first-party-bindings)
 

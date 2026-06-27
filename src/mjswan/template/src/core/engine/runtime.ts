@@ -1404,6 +1404,46 @@ export class mjswanRuntime {
     this.renderer.render(this.scene, this.camera);
   };
 
+  /**
+   * Capture the current view as a JPEG Blob. Renders one frame and immediately
+   * copies it into a 2D canvas in the same synchronous turn, so it works without
+   * `preserveDrawingBuffer` — the WebGL drawing buffer is still intact before the
+   * browser composites. Used by the upload preview's "Scan thumbnail" (ADR 0005).
+   */
+  async captureThumbnail(options: { maxDim?: number; quality?: number } = {}): Promise<Blob> {
+    const { maxDim = 1280, quality = 0.85 } = options;
+    const src = this.renderer.domElement;
+
+    this.renderer.render(this.scene, this.camera);
+
+    const sw = src.width;
+    const sh = src.height;
+    if (!sw || !sh) {
+      throw new Error('mjswan: canvas has zero size; nothing to capture.');
+    }
+
+    const scale = Math.min(1, maxDim / Math.max(sw, sh));
+    const dw = Math.max(1, Math.round(sw * scale));
+    const dh = Math.max(1, Math.round(sh * scale));
+
+    const out = document.createElement('canvas');
+    out.width = dw;
+    out.height = dh;
+    const ctx = out.getContext('2d');
+    if (!ctx) {
+      throw new Error('mjswan: failed to get a 2D context for thumbnail capture.');
+    }
+    ctx.drawImage(src, 0, 0, dw, dh);
+
+    return await new Promise<Blob>((resolve, reject) => {
+      out.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error('mjswan: toBlob returned null.'))),
+        'image/jpeg',
+        quality
+      );
+    });
+  }
+
   private onWindowResize = (): void => {
     const { width, height } = this.getSize();
     this.camera.aspect = width / height;
@@ -1411,20 +1451,38 @@ export class mjswanRuntime {
     this.renderer.setSize(width, height);
   };
 
-  dispose(): void {
-    this.stop();
+  async dispose(): Promise<void> {
+    // Await stop so the loop halts before we free the state it reads.
+    await this.stop();
     this.policyRunner = null;
     this.policyStateBuilder = null;
     this.policyConfigPath = null;
+
+    // ONNX session, splat, and collider are not cache-managed; free them here
+    // or they leak across navigations (a live splat worker freezes the tab).
+    if (this.onnxModule) {
+      this.onnxModule.dispose();
+      this.onnxModule = null;
+    }
+    this.onnxInputDict = null;
+    this.onnxInferencing = false;
+    if (this.splatMesh) {
+      disposeSplat(this.splatMesh, this.scene);
+      this.splatMesh = null;
+    }
+    if (this.colliderMesh) {
+      disposeCollider(this.colliderMesh, this.scene);
+      this.colliderMesh = null;
+    }
 
     if (this.dragStateManager) {
       this.dragStateManager.dispose();
       this.dragStateManager = null;
     }
 
-    // NOTE: Do NOT delete mjData/mjModel here as they may be cached
-    // The cache manager will handle their disposal when evicting
-    // Just clear references
+    // Cached scenes hold MjModel/MjData bound to this per-mount mujoco module; drop them and reset the singleton so the next mount rebuilds against its own module (else restoreFromCache hits a cross-module embind mismatch).
+    await this.sceneCacheManager.clear();
+    SceneCacheManager.resetInstance();
     this.mjData = null;
     this.mjModel = null;
 
