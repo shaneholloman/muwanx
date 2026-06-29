@@ -1,29 +1,21 @@
-# mjswan Web Viewer
+# mjswan web engine
 
-Browser-based interactive viewer for MuJoCo robotics simulations with real-time policy control.
+[![npm version](https://img.shields.io/npm/v/mjswan.svg?logo=nodedotjs)](https://www.npmjs.com/package/mjswan)
+[![docs](https://img.shields.io/readthedocs/mjswan?logo=readthedocs)](https://mjswan.readthedocs.io)
 
-## Overview
+Browser-side runtime for [mjswan](https://github.com/ttktjmt/mjswan). Interactive MuJoCo
+simulations with real-time policy control, running entirely in the browser via WebAssembly.
 
-A React + TypeScript application that runs MuJoCo physics simulations entirely in the browser using WebAssembly, featuring 3D visualization with Three.js and real-time ONNX policy execution.
+The package runs MuJoCo physics ([mujoco-wasm](https://github.com/google-deepmind/mujoco/tree/main/javascript)),
+renders with [three.js](https://github.com/mrdoob/three.js), and executes policies with
+[ONNX Runtime Web](https://github.com/microsoft/onnxruntime).
 
-## Key Features
-
-- MuJoCo physics simulation via WebAssembly
-- Interactive 3D rendering with Three.js
-- Real-time ONNX policy execution
-- Drag-to-apply forces on objects
-- Multi-project and multi-scene support
-- WebXR/VR ready
-- Static site output for easy deployment
-
-## Technology Stack
-
-- React 18 + TypeScript
-- Three.js (WebGL 2.0)
-- MuJoCo WebAssembly ([mujoco-js](https://github.com/google-deepmind/mujoco/tree/main/javascript))
-- ONNX Runtime Web
-- Mantine UI
-- Vite
+> **Most users want the Python package.** mjswan is primarily authored in Python
+> (`pip install mjswan`), which bundles your models, policies, and UI into a static
+> site. This npm package is the browser side, and is useful directly in two cases:
+> **embedding** a published simulation in your own page, and **authoring custom MDP
+> terms** in TypeScript with full type support. See the
+> [documentation](https://mjswan.readthedocs.io) for the full Python workflow.
 
 ## Installation
 
@@ -31,141 +23,102 @@ A React + TypeScript application that runs MuJoCo physics simulations entirely i
 npm install mjswan
 ```
 
-## Embedding a published simulation (`mount`)
+Requires Node.js 20+ and a bundler that handles TypeScript sources (Vite recommended.
+See [Custom MDP terms](#custom-mdp-terms) below for why).
 
-The package ships a self-contained library build (`dist/mjswan.js`) that renders
-a published mjswan simulation into any element. It bundles every dependency and
-co-locates its WASM, so it can be loaded directly from a CDN:
+## Embedding a simulation (`mount`)
+
+The package ships a self-contained library build (`dist/mjswan.js`) that renders a
+published mjswan simulation into any element. It bundles every dependency and co-locates
+its WASM, runs single-threaded by default (no COOP/COEP headers needed), and works
+cross-origin — so it can be loaded straight from a CDN:
 
 ```js
 const { mount } = await import(
-  'https://cdn.jsdelivr.net/npm/mjswan@<version>/dist/mjswan.js'
+  'https://cdn.jsdelivr.net/npm/mjswan@0.7.1/dist/mjswan.js'
 );
-// configUrl points at a published simulation's config.json; every other asset
+
+// `source` points at a published simulation's config.json; every other asset
 // (scene.mjz, policy.onnx/json, motion.npz, splats) resolves relative to it.
-await mount(container, 'https://cdn.mjswan.com/mjswan/scenes/<id>/config.json');
+const sim = await mount(container, 'https://cdn.mjswan.com/scenes/<id>/config.json');
 ```
 
-It runs single-threaded by default (no COOP/COEP needed) and works cross-origin.
-See mjswan-cloud ADR 0001.
+Or as a normal bundled import:
 
-## Development
+```ts
+import { mount } from 'mjswan';
 
-```bash
-# Install dependencies
-npm install
-
-# Start dev server
-npm run dev
-
-# Build for production
-npm run build
-
-# Type check
-npm run typecheck
-
-# Lint
-npm run lint
+const sim = await mount(document.getElementById('viewer')!, configUrl);
 ```
 
-## Configuration
+`mount(element, source)` resolves, once the first scene is running, to an instance:
 
-The viewer requires a configuration file at `assets/config.json`:
-
-```json
-{
-  "version": "0.0.4",
-  "projects": [
-    {
-      "name": "Project Name",
-      "id": "project_id",
-      "scenes": [
-        {
-          "name": "Scene Name",
-          "path": "scene/scene_name/scene.xml",
-          "policies": [
-            {
-              "name": "Policy Name",
-              "source": "policy/scene_name/policy.onnx"
-            }
-          ]
-        }
-      ]
-    }
-  ]
+```ts
+interface MjswanInstance {
+  // Capture the current frame as a JPEG Blob.
+  captureThumbnail(options?: { maxDim?: number; quality?: number }): Promise<Blob>;
+  // Tear down the simulation and free resources.
+  dispose(): void;
 }
 ```
 
-### Asset Structure
+`source` is either a **config.json URL** (assets resolve against its directory) or an
+**in-memory file resolver** `{ resolve(path): Promise<ArrayBuffer | null> }` for rendering
+locally-selected files without an upload round-trip. Call `unmount(element)` to dispose a
+mounted instance by its host element.
 
-```
-assets/
-├── config.json
-├── scene/
-│   └── {scene_name}/
-│       └── scene.xml
-└── policy/
-    └── {scene_name}/
-        └── {policy}.onnx
-```
+## Custom MDP terms
 
-## URL Routing
+When authoring custom observations, commands, events, or terminations for a mjswan
+simulation, import the base classes and helpers from subpath exports instead of fragile
+relative paths. Install mjswan as a dev dependency and import directly:
 
-- `/` - Default project
-- `/{project-id}/` - Specific project
-- `?scene={name}&policy={name}` - Pre-select scene and policy
-- `?panel=0` - Start with the control panel hidden
+```ts
+import { ObservationBase } from 'mjswan/observation';
+import { mjcToThreeCoordinate } from 'mjswan/coordinate';
+import type { PolicyState } from 'mjswan/types';
 
-## Core Architecture
+export class MyObservation extends ObservationBase {
+  get size(): number {
+    return 3;
+  }
 
-### mjswanRuntime
-
-Manages simulation, rendering, policy inference, and user interactions.
-Located in [src/core/runtime.ts](src/core/runtime.ts)
-
-### Scene Loading
-
-Handles MJCF XML parsing, asset loading, and Three.js mesh generation.
-Located in [src/core/scene.ts](src/core/scene.ts)
-
-### Policy Execution
-
-1. Extract observations from MuJoCo state
-2. Run ONNX inference
-3. Apply actions to simulation
-
-## Project Structure
-
-```
-src/
-├── App.tsx                  # Main application with routing
-├── index.tsx                # Application entry point
-├── index.css                # Global styles
-├── components/              # React components
-│   └── mjswanViewer.tsx    # Main viewer component
-├── core/                    # Core engine
-│   ├── engine/             # Physics simulation
-│   ├── scene/              # Three.js scene setup
-│   └── utils/              # Helper utilities
-├── types/                   # TypeScript type definitions
-└── utils/                   # Utility functions
+  compute(state: PolicyState): Float32Array {
+    // ... read MuJoCo state, return the observation vector
+  }
+}
 ```
 
-### Base Path Configuration
+The build step bundles your source into the engine. See the
+[examples](https://github.com/ttktjmt/mjswan/tree/main/examples) for complete custom terms.
 
-For subdirectory deployment, update `vite.config.ts`:
+> Subpath exports point at TypeScript source (not compiled `.d.ts`), so consumers need a
+> bundler that handles TypeScript. Vite does; plain `tsc` does not. This keeps full IDE
+> IntelliSense without a separate types package — see
+> [ADR 0001](https://github.com/ttktjmt/mjswan/blob/main/docs/adr/0001-npm-self-reference-for-custom-mdp-imports.md).
 
-```typescript
-export default defineConfig({
-  base: '/your-repo-name/',
-})
-```
+### Available subpaths
+
+| Import | Provides |
+|---|---|
+| `mjswan` | `mount`, `unmount` (the runtime library build) |
+| `mjswan/observation` | `ObservationBase`, `ObservationConfig` |
+| `mjswan/command` | `CommandManager`, command types and helpers |
+| `mjswan/event` | `EventBase`, event config and context types |
+| `mjswan/termination` | `TerminationBase`, termination config types |
+| `mjswan/scene` | Scene helpers (`getPosition`, `getQuaternion`, …) |
+| `mjswan/npz` | `.npz` loading (`loadNpz`, `NpzEntry`) |
+| `mjswan/coordinate` | MuJoCo ↔ three.js coordinate conversions |
+| `mjswan/math` | Quaternion / vector math utilities |
+| `mjswan/types` | Shared types (`PolicyState`, `PolicyRunner`, …) |
+
+## Links
+
+- **Documentation**: [mjswan.readthedocs.io](https://mjswan.readthedocs.io)
+- **Repository**: [github.com/ttktjmt/mjswan](https://github.com/ttktjmt/mjswan)
+- **Python package**: [pypi.org/project/mjswan](https://pypi.org/project/mjswan)
+- **Live demo**: [ttktjmt.github.io/mjswan](https://ttktjmt.github.io/mjswan)
 
 ## License
 
 Apache-2.0
-
-## Links
-
-- **Repository**: [github.com/ttktjmt/mjswan](https://github.com/ttktjmt/mjswan)
-- **Author**: Tatsuki Tsujimoto

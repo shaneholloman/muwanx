@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import posixpath
+import re
 import struct
 import xml.etree.ElementTree as ET
 import zipfile
@@ -355,12 +356,20 @@ def to_zip_deflated(spec: mujoco.MjSpec, file: Union[str, IO[bytes]]) -> None:
 
 
 def name2id(name: str) -> str:
-    """Convert a name to a URL-friendly identifier (lowercase, spaces/hyphens → underscores).
+    """Convert a name to a URL-friendly identifier.
+
+    Lowercases, then collapses every run of non-alphanumeric characters into a
+    single underscore. Anything outside ``[a-z0-9]`` (spaces, hyphens, and also
+    apostrophes/parentheses/accents) is normalized so the result is safe as a
+    storage object key — an unescaped ``'`` in an R2/S3 key breaks the presigned
+    SigV4 upload signature.
 
     Examples:
         >>> name2id("My Project")
         'my_project'
         >>> name2id("Test-Scene")
         'test_scene'
+        >>> name2id("Newton's Cradle")
+        'newton_s_cradle'
     """
-    return name.lower().replace(" ", "_").replace("-", "_")
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
