@@ -1,4 +1,4 @@
-from mjswan.wandb_utils import resolve_wandb_artifact_path
+from mjswan.wandb_io import resolve_wandb_artifact_path
 
 
 class TestResolveWandbArtifactPath:

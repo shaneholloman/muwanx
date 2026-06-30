@@ -25,7 +25,7 @@ from rich.progress import (
 
 from . import __version__
 from ._build_client import ClientBuilder
-from .app import mjswanApp
+from .app import MjswanApp
 from .envs.mdp.actions.actions import (
     MuscleActivationActionCfg,
     validate_muscle_actuators,
@@ -121,8 +121,9 @@ class Builder:
                 via mjlab+torch (both required). ``task_id`` above is reused
                 for the conversion. Defaults to ``None`` (no policy attached).
                 For finer control (e.g. ``only_latest=True``, custom
-                observations/actions), drop down to
-                ``builder.get_projects()[0].scenes[0].add_policy_from_wandb(...)``.
+                observations/actions), build manually with
+                :meth:`add_project` → :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`
+                → :meth:`~mjswan.scene.SceneHandle.add_policy_wandb`.
             project_name: Name for the auto-created project. Defaults to ``"mjlab"``.
             play: Whether to load mjlab's play/evaluation config instead of the
                 training config for the auto-created scene.
@@ -151,11 +152,43 @@ class Builder:
             ```
         """
         builder = cls(base_path=base_path, gtm_id=gtm_id, mt=mt, debug=debug)
-        project = builder.add_project(name=project_name)
-        scene = project.add_mjlab_scene(task_id, play=play)
-        if run_path is not None:
-            scene.add_policy_from_wandb(run_path, task_id=task_id)
+        builder.add_project_mjlab(
+            task_id, run_path=run_path, project_name=project_name, play=play
+        )
         return builder
+
+    def add_project_mjlab(
+        self,
+        task_id: str,
+        *,
+        run_path: str | list[str] | None = None,
+        project_name: str = "mjlab",
+        play: bool = False,
+    ) -> ProjectHandle:
+        """Add a project pre-configured with a single mjlab task.
+
+        Convenience for the common pattern of visualizing one mjlab task:
+        creates a project, adds the mjlab scene, and (optionally) attaches all
+        ``model_*.pt`` checkpoints from one or more W&B runs as ONNX policies.
+
+        Args:
+            task_id: mjlab task identifier (e.g. ``"go2_flat"``).
+            run_path: Optional W&B run path (``"entity/project/run_id"``) or a
+                list of such paths. When provided, all checkpoints are fetched
+                and converted to ONNX via mjlab+torch (both required) using
+                ``task_id``. Defaults to ``None`` (no policy attached).
+            project_name: Name for the created project. Defaults to ``"mjlab"``.
+            play: Load mjlab's play/evaluation config instead of the training
+                config for the created scene.
+
+        Returns:
+            ProjectHandle for the created project.
+        """
+        project = self.add_project(name=project_name)
+        scene = project.add_scene_mjlab(task_id, play=play)
+        if run_path is not None:
+            scene.add_policy_wandb(run_path, task_id=task_id)
+        return project
 
     def add_project(self, name: str, *, id: str | None = None) -> ProjectHandle:
         """Add a new project to the builder.
@@ -180,10 +213,10 @@ class Builder:
         self._projects.append(project)
         return ProjectHandle(project, self)
 
-    def build(self, output_dir: str | Path | None = None) -> mjswanApp:
+    def build(self, output_dir: str | Path | None = None) -> MjswanApp:
         """Build the application from the configured projects.
 
-        This method finalizes the configuration and creates a mjswanApp
+        This method finalizes the configuration and creates a MjswanApp
         instance. If output_dir is provided, it also saves the application
         to that directory. If output_dir is not provided, it defaults to
         'dist' in the caller's directory.
@@ -193,7 +226,7 @@ class Builder:
                        If None, defaults to 'dist' in the caller's directory.
 
         Returns:
-            mjswanApp instance ready to be launched.
+            MjswanApp instance ready to be launched.
         """
         if not self._projects:
             raise ValueError(
@@ -224,7 +257,7 @@ class Builder:
         # TODO: Build with separate function (and then save the web app with _save_web). And set scene.path and policy.path after building.
         self._save_web(output_path)
 
-        return mjswanApp(output_path)
+        return MjswanApp(output_path)
 
     def _save_config_json(self, output_path: Path) -> None:
         """Save configuration as JSON.
@@ -522,7 +555,7 @@ class Builder:
                 shutil.copy(str(root_index), str(project_dir / "index.html"))
 
             # Copy static root assets
-            for static_name in ["manifest.json", "logo.svg", "logo-color.svg"]:
+            for static_name in ["manifest.json", "logo.svg"]:
                 src_static = output_path / static_name
                 if src_static.exists():
                     shutil.copy(str(src_static), str(project_dir / static_name))
@@ -704,13 +737,13 @@ class Builder:
                                     for name, cfg in policy.actions.items()
                                 }
                             if policy.terminations:
-                                from .envs.mdp.terminations import TermFunc
+                                from .envs.mdp.terminations import TerminationBinding
 
                                 terminations = {
                                     name: cfg.to_dict()
                                     for name, cfg in policy.terminations.items()
                                     if not (
-                                        isinstance(cfg.func, TermFunc)
+                                        isinstance(cfg.func, TerminationBinding)
                                         and cfg.func.unsupported_reason is not None
                                     )
                                 }

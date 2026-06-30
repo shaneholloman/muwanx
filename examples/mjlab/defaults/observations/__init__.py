@@ -8,7 +8,7 @@ import os
 from typing import Any
 
 import mjswan
-from mjswan import ObsFunc, register_obs_func
+from mjswan import ObservationBinding, register_observation
 from mjswan.envs.mdp import observations as obs_fns
 
 _OBS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -59,9 +59,9 @@ def joint_pos_cos_sin(env, *, joint_name: str, entity_name: str = "robot", **_):
     return concat([cos(angle), sin(angle)])
 
 
-register_obs_func("ee_to_object_distance", ee_to_object_distance)
-register_obs_func("object_to_goal_distance", object_to_goal_distance)
-register_obs_func("pole_angle_cos_sin", joint_pos_cos_sin)
+register_observation("ee_to_object_distance", ee_to_object_distance)
+register_observation("object_to_goal_distance", object_to_goal_distance)
+register_observation("pole_angle_cos_sin", joint_pos_cos_sin)
 
 
 def get_policy_observations(task_id: str, env_cfg: Any) -> dict[str, Any]:
@@ -137,9 +137,9 @@ def register_custom_observations(env_cfg: Any) -> None:
         f"{frame.entity}/{frame.name}" if getattr(frame, "entity", None) else frame.name
     )
     pattern = terrain_scan.pattern
-    register_obs_func(
+    register_observation(
         "height_scan",
-        ObsFunc(
+        ObservationBinding(
             ts_name="HeightScan",
             ts_src=os.path.join(_OBS_DIR, "HeightScan.ts"),
             defaults={

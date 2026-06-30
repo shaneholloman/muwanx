@@ -38,10 +38,10 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder()
 
     project = builder.add_project(name="mjlab Spinkick")
-    scene = project.add_mjlab_scene(task_id, play=True)
+    scene = project.add_scene_mjlab(task_id, play=True)
 
     env_cfg = load_env_cfg(task_id, play=True)
-    scene.add_policy_from_wandb(
+    scene.add_policy_wandb(
         run_path,
         task_id=task_id,
         observations={"policy": env_cfg.observations["actor"]},

@@ -2,7 +2,7 @@
 
 The generic mjlab reset events (``reset_joints_by_offset``, ``randomize_terrain``,
 ``reset_root_state_uniform``) are declarative built-ins in
-``mjswan.envs.mdp.events`` (ADR 0003) and are auto-wired by ``add_mjlab_scene``.
+``mjswan.envs.mdp.events`` (ADR 0003) and are auto-wired by ``add_scene_mjlab``.
 
 Patch-based spawning (placing the single browser env on a random flat terrain
 tile) is NOT an mjlab term — it is a mjswan browser enhancement that reads
@@ -12,7 +12,7 @@ lives here, in the task, as a ``ts_src`` event:
 - :func:`register_custom_events` registers the ``ResetRootStateFromFlatPatches``
   class from the local ``.ts`` file (this makes the build ``uses_custom_js``).
 - :func:`apply_terrain_spawn` swaps the scene's declarative root-spawn event for
-  the patch-based one, using the ``terrain_data`` that ``add_mjlab_scene``
+  the patch-based one, using the ``terrain_data`` that ``add_scene_mjlab``
   attached to the scene config.
 """
 
@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from mjswan import EventFunc, register_event_func
+from mjswan import EventBinding, register_event
 
 _EVENT_DIR = os.path.dirname(os.path.abspath(__file__))
 _FLAT_PATCHES_TS = os.path.join(_EVENT_DIR, "ResetRootStateFromFlatPatches.ts")
@@ -30,9 +30,9 @@ _FLAT_PATCHES_TS = os.path.join(_EVENT_DIR, "ResetRootStateFromFlatPatches.ts")
 def register_custom_events(env_cfg: Any | None = None) -> None:
     """Register the task-side patch-spawn event (ts_src)."""
     del env_cfg
-    register_event_func(
+    register_event(
         "reset_root_state_from_flat_patches",
-        EventFunc(
+        EventBinding(
             ts_name="ResetRootStateFromFlatPatches",
             ts_src=_FLAT_PATCHES_TS,
         ),
@@ -71,8 +71,8 @@ def _root_spawn_params(event: dict[str, Any]) -> dict[str, Any] | None:
 def apply_terrain_spawn(scene_handle: Any) -> None:
     """Swap the scene's root-spawn reset for patch-based spawning.
 
-    No-op unless ``add_mjlab_scene`` attached ``terrain_data`` with flat
-    patches.  Call after ``add_mjlab_scene`` for terrain-generator tasks.
+    No-op unless ``add_scene_mjlab`` attached ``terrain_data`` with flat
+    patches.  Call after ``add_scene_mjlab`` for terrain-generator tasks.
     """
     config = scene_handle._config
     terrain_data = getattr(config, "terrain_data", None) or {}

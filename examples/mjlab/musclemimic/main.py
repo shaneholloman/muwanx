@@ -77,7 +77,7 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder(debug=True)
 
     project = builder.add_project(name="MuscleMimic Fullbody")
-    scene = project.add_mjlab_scene(task_id, play=True)
+    scene = project.add_scene_mjlab(task_id, play=True)
 
     env_cfg = load_env_cfg(task_id, play=True)
 
@@ -94,7 +94,7 @@ def setup_builder() -> mjswan.Builder:
         }
 
     # mimic_lookahead is registered as unsupported and will be skipped by the builder.
-    policy_handles = scene.add_policy_from_wandb(
+    policy_handles = scene.add_policy_wandb(
         run_paths,
         task_id=task_id,
         observations={"policy": env_cfg.observations["actor"]},

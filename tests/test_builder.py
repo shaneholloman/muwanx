@@ -122,7 +122,7 @@ class TestClientBuilderCustomTerminations:
             term_fns,
             "_custom_registry",
             {
-                "foo": term_fns.TermFunc(
+                "foo": term_fns.TerminationBinding(
                     ts_name="FooTermination",
                     ts_src=str(custom_ts),
                 )
@@ -197,30 +197,30 @@ class TestBuilderValidation:
 # L1 — from_mjlab wiring (no mjlab/wandb required, dependencies monkeypatched)
 # ===========================================================================
 class TestFromMjlab:
-    """Verify Builder.from_mjlab forwards run_path to SceneHandle.add_policy_from_wandb."""
+    """Verify Builder.from_mjlab forwards run_path to SceneHandle.add_policy_wandb."""
 
     @staticmethod
     def _patch(monkeypatch):
-        """Patch add_mjlab_scene to skip the real mjlab loader and return a mock SceneHandle."""
+        """Patch add_scene_mjlab to skip the real mjlab loader and return a mock SceneHandle."""
         from mjswan.project import ProjectHandle
 
         scene_handle = MagicMock(name="SceneHandle")
         monkeypatch.setattr(
             ProjectHandle,
-            "add_mjlab_scene",
+            "add_scene_mjlab",
             lambda self, task_id, *, play=False: scene_handle,
         )
         return scene_handle
 
-    def test_no_run_path_does_not_call_add_policy_from_wandb(self, monkeypatch):
+    def test_no_run_path_does_not_call_add_policy_wandb(self, monkeypatch):
         scene_handle = self._patch(monkeypatch)
         Builder.from_mjlab("go2_flat")
-        scene_handle.add_policy_from_wandb.assert_not_called()
+        scene_handle.add_policy_wandb.assert_not_called()
 
     def test_str_run_path_forwarded_with_task_id(self, monkeypatch):
         scene_handle = self._patch(monkeypatch)
         Builder.from_mjlab("go2_flat", run_path="org/proj/abc")
-        scene_handle.add_policy_from_wandb.assert_called_once_with(
+        scene_handle.add_policy_wandb.assert_called_once_with(
             "org/proj/abc", task_id="go2_flat"
         )
 
@@ -228,7 +228,7 @@ class TestFromMjlab:
         scene_handle = self._patch(monkeypatch)
         run_paths = ["org/proj/a", "org/proj/b"]
         Builder.from_mjlab("go2_flat", run_path=run_paths)
-        scene_handle.add_policy_from_wandb.assert_called_once_with(
+        scene_handle.add_policy_wandb.assert_called_once_with(
             run_paths, task_id="go2_flat"
         )
 
@@ -365,7 +365,7 @@ class TestUsesCustomJsFlag:
         self._isolate_registries(monkeypatch)
         from mjswan.envs.mdp import observations as obs_mod
 
-        obs_mod._custom_registry["my_term"] = obs_mod.ObsFunc(
+        obs_mod._custom_registry["my_term"] = obs_mod.ObservationBinding(
             ts_name="MyTerm", ts_src="/tmp/whatever.ts"
         )
         builder = Builder()
@@ -379,7 +379,7 @@ class TestUsesCustomJsFlag:
         self._isolate_registries(monkeypatch)
         from mjswan.envs.mdp import terminations as term_mod
 
-        term_mod._custom_registry["my_term"] = term_mod.TermFunc(
+        term_mod._custom_registry["my_term"] = term_mod.TerminationBinding(
             ts_name="MyTerm", ts_src="/tmp/whatever.ts"
         )
         builder = Builder()
@@ -395,9 +395,11 @@ class TestUsesCustomJsFlag:
         self._isolate_registries(monkeypatch)
         from mjswan.envs.mdp import terminations as term_mod
 
-        term_mod._custom_registry["out_of_terrain_bounds"] = term_mod.TermFunc(
-            ts_name="OutOfTerrainBounds",
-            defaults={"limit_x": 5.0, "limit_y": 5.0},
+        term_mod._custom_registry["out_of_terrain_bounds"] = (
+            term_mod.TerminationBinding(
+                ts_name="OutOfTerrainBounds",
+                defaults={"limit_x": 5.0, "limit_y": 5.0},
+            )
         )
         builder = Builder()
         builder.add_project(name="P").add_scene(name="S", model=minimal_model)
@@ -613,7 +615,11 @@ class TestSaveWebPolicyJson:
     ):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
-        scene.add_policy(name="Policy", policy=minimal_onnx).add_velocity_command()
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            commands={"velocity": mjswan.velocity_command()},
+        )
 
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         assert data["commands"]["velocity"]["name"] == "UiCommand"
@@ -960,7 +966,7 @@ class TestFullBuild:
         builder = Builder()
         builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
         app = builder.build(tmp_path / "out")
-        assert isinstance(app, mjswan.mjswanApp)
+        assert isinstance(app, mjswan.MjswanApp)
 
 
 # ===========================================================================

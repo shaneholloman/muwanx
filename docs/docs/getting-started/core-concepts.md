@@ -10,9 +10,9 @@ mjswan uses a four-level hierarchy to describe a browser application: **Builder 
 Builder
   └── Project
         └── Scene
-              ├── Policy  (optional)
-              │     └── Motion  (optional, for tracking policies)
-              └── Splat   (optional)
+              ├── Splat
+              └── Policy
+                    └── Motion
 ```
 
 ## Builder
@@ -120,10 +120,10 @@ scene.add_splat("Lab", source="lab.spz", scale=1.35, control=True)
 
 ### Splat selector without pre-configured splats
 
-By default, the Splat selector only appears when at least one splat is attached to the scene. Call `add_splat_section()` to show the selector unconditionally — this lets viewers paste an arbitrary `.spz` URL directly in the control panel at runtime:
+By default, the Splat selector only appears when at least one splat is attached to the scene. Call `enable_splat_section()` to show the selector unconditionally — this lets viewers paste an arbitrary `.spz` URL directly in the control panel at runtime:
 
 ```python
-scene.add_splat_section()
+scene.enable_splat_section()
 ```
 
 ## Policy
@@ -162,16 +162,6 @@ scene.add_policy(
 )
 ```
 
-For locomotion policies the shortcut `add_velocity_command()` builds the same standard 3-DoF velocity group:
-
-```python
-scene.add_policy(name="Locomotion", policy=onnx.load("locomotion.onnx")) \
-    .add_velocity_command(
-        lin_vel_x=(-2.0, 2.0),
-        default_lin_vel_x=0.5,
-    )
-```
-
 Available command inputs:
 
 | Class | Description |
@@ -199,8 +189,8 @@ policy.add_motion(
 )
 
 # Or fetch from a W&B run
-policy.add_motion_from_wandb(
-    wandb_run_path="<entity>/<project>/<run_id>",
+policy.add_motion_wandb(
+    run_path="<entity>/<project>/<run_id>",
     anchor_body_name="pelvis",
     body_names=("pelvis",),
 )

@@ -96,7 +96,7 @@ def setup_builder() -> mjswan.Builder:
         name="MyoFinger",
     )
 
-    scene.set_viewer_config(
+    scene.set_viewer(
         mjswan.ViewerConfig(
             lookat=(0.0, 0.0, 0.2),
             distance=1.5,

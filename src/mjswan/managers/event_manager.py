@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from ..envs.mdp.events import EventFunc
+from ..envs.mdp.events import EventBinding
 
 
 @dataclass
@@ -21,14 +21,14 @@ class EventTermCfg:
 
     ``func`` accepts either:
 
-    - A legacy :class:`EventFunc` sentinel: emits ``{"name": ..., "params": ...}``
+    - A legacy :class:`EventBinding` sentinel: emits ``{"name": ..., "params": ...}``
       and the engine resolves the class from its registry.
     - A DSL builder ``func(env, **params) -> list[Mutation]``: the build traces
       it into a ``{"kind": "event", "mutations": [...]}`` envelope (ADR 0003).
     """
 
-    func: EventFunc | Callable[..., Any]
-    """Event function — EventFunc sentinel (legacy) or DSL mutation builder."""
+    func: EventBinding | Callable[..., Any]
+    """Event function — EventBinding sentinel (legacy) or DSL mutation builder."""
 
     mode: str = "reset"
     """Event trigger mode. Only ``"reset"`` is handled by the browser runtime."""
@@ -38,7 +38,7 @@ class EventTermCfg:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for the TS ``EventManager``."""
-        if isinstance(self.func, EventFunc):
+        if isinstance(self.func, EventBinding):
             entry: dict[str, Any] = {"name": self.func.ts_name}
             merged: dict[str, Any] = {**self.func.defaults, **self.params}
             if merged:

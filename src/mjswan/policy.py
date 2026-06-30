@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import onnx
 
-from .command import CommandTermConfig, velocity_command
+from .command import CommandTermConfig
 from .motion import MotionConfig, MotionHandle
 
 if TYPE_CHECKING:
@@ -123,8 +123,6 @@ class PolicyHandle:
 
     Commands should be passed via the ``commands=`` parameter of
     :meth:`~mjswan.scene.SceneHandle.add_policy`.
-    :meth:`add_velocity_command` is provided as a convenience shortcut for the
-    common locomotion case.
 
     Example:
         policy = scene.add_policy(
@@ -133,8 +131,6 @@ class PolicyHandle:
             config_path="locomotion.json",
             commands={"velocity": mjswan.velocity_command()},
         )
-        # or using the shortcut:
-        policy = scene.add_policy(...).add_velocity_command()
     """
 
     def __init__(self, policy_config: PolicyConfig, scene: SceneHandle) -> None:
@@ -150,43 +146,6 @@ class PolicyHandle:
     def model(self) -> onnx.ModelProto:
         """ONNX model for the policy."""
         return self._config.model
-
-    def add_velocity_command(
-        self,
-        lin_vel_x: tuple[float, float] = (-1.0, 1.0),
-        lin_vel_y: tuple[float, float] = (-0.5, 0.5),
-        ang_vel_z: tuple[float, float] = (-1.0, 1.0),
-        default_lin_vel_x: float = 0.5,
-        default_lin_vel_y: float = 0.0,
-        default_ang_vel_z: float = 0.0,
-        name: str = "velocity",
-    ) -> PolicyHandle:
-        """Add a standard velocity command group.
-
-        This is a convenience method for adding the common velocity command
-        pattern used in locomotion policies.
-
-        Args:
-            lin_vel_x: Range for forward velocity (min, max)
-            lin_vel_y: Range for lateral velocity (min, max)
-            ang_vel_z: Range for yaw rate (min, max)
-            default_lin_vel_x: Default forward velocity
-            default_lin_vel_y: Default lateral velocity
-            default_ang_vel_z: Default yaw rate
-
-        Returns:
-            Self for method chaining.
-        """
-        cmd = velocity_command(
-            lin_vel_x=lin_vel_x,
-            lin_vel_y=lin_vel_y,
-            ang_vel_z=ang_vel_z,
-            default_lin_vel_x=default_lin_vel_x,
-            default_lin_vel_y=default_lin_vel_y,
-            default_ang_vel_z=default_ang_vel_z,
-        )
-        self._config.commands[name] = cmd
-        return self
 
     def set_metadata(self, key: str, value: Any) -> PolicyHandle:
         """Set metadata for this policy.
@@ -241,11 +200,11 @@ class PolicyHandle:
         )
         return self._append_motion(motion)
 
-    def add_motion_from_wandb(
+    def add_motion_wandb(
         self,
         *,
         name: str | None = None,
-        wandb_run_path: str | None = None,
+        run_path: str | None = None,
         run_id: str | None = None,
         entity: str | None = None,
         project: str | None = None,
@@ -257,10 +216,10 @@ class PolicyHandle:
         loop: bool = True,
     ) -> MotionHandle:
         """Download a motion artifact from W&B and attach it to this policy."""
-        from .wandb_utils import fetch_motion_npz_from_wandb_run, resolve_wandb_run_path
+        from .wandb_io import fetch_motion_npz_from_wandb_run, resolve_wandb_run_path
 
         resolved_run_path = resolve_wandb_run_path(
-            wandb_run_path=wandb_run_path,
+            wandb_run_path=run_path,
             run_id=run_id,
             entity=entity,
             project=project,

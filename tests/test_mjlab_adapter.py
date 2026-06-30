@@ -19,8 +19,8 @@ from mjswan.adapters.mjlab_adapter import (
     adapt_observations,
     adapt_terminations,
 )
-from mjswan.envs.mdp.observations import ObsFunc
-from mjswan.envs.mdp.terminations import TermFunc
+from mjswan.envs.mdp.observations import ObservationBinding
+from mjswan.envs.mdp.terminations import TerminationBinding
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjswan.managers.termination_manager import TerminationTermCfg
 
@@ -147,7 +147,7 @@ class TestAdaptObservations:
         assert adapt_observations(None) is None
 
     def test_mjswan_types_unchanged(self):
-        obs_func = ObsFunc("BaseLinearVelocity")
+        obs_func = ObservationBinding("BaseLinearVelocity")
         group = ObservationGroupCfg(terms={"vel": ObservationTermCfg(func=obs_func)})
         result = adapt_observations({"policy": group})
         assert result is not None
@@ -234,7 +234,7 @@ class TestAdaptObservations:
             }
         )
         # Tracking observations are DSL terms (ADR 0003) — the adapter
-        # resolves them to callables instead of ObsFunc sentinels.
+        # resolves them to callables instead of ObservationBinding sentinels.
         assert result is not None
         assert callable(result["policy"].terms["anchor"].func)
         assert callable(result["policy"].terms["body"].func)
@@ -250,7 +250,7 @@ class TestAdaptTerminations:
         assert adapt_terminations(None) is None
 
     def test_mjswan_types_unchanged(self):
-        term_func = TermFunc("TimeOut")
+        term_func = TerminationBinding("TimeOut")
         cfg = TerminationTermCfg(func=term_func, time_out=True)
         result = adapt_terminations({"time_out": cfg})
         assert result is not None
@@ -258,7 +258,7 @@ class TestAdaptTerminations:
 
     def test_mjlab_term_converted(self):
         # `bad_orientation` is a DSL term (ADR 0003) — the adapter
-        # resolves it to a callable instead of a TermFunc sentinel.
+        # resolves it to a callable instead of a TerminationBinding sentinel.
         mjlab_func = _make_mjlab_term_func("bad_orientation")
         mjlab_cfg = FakeMjlabTermTermCfg(
             func=mjlab_func,

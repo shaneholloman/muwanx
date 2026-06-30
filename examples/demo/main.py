@@ -215,7 +215,7 @@ def _add_g1_scene(project) -> None:
     g1_scene = project.add_scene(
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
         name="G1",
-    ).set_viewer_config(
+    ).set_viewer(
         mjswan.ViewerConfig(
             lookat=(0.0, 0.0, 0.7),
             distance=4.3,
@@ -250,12 +250,20 @@ def _add_g1_scene(project) -> None:
         ),
     }
 
-    g1_loco_policy = g1_scene.add_policy(
+    g1_scene.add_policy(
         policy=onnx.load("assets/unitree_g1/locomotion.onnx"),
         name="Locomotion",
         config_path="assets/unitree_g1/locomotion.json",
         actions=g1_actions,
         terminations=g1_terminations,
+        commands={
+            "velocity": mjswan.velocity_command(
+                lin_vel_x=(-1.5, 1.5),
+                lin_vel_y=(-0.5, 0.5),
+                default_lin_vel_x=0.5,
+                default_lin_vel_y=0.0,
+            )
+        },
         observations={
             "policy": ObservationGroupCfg(
                 terms={
@@ -276,12 +284,6 @@ def _add_g1_scene(project) -> None:
                 }
             )
         },
-    )
-    g1_loco_policy.add_velocity_command(
-        lin_vel_x=(-1.5, 1.5),
-        lin_vel_y=(-0.5, 0.5),
-        default_lin_vel_x=0.5,
-        default_lin_vel_y=0.0,
     )
 
     g1_scene.add_policy(
@@ -320,7 +322,7 @@ def _add_go2_scene(project) -> None:
     go2_scene = project.add_scene(
         name="Go2",
         spec=mujoco.MjSpec.from_file("assets/unitree_go2/scene.xml"),
-    ).set_viewer_config(
+    ).set_viewer(
         mjswan.ViewerConfig(
             lookat=(0.0, 0.0, 0.7),
             distance=3.8,
@@ -402,7 +404,8 @@ def _add_go2_scene(project) -> None:
                 }
             ),
         },
-    ).add_velocity_command()
+        commands={"velocity": mjswan.velocity_command()},
+    )
 
     go2_scene.add_policy(
         policy=onnx.load("assets/unitree_go2/vanilla.onnx"),
@@ -410,7 +413,8 @@ def _add_go2_scene(project) -> None:
         config_path="assets/unitree_go2/vanilla.json",
         actions=go2_actions,
         observations=go2_velocity_obs,
-    ).add_velocity_command()
+        commands={"velocity": mjswan.velocity_command()},
+    )
 
     go2_scene.add_policy(
         policy=onnx.load("assets/unitree_go2/robust.onnx"),
@@ -418,14 +422,15 @@ def _add_go2_scene(project) -> None:
         config_path="assets/unitree_go2/robust.json",
         actions=go2_actions,
         observations=go2_velocity_obs,
-    ).add_velocity_command()
+        commands={"velocity": mjswan.velocity_command()},
+    )
 
 
 def _add_go1_scene(project) -> None:
     go1_scene = project.add_scene(
         spec=mujoco.MjSpec.from_file("assets/unitree_go1/go1.xml"),
         name="Go1",
-    ).set_viewer_config(
+    ).set_viewer(
         mjswan.ViewerConfig(
             lookat=(0.0, 0.0, 0.2),
             distance=3.1,
@@ -449,7 +454,8 @@ def _add_go1_scene(project) -> None:
                 damping=1.0,
             )
         },
-    ).add_velocity_command()
+        commands={"velocity": mjswan.velocity_command()},
+    )
 
     go1_scene.add_policy(
         policy=onnx.load("assets/unitree_go1/decap.onnx"),
@@ -486,7 +492,8 @@ def _add_go1_scene(project) -> None:
                 }
             )
         },
-    ).add_velocity_command()
+        commands={"velocity": mjswan.velocity_command()},
+    )
 
 
 def _add_anymal_c_scene(project) -> None:
@@ -527,13 +534,16 @@ def _add_anymal_c_scene(project) -> None:
                 }
             )
         },
-    ).add_velocity_command(
-        lin_vel_x=(-1.0, 1.0),
-        lin_vel_y=(-1.0, 1.0),
-        ang_vel_z=(-0.5, 0.5),
-        default_lin_vel_x=0.5,
-        default_lin_vel_y=0.0,
-        default_ang_vel_z=0.0,
+        commands={
+            "velocity": mjswan.velocity_command(
+                lin_vel_x=(-1.0, 1.0),
+                lin_vel_y=(-1.0, 1.0),
+                ang_vel_z=(-0.5, 0.5),
+                default_lin_vel_x=0.5,
+                default_lin_vel_y=0.0,
+                default_ang_vel_z=0.0,
+            )
+        },
     )
 
 
@@ -690,7 +700,7 @@ def _add_myosuite_project(builder: mjswan.Builder) -> None:
     ) in target_envs.items():
         model_path = registry_specs[env_name].kwargs["model_path"]
         mjspec = mujoco.MjSpec.from_file(model_path)
-        project.add_scene(name=display_name, spec=mjspec).set_viewer_config(
+        project.add_scene(name=display_name, spec=mjspec).set_viewer(
             mjswan.ViewerConfig(
                 lookat=lookat,
                 distance=distance,
@@ -787,7 +797,7 @@ def main():
     """
     dist_dir = Path(__file__).resolve().parent / "dist"
     if os.getenv("MJSWAN_SKIP_BUILD") == "1":
-        app = mjswan.mjswanApp(dist_dir)
+        app = mjswan.MjswanApp(dist_dir)
     else:
         builder = setup_builder()
         app = builder.build()

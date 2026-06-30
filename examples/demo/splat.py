@@ -215,10 +215,13 @@ def setup_builder() -> mjswan.Builder:
                 }
             )
         },
-    ).add_velocity_command(
-        lin_vel_x=(-1.5, 1.5),
-        lin_vel_y=(-0.5, 0.5),
-        default_lin_vel_x=0.5,
+        commands={
+            "velocity": mjswan.velocity_command(
+                lin_vel_x=(-1.5, 1.5),
+                lin_vel_y=(-0.5, 0.5),
+                default_lin_vel_x=0.5,
+            )
+        },
     )
 
     for i, splat_url in enumerate(SPLAT_URLs):

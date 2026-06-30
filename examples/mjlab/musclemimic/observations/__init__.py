@@ -16,7 +16,7 @@ from myosuite.integrations.musclemimic.fullbody_model import (
     FULLBODY_BODY2SITES_FOR_MIMIC,
 )
 
-from mjswan.envs.mdp.observations import ObsFunc, register_obs_func
+from mjswan.envs.mdp.observations import ObservationBinding, register_observation
 
 _OBS_DIR = Path(__file__).resolve().parent
 
@@ -26,52 +26,52 @@ BODY_NAMES: list[str] = [
     f"mimic_fullbody_robot/{body}" for body in FULLBODY_BODY2SITES_FOR_MIMIC.keys()
 ]
 
-register_obs_func(
+register_observation(
     "qpos",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicQpos",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
     ),
 )
 
-register_obs_func(
+register_observation(
     "qvel",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicQvel",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
         defaults={"fps": FPS},
     ),
 )
 
-register_obs_func(
+register_observation(
     "act",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicAct",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
     ),
 )
 
-register_obs_func(
+register_observation(
     "mimic_site_pos",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicSitePos",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
         defaults={"site_names": SITE_NAMES, "body_names": BODY_NAMES},
     ),
 )
 
-register_obs_func(
+register_observation(
     "mimic_site_target",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicSiteTarget",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
         defaults={"site_names": SITE_NAMES, "fps": FPS},
     ),
 )
 
-register_obs_func(
+register_observation(
     "mimic_site_err",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicSiteErr",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
         defaults={
@@ -82,36 +82,36 @@ register_obs_func(
     ),
 )
 
-register_obs_func(
+register_observation(
     "clip_ref_qpos",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicClipRefQpos",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
         defaults={"fps": FPS},
     ),
 )
 
-register_obs_func(
+register_observation(
     "clip_ref_qvel",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicClipRefQvel",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
         defaults={"fps": FPS},
     ),
 )
 
-register_obs_func(
+register_observation(
     "clip_phase",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicClipPhase",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
         defaults={"fps": FPS},
     ),
 )
 
-register_obs_func(
+register_observation(
     "mimic_lookahead",
-    ObsFunc(
+    ObservationBinding(
         ts_name="MimicLookahead",
         ts_src=str(_OBS_DIR / "MimicObservations.ts"),
         defaults={

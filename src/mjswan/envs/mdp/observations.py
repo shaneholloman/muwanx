@@ -22,7 +22,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class ObsBinding:
+class ObservationBinding:
     """Binding from an mjlab observation name to its browser implementation.
 
     See ADR 0003.  A binding is the *mjlab-name resolution* layer; authors of
@@ -52,28 +52,23 @@ class ObsBinding:
     ts_src: str | None = None
 
 
-# Backwards-compatible alias (pre-ADR-0003 name). Kept so existing configs,
-# examples and external users importing ``ObsFunc`` keep working.
-ObsFunc = ObsBinding
-
-
 # ---------------------------------------------------------------------------
 # Custom observation registry
 # ---------------------------------------------------------------------------
 
-_custom_registry: dict[str, ObsBinding | Callable[..., Any]] = {}
+_custom_registry: dict[str, ObservationBinding | Callable[..., Any]] = {}
 """Maps mjlab observation function names to a user-supplied binding.
 
-Populated via :func:`register_obs_func`.  The mjlab adapter checks this
+Populated via :func:`register_observation`.  The mjlab adapter checks this
 registry as a fallback after the built-in lookup fails.  An entry is either
-an :class:`ObsBinding` (``ts_src`` escape hatch / unsupported marker) or a
-**DSL builder callable** ``func(env, **params)`` for a task-specific
+an :class:`ObservationBinding` (``ts_src`` escape hatch / unsupported marker)
+or a **DSL builder callable** ``func(env, **params)`` for a task-specific
 declarative term (ADR 0003).
 """
 
 
-def register_obs_func(
-    mjlab_name: str, sentinel: ObsBinding | Callable[..., Any]
+def register_observation(
+    mjlab_name: str, sentinel: ObservationBinding | Callable[..., Any]
 ) -> None:
     """Register a custom observation binding for an mjlab observation function.
 
@@ -84,13 +79,13 @@ def register_obs_func(
       into a composition graph (declarative, no ``ts_src``); this is how
       task-specific terms (e.g. a task's ``ee_to_object_distance``) stay out of
       the core library while remaining Cloud-safe.
-    - an :class:`ObsBinding` with ``ts_src`` (custom-JS escape hatch) or
+    - an :class:`ObservationBinding` with ``ts_src`` (custom-JS escape hatch) or
       ``unsupported_reason`` (accepted-but-unsupported marker).
 
     Args:
         mjlab_name: The mjlab observation function name
             (e.g. ``"ee_to_object_distance"``).
-        sentinel: An :class:`ObsFunc` describing the browser-side
+        sentinel: An :class:`ObservationBinding` describing the browser-side
             implementation.  Set ``unsupported_reason`` to mark the
             observation as unsupported (silently skipped at build time).
             Set ``ts_src`` to the absolute path of a ``.ts`` file that
@@ -98,16 +93,16 @@ def register_obs_func(
 
     Example — mark as unsupported::
 
-        register_obs_func(
+        register_observation(
             "ee_to_object_distance",
-            ObsFunc(ts_name="", unsupported_reason="not available in browser"),
+            ObservationBinding(ts_name="", unsupported_reason="not available in browser"),
         )
 
     Example — provide a custom TypeScript implementation::
 
-        register_obs_func(
+        register_observation(
             "my_custom_obs",
-            ObsFunc(ts_name="MyCustomObs", ts_src="/path/to/MyCustomObs.ts"),
+            ObservationBinding(ts_name="MyCustomObs", ts_src="/path/to/MyCustomObs.ts"),
         )
     """
     _custom_registry[mjlab_name] = sentinel
@@ -350,7 +345,7 @@ def robot_body_ori_b(env, *, body_names: list[str], **_unused):
 
 # Task-specific declarative observations (e.g. ee_to_object_distance,
 # object_to_goal_distance for manipulation) are NOT defined here — they live in
-# the task that uses them and register via ``register_obs_func`` with a DSL
+# the task that uses them and register via ``register_observation`` with a DSL
 # builder callable.  The core library carries only generic terms.  See
 # examples/mjlab/defaults/observations/__init__.py and ADR 0003.
 
@@ -373,7 +368,7 @@ def builtin_sensor(env, *, sensor_name: str, **_unused):
     return sensor(sensor_name)
 
 
-height_scan = ObsFunc(
+height_scan = ObservationBinding(
     ts_name="",
     unsupported_reason=(
         "height_scan is not supported in mjswan: RayCastSensor is not "
@@ -390,9 +385,8 @@ height_scan = ObsFunc(
 
 
 __all__ = [
-    "ObsBinding",
-    "ObsFunc",
-    "register_obs_func",
+    "ObservationBinding",
+    "register_observation",
     "_custom_registry",
     "base_lin_vel",
     "base_ang_vel",

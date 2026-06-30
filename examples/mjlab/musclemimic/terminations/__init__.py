@@ -12,13 +12,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mjswan import TermFunc, register_termination_func
+from mjswan import TerminationBinding, register_termination
 
 _TERM_DIR = Path(__file__).resolve().parent
 
-register_termination_func(
+register_termination(
     "mimic_deviation",
-    TermFunc(
+    TerminationBinding(
         ts_name="MimicDeviation",
         ts_src=str(_TERM_DIR / "MimicDeviation.ts"),
     ),

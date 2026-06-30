@@ -98,17 +98,17 @@ def main():
         register_custom_events(env_cfg)
         register_custom_observations(env_cfg)
         register_custom_terminations(env_cfg)
-        scene = project.add_mjlab_scene(task_id, play=True)
+        scene = project.add_scene_mjlab(task_id, play=True)
         # Task-side browser enhancement: spawn the single env on a random flat
         # terrain patch (no-op for non-terrain tasks).  See events/__init__.py.
         apply_terrain_spawn(scene)
         if viewer_cfg := TASK_VIEWER_CONFIG_MAP.get(task_id):
-            scene.set_viewer_config(viewer_cfg)
+            scene.set_viewer(viewer_cfg)
         run_ids = wandb_run_id
         if isinstance(run_ids, str):
             run_ids = [run_ids]
         wandb_paths = [f"{ENTITY}/{PROJECT}/{rid}" for rid in run_ids]
-        scene.add_policy_from_wandb(
+        scene.add_policy_wandb(
             wandb_paths,
             task_id=task_id,
             observations=get_policy_observations(task_id, env_cfg),

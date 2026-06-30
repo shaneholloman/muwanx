@@ -88,14 +88,14 @@ def serve_cmd(
     height: Annotated[int, typer.Option(help="Colab iframe height in pixels.")] = 600,
 ) -> None:
     """Serve a pre-built mjswan app from a dist directory."""
-    from mjswan.app import mjswanApp
+    from mjswan.app import MjswanApp
 
     resolved = dist_dir.resolve()
     if not resolved.exists():
         console.print(f"[red]Error:[/red] Directory not found: {dist_dir}")
         raise typer.Exit(1)
 
-    mjswanApp(resolved).launch(
+    MjswanApp(resolved).launch(
         host=host, port=port, open_browser=not no_open, height=height
     )
 
@@ -488,7 +488,7 @@ def serve() -> None:
         print("Usage: serve <dist-dir>", file=sys.stderr)
         sys.exit(1)
 
-    from mjswan.app import mjswanApp
+    from mjswan.app import MjswanApp
 
-    mjswan_app = mjswanApp(Path(sys.argv[1]).resolve())
+    mjswan_app = MjswanApp(Path(sys.argv[1]).resolve())
     mjswan_app.launch()

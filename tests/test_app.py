@@ -1,4 +1,4 @@
-"""Tests for mjswanApp.
+"""Tests for MjswanApp.
 
 L1 — pure Python, no MuJoCo/ONNX required (safe for pre-commit).
 """
@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mjswan.app import _detect_colab, mjswanApp
+from mjswan.app import MjswanApp, _detect_colab
 
 
 class _MockTCPServer:
@@ -72,26 +72,26 @@ class TestDetectColab:
 class TestMjswanAppValidation:
     def test_raises_if_app_dir_missing(self, tmp_path):
         with pytest.raises(RuntimeError, match="does not exist"):
-            mjswanApp(tmp_path / "nonexistent").launch()
+            MjswanApp(tmp_path / "nonexistent").launch()
 
 
 class TestMjswanAppNormalMode:
     def test_opens_browser_by_default(self, app_dir, monkeypatch):
         mock_open = MagicMock()
         monkeypatch.setattr(_webbrowser_module, "open", mock_open)
-        mjswanApp(app_dir).launch()
+        MjswanApp(app_dir).launch()
         mock_open.assert_called_once()
 
     def test_skips_browser_when_open_browser_false(self, app_dir, monkeypatch):
         mock_open = MagicMock()
         monkeypatch.setattr(_webbrowser_module, "open", mock_open)
-        mjswanApp(app_dir).launch(open_browser=False)
+        MjswanApp(app_dir).launch(open_browser=False)
         mock_open.assert_not_called()
 
     def test_browser_url_uses_host_and_port(self, app_dir, monkeypatch):
         mock_open = MagicMock()
         monkeypatch.setattr(_webbrowser_module, "open", mock_open)
-        mjswanApp(app_dir).launch(host="127.0.0.1", port=9000)
+        MjswanApp(app_dir).launch(host="127.0.0.1", port=9000)
         mock_open.assert_called_once_with("http://127.0.0.1:9000")
 
 
@@ -119,12 +119,12 @@ class TestMjswanAppColabMode:
     ):
         mock_open = MagicMock()
         monkeypatch.setattr(_webbrowser_module, "open", mock_open)
-        mjswanApp(app_dir).launch()
+        MjswanApp(app_dir).launch()
         mock_open.assert_not_called()
 
     def test_starts_daemon_thread(self, app_dir, mock_colab_output, mock_thread):
         thread_cls, thread_instance = mock_thread
-        mjswanApp(app_dir).launch()
+        MjswanApp(app_dir).launch()
         thread_cls.assert_called_once()
         _, kwargs = thread_cls.call_args
         assert kwargs.get("daemon") is True
@@ -133,17 +133,17 @@ class TestMjswanAppColabMode:
     def test_calls_serve_kernel_port_as_iframe(
         self, app_dir, mock_colab_output, mock_thread
     ):
-        mjswanApp(app_dir).launch(port=8080)
+        MjswanApp(app_dir).launch(port=8080)
         mock_colab_output.serve_kernel_port_as_iframe.assert_called_once_with(
             8080, height="600"
         )
 
     def test_respects_height_parameter(self, app_dir, mock_colab_output, mock_thread):
-        mjswanApp(app_dir).launch(port=8080, height=800)
+        MjswanApp(app_dir).launch(port=8080, height=800)
         mock_colab_output.serve_kernel_port_as_iframe.assert_called_once_with(
             8080, height="800"
         )
 
     def test_returns_immediately(self, app_dir, mock_colab_output, mock_thread):
-        result = mjswanApp(app_dir).launch()
+        result = MjswanApp(app_dir).launch()
         assert result is None
