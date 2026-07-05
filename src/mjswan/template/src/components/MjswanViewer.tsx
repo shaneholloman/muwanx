@@ -43,8 +43,7 @@ const MjswanViewer = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<mjswanRuntime | null>(null);
   const mujocoRef = useRef<MainModule | null>(null);
-  // Ref so the async init reads the latest splatConfig after awaiting WASM/scene load,
-  // by which time App.tsx's selectedSplat effect has already fired.
+  const disposalRef = useRef<Promise<void>>(Promise.resolve());
   const splatConfigRef = useRef(splatConfig);
   splatConfigRef.current = splatConfig;
   const selectedMotionRef = useRef(selectedMotion);
@@ -60,6 +59,10 @@ const MjswanViewer = ({
     };
 
     const init = async () => {
+      await disposalRef.current;
+      if (cancelled) {
+        return;
+      }
       if (!mujocoRef.current) {
         notify('Loading MuJoCo…');
         const mujocoModule = __MUJOCO_MT__
@@ -119,8 +122,9 @@ const MjswanViewer = ({
 
     return () => {
       cancelled = true;
-      void runtimeRef.current?.dispose();
+      const runtime = runtimeRef.current;
       runtimeRef.current = null;
+      disposalRef.current = runtime?.dispose() ?? Promise.resolve();
     };
   }, [scenePath, baseUrl, policyConfigPath, cameraConfig, eventsConfig, terrainData, onStatusChange, onError, onReady]);
 
