@@ -39,10 +39,10 @@ from ..envs.mdp import terminations as _term_module
 from ..envs.mdp.actions.actions import (
     ActionTermCfg as MjswanActionTermCfg,
 )
-from ..envs.mdp.events import EventFunc
+from ..envs.mdp.events import EventBinding
 from ..envs.mdp.events import _custom_registry as _custom_event_registry
-from ..envs.mdp.observations import ObsFunc, _custom_registry
-from ..envs.mdp.terminations import TermFunc
+from ..envs.mdp.observations import ObservationBinding, _custom_registry
+from ..envs.mdp.terminations import TerminationBinding
 from ..envs.mdp.terminations import _custom_registry as _custom_term_registry
 from ..managers.event_manager import EventTermCfg as MjswanEventTermCfg
 from ..managers.observation_manager import (
@@ -67,10 +67,10 @@ def _is_from_mjlab(obj: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObsFunc:
-    """Convert an mjlab observation callable to an mjswan ``ObsFunc`` sentinel.
+def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObservationBinding:
+    """Convert an mjlab observation callable to an mjswan ``ObservationBinding`` sentinel.
 
-    If *func* is already an mjswan ``ObsFunc`` it is returned as-is, so
+    If *func* is already an mjswan ``ObservationBinding`` it is returned as-is, so
     mjswan sentinels can be passed directly inside mjlab ``ObservationTermCfg``
     for functions that have no mjlab equivalent.
 
@@ -81,7 +81,7 @@ def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObsFunc:
     that terms like ``base_lin_vel`` and ``base_ang_vel`` are resolved
     correctly even though their underlying mjlab function is ``builtin_sensor``.
     """
-    if isinstance(func, ObsFunc):
+    if isinstance(func, ObservationBinding):
         return func
     name = getattr(func, "__name__", None)
     sentinel = getattr(_obs_module, name, None) if name else None
@@ -89,11 +89,12 @@ def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObsFunc:
         name
         and name in _custom_registry
         and (
-            not isinstance(sentinel, ObsFunc) or sentinel.unsupported_reason is not None
+            not isinstance(sentinel, ObservationBinding)
+            or sentinel.unsupported_reason is not None
         )
     ):
         return _custom_registry[name]
-    if isinstance(sentinel, ObsFunc) and sentinel.unsupported_reason is None:
+    if isinstance(sentinel, ObservationBinding) and sentinel.unsupported_reason is None:
         return sentinel
     # DSL callable (ADR 0003) — pass through; the build will trace it.
     if callable(sentinel):
@@ -103,11 +104,11 @@ def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObsFunc:
         if term_name in _custom_registry:
             return _custom_registry[term_name]
         fallback = getattr(_obs_module, term_name, None)
-        if isinstance(fallback, ObsFunc):
+        if isinstance(fallback, ObservationBinding):
             return fallback
         if callable(fallback):
             return fallback  # type: ignore[return-value]
-    if isinstance(sentinel, ObsFunc):
+    if isinstance(sentinel, ObservationBinding):
         return sentinel
     # Fall back to user-registered custom sentinels
     if name and name in _custom_registry:
@@ -116,9 +117,9 @@ def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObsFunc:
         return _custom_registry[term_name]
     raise ValueError(
         f"No mjswan mapping for mjlab observation function '{name}'. "
-        f"Ensure a matching ObsFunc sentinel exists in "
+        f"Ensure a matching ObservationBinding sentinel exists in "
         f"mjswan.envs.mdp.observations, or register one with "
-        f"mjswan.envs.mdp.observations.register_obs_func()."
+        f"mjswan.envs.mdp.observations.register_observation()."
     )
 
 
@@ -213,10 +214,10 @@ def adapt_observations(
 # ---------------------------------------------------------------------------
 
 
-def _adapt_term_func(func: Any, term_name: str | None = None) -> TermFunc:
-    """Convert an mjlab termination callable to an mjswan ``TermFunc`` sentinel.
+def _adapt_term_func(func: Any, term_name: str | None = None) -> TerminationBinding:
+    """Convert an mjlab termination callable to an mjswan ``TerminationBinding`` sentinel.
 
-    If *func* is already an mjswan ``TermFunc`` it is returned as-is, so
+    If *func* is already an mjswan ``TerminationBinding`` it is returned as-is, so
     mjswan sentinels can be passed directly inside mjlab ``TerminationTermCfg``
     for functions that have no mjlab equivalent.
 
@@ -225,11 +226,11 @@ def _adapt_term_func(func: Any, term_name: str | None = None) -> TermFunc:
     ``_fn``), *term_name* is tried as a fallback against ``_custom_term_registry``
     so tasks can register by dict key rather than by function name.
     """
-    if isinstance(func, TermFunc):
+    if isinstance(func, TerminationBinding):
         return func
     name = getattr(func, "__name__", None)
     sentinel = getattr(_term_module, name, None) if name else None
-    if isinstance(sentinel, TermFunc):
+    if isinstance(sentinel, TerminationBinding):
         return sentinel
     # DSL callable (ADR 0003) — pass through; the build will trace it.
     if callable(sentinel):
@@ -241,9 +242,9 @@ def _adapt_term_func(func: Any, term_name: str | None = None) -> TermFunc:
         return _custom_term_registry[term_name]
     raise ValueError(
         f"No mjswan mapping for mjlab termination function '{name}'. "
-        f"Ensure a matching TermFunc sentinel exists in "
+        f"Ensure a matching TerminationBinding sentinel exists in "
         f"mjswan.envs.mdp.terminations, or register one with "
-        f"mjswan.envs.mdp.terminations.register_termination_func()."
+        f"mjswan.envs.mdp.terminations.register_termination()."
     )
 
 
@@ -316,7 +317,7 @@ def _adapt_command_cfg(term: Any) -> MjswanCommandTermConfig:
     if spec is None:
         raise ValueError(
             f"No mjswan mapping for mjlab command config '{class_name}'. "
-            f"Register one with mjswan.register_command_term()."
+            f"Register one with mjswan.register_command()."
         )
 
     serialized = dict(spec.serializer(term))
@@ -471,13 +472,13 @@ def resolve_action_scales(
 # ---------------------------------------------------------------------------
 
 
-def _adapt_event_func(func: Any) -> EventFunc:
-    """Convert an mjlab event callable to an mjswan ``EventFunc`` sentinel."""
-    if isinstance(func, EventFunc):
+def _adapt_event_func(func: Any) -> EventBinding:
+    """Convert an mjlab event callable to an mjswan ``EventBinding`` sentinel."""
+    if isinstance(func, EventBinding):
         return func
     name = getattr(func, "__name__", None)
     sentinel = getattr(_events_module, name, None) if name else None
-    if isinstance(sentinel, EventFunc):
+    if isinstance(sentinel, EventBinding):
         return sentinel
     # DSL mutation builder (ADR 0003) — pass through; the build will trace it.
     if callable(sentinel):
@@ -486,7 +487,7 @@ def _adapt_event_func(func: Any) -> EventFunc:
         return _custom_event_registry[name]
     raise ValueError(
         f"No mjswan mapping for mjlab event function '{name}'. "
-        f"Register one with mjswan.envs.mdp.events.register_event_func()."
+        f"Register one with mjswan.envs.mdp.events.register_event()."
     )
 
 

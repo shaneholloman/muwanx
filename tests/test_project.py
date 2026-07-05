@@ -117,7 +117,7 @@ class TestProjectHandle:
             "prop.bin": b"prop",
         }
 
-    def test_add_mjlab_scene_passes_play_flag_to_load_env_cfg(
+    def test_add_scene_mjlab_passes_play_flag_to_load_env_cfg(
         self, monkeypatch, minimal_spec
     ):
         calls: list[tuple[str, object, object]] = []
@@ -158,7 +158,7 @@ class TestProjectHandle:
         monkeypatch.setitem(sys.modules, "mjlab.tasks.registry", mjlab_registry_module)
 
         project = Builder().add_project(name="P")
-        scene = project.add_mjlab_scene("Mjlab-Velocity-Rough-Unitree-G1", play=True)
+        scene = project.add_scene_mjlab("Mjlab-Velocity-Rough-Unitree-G1", play=True)
 
         assert isinstance(scene, mjswan.SceneHandle)
         assert calls == [
@@ -201,7 +201,7 @@ class TestSceneHandle:
 
 
 # ===========================================================================
-# PolicyHandle — commands=, add_velocity_command, set_metadata
+# PolicyHandle — commands=, set_metadata
 # ===========================================================================
 class TestPolicyHandle:
     def _make_scene(self, minimal_model):
@@ -213,22 +213,6 @@ class TestPolicyHandle:
         builder, scene = self._make_scene(minimal_model)
         policy = scene.add_policy(name="Policy", policy=minimal_onnx)
         return builder, policy
-
-    def test_add_velocity_command_stored_under_velocity_key(
-        self, minimal_model, minimal_onnx
-    ):
-        builder, policy = self._make_policy(minimal_model, minimal_onnx)
-        policy.add_velocity_command()
-        commands = builder.get_projects()[0].scenes[0].policies[0].commands
-        assert "velocity" in commands
-        assert commands["velocity"].term_name == "UiCommand"
-
-    def test_add_velocity_command_returns_self_for_chaining(
-        self, minimal_model, minimal_onnx
-    ):
-        _, policy = self._make_policy(minimal_model, minimal_onnx)
-        result = policy.add_velocity_command()
-        assert result is policy
 
     def test_commands_param_stores_inputs(self, minimal_model, minimal_onnx):
         builder, scene = self._make_scene(minimal_model)
@@ -279,7 +263,7 @@ class TestPolicyHandle:
         assert stored.dataset_joint_names == ["joint_a", "joint_b"]
         assert stored.default is True
 
-    def test_add_motion_from_wandb_resolves_run_id_shorthand(
+    def test_add_motion_wandb_resolves_run_id_shorthand(
         self, monkeypatch, minimal_model, minimal_onnx
     ):
         _, policy = self._make_policy(minimal_model, minimal_onnx)
@@ -292,11 +276,11 @@ class TestPolicyHandle:
             return "artifact_motion", b"npz-bytes"
 
         monkeypatch.setattr(
-            "mjswan.wandb_utils.fetch_motion_npz_from_wandb_run",
+            "mjswan.wandb_io.fetch_motion_npz_from_wandb_run",
             fake_fetch,
         )
 
-        policy.add_motion_from_wandb(
+        policy.add_motion_wandb(
             run_id="abc123",
             entity="demo-org",
             project="tracking",
@@ -307,7 +291,7 @@ class TestPolicyHandle:
         assert called["run_path"] == "demo-org/tracking/abc123"
         assert policy._config.motions[0].data == b"npz-bytes"
 
-    def test_add_policy_from_wandb_auto_imports_tracking_motion(
+    def test_add_policy_wandb_auto_imports_tracking_motion(
         self, monkeypatch, minimal_model, minimal_onnx
     ):
         scene = Builder().add_project(name="P").add_scene(name="S", model=minimal_model)
@@ -320,15 +304,15 @@ class TestPolicyHandle:
                 self.body_names = ("pelvis", "torso_link")
 
         monkeypatch.setattr(
-            "mjswan.wandb_utils.fetch_onnx_from_wandb_run",
+            "mjswan.wandb_io.fetch_onnx_from_wandb_run",
             lambda run_path: ("policy", minimal_onnx),
         )
         monkeypatch.setattr(
-            "mjswan.wandb_utils.fetch_motion_npz_from_wandb_run",
+            "mjswan.wandb_io.fetch_motion_npz_from_wandb_run",
             lambda run_path: ("motion_asset", b"npz-data"),
         )
 
-        handles = scene.add_policy_from_wandb(
+        handles = scene.add_policy_wandb(
             "demo-org/tracking/run1",
             only_latest=True,
             commands={"motion": MotionCommandCfg()},
@@ -346,13 +330,13 @@ class TestPolicyHandle:
         cfg = builder.get_projects()[0].scenes[0].policies[0]
         assert cfg.metadata["version"] == "1.0"
 
-    def test_add_policy_from_wandb_only_latest_preserves_extras(
+    def test_add_policy_wandb_only_latest_preserves_extras(
         self, minimal_model, minimal_onnx, monkeypatch
     ):
         scene = Builder().add_project(name="P").add_scene(name="S", model=minimal_model)
 
         monkeypatch.setattr(
-            "mjswan.wandb_utils.fetch_onnx_from_wandb_run",
+            "mjswan.wandb_io.fetch_onnx_from_wandb_run",
             lambda _path: ("latest", minimal_onnx),
         )
 
@@ -360,7 +344,7 @@ class TestPolicyHandle:
             "model_overrides": {"geom_friction": [1.0, 0.5, 0.25]},
             "reset_samples": {"qpos": [[0.0]], "qvel": [[0.0]]},
         }
-        handles = scene.add_policy_from_wandb(
+        handles = scene.add_policy_wandb(
             "entity/project/run",
             only_latest=True,
             extras=extras,

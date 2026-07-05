@@ -266,7 +266,7 @@ class TestSaveConfigJsonSplats:
 
 
 # ===========================================================================
-# L1 — SceneHandle.add_splat_section()
+# L1 — SceneHandle.enable_splat_section()
 # ===========================================================================
 class TestAddSplatSection:
     def _make_scene(self, minimal_model):
@@ -274,19 +274,19 @@ class TestAddSplatSection:
 
     def test_returns_self_for_chaining(self, minimal_model):
         scene = self._make_scene(minimal_model)
-        result = scene.add_splat_section()
+        result = scene.enable_splat_section()
         assert result is scene
 
     def test_sets_splat_section_flag_on_config(self, minimal_model):
         scene = self._make_scene(minimal_model)
         assert scene._config.splat_section is False
-        scene.add_splat_section()
+        scene.enable_splat_section()
         assert scene._config.splat_section is True
 
     def test_splat_section_key_emitted_when_no_splats(self, tmp_path, minimal_model):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
-        scene.add_splat_section()
+        scene.enable_splat_section()
         builder._save_config_json(tmp_path)
         config = json.loads((tmp_path / "assets" / "config.json").read_text())
         scene_cfg = config["projects"][0]["scenes"][0]
@@ -307,7 +307,7 @@ class TestAddSplatSection:
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.add_splat("Outdoor", url="https://example.com/bg.spz")
-        scene.add_splat_section()
+        scene.enable_splat_section()
         builder._save_config_json(tmp_path)
         config = json.loads((tmp_path / "assets" / "config.json").read_text())
         scene_cfg = config["projects"][0]["scenes"][0]

@@ -6,11 +6,11 @@ Layer: L1 (pure Python, no MuJoCo/ONNX required).
 import mjswan
 from mjswan.command import (
     ButtonConfig,
+    CommandBinding,
     CommandTermConfig,
-    CommandTermSpec,
     SliderConfig,
     _custom_registry,
-    register_command_term,
+    register_command,
     ui_command,
     velocity_command,
 )
@@ -109,13 +109,13 @@ class TestVelocityCommand:
 
 
 class TestCommandRegistry:
-    def test_register_command_term_is_accessible_from_mjswan(self):
-        assert mjswan.register_command_term is register_command_term
+    def test_register_command_is_accessible_from_mjswan(self):
+        assert mjswan.register_command is register_command
 
     def test_custom_term_spec_can_be_registered(self):
-        register_command_term(
+        register_command(
             "DummyCommandCfg",
-            CommandTermSpec(
+            CommandBinding(
                 ts_name="DummyCommand",
                 serializer=lambda cfg: {"value": cfg.value},
             ),

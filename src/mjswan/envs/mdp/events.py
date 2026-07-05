@@ -31,15 +31,11 @@ class EventBinding:
     ts_src: str | None = None
 
 
-# Backwards-compatible alias (pre-ADR-0003 name).
-EventFunc = EventBinding
-
-
 _custom_registry: dict[str, EventBinding] = {}
 
 
-def register_event_func(mjlab_name: str, sentinel: EventBinding) -> None:
-    """Register a custom ``EventFunc`` sentinel for an mjlab event function."""
+def register_event(mjlab_name: str, sentinel: EventBinding) -> None:
+    """Register a custom event binding for an mjlab event function."""
     _custom_registry[mjlab_name] = sentinel
 
 
@@ -74,7 +70,7 @@ def reset_root_state_uniform(env, *, pose_range=None, velocity_range=None, **_un
 # terrain flat-patch data (``terrainData``) — an engine capability outside
 # bounded linear algebra, and a mjswan browser enhancement rather than an mjlab
 # term.  Tasks that want patch-based spawning provide it task-side via ``ts_src``
-# and register it with ``register_event_func``.  See
+# and register it with ``register_event``.  See
 # examples/mjlab/defaults/events and ADR 0003.
 
 
@@ -134,8 +130,7 @@ def reset_joints_by_offset(
 
 __all__ = [
     "EventBinding",
-    "EventFunc",
-    "register_event_func",
+    "register_event",
     "reset_root_state_uniform",
     "randomize_terrain",
     "reset_joints_by_offset",

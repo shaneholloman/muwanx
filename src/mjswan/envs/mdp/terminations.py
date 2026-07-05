@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
-class TermBinding:
+class TerminationBinding:
     """Binding from an mjlab termination name to its browser implementation.
 
     See ADR 0003.  Declarative terminations are plain traceable callables
@@ -47,24 +47,20 @@ class TermBinding:
     ts_src: str | None = None
 
 
-# Backwards-compatible alias (pre-ADR-0003 name).
-TermFunc = TermBinding
-
-
 # ---------------------------------------------------------------------------
 # Custom termination registry
 # ---------------------------------------------------------------------------
 
-_custom_registry: dict[str, TermBinding] = {}
-"""Maps mjlab termination function names to user-supplied ``TermFunc`` sentinels.
+_custom_registry: dict[str, TerminationBinding] = {}
+"""Maps mjlab termination function names to user-supplied bindings.
 
-Populated via :func:`register_termination_func`. The mjlab adapter checks this
+Populated via :func:`register_termination`. The mjlab adapter checks this
 registry as a fallback after the built-in sentinel lookup fails.
 """
 
 
-def register_termination_func(mjlab_name: str, sentinel: TermFunc) -> None:
-    """Register a custom ``TermFunc`` sentinel for an mjlab termination.
+def register_termination(mjlab_name: str, sentinel: TerminationBinding) -> None:
+    """Register a custom termination binding for an mjlab termination.
 
     Call this before :meth:`~mjswan.Builder.build` so the adapter can
     resolve the function and the builder can inject any custom TypeScript
@@ -73,7 +69,7 @@ def register_termination_func(mjlab_name: str, sentinel: TermFunc) -> None:
     Args:
         mjlab_name: The mjlab termination function name
             (e.g. ``"out_of_terrain_bounds"``).
-        sentinel: A :class:`TermFunc` describing the browser-side
+        sentinel: A :class:`TerminationBinding` describing the browser-side
             implementation. Set ``unsupported_reason`` to mark the
             termination as unsupported. Set ``ts_src`` to the absolute path
             of a ``.ts`` file that exports the class named by ``ts_name``.
@@ -264,7 +260,7 @@ def base_ang_vel_exceed(
     """Terminate when the base angular velocity exceeds ``threshold`` on any axis.
 
     Declarative DSL form (see ADR 0003) — the first MDP term migrated off
-    the monolithic ``TermFunc`` sentinel + engine class pair.  Equivalent to
+    the monolithic ``TerminationBinding`` sentinel + engine class pair.  Equivalent to
     ``any(|root_ang_vel_b| > threshold)``.
 
     Requires ``params={"threshold": <rad/s>}``.
@@ -278,7 +274,7 @@ def base_ang_vel_exceed(
 # Safety / diagnostics (not supported in browser)
 # ---------------------------------------------------------------------------
 
-illegal_contact = TermFunc(
+illegal_contact = TerminationBinding(
     ts_name="",
     unsupported_reason=(
         "illegal_contact is not supported in mjswan: contact force checks on "
@@ -295,7 +291,7 @@ illegal_contact = TermFunc(
     ``NotImplementedError`` at build time.
 """
 
-nan_detection = TermFunc(
+nan_detection = TerminationBinding(
     ts_name="",
     unsupported_reason=(
         "nan_detection is not supported in mjswan: NaN/Inf detection "
@@ -313,9 +309,8 @@ nan_detection = TermFunc(
 
 
 __all__ = [
-    "TermBinding",
-    "TermFunc",
-    "register_termination_func",
+    "TerminationBinding",
+    "register_termination",
     "time_out",
     "bad_orientation",
     "root_height_below_minimum",

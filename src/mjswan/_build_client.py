@@ -160,7 +160,7 @@ class ClientBuilder:
         )
 
     def generate_custom_observations(self) -> None:
-        """Generate custom_observations.ts from user-registered ObsFunc sentinels.
+        """Generate custom_observations.ts from user-registered ObservationBinding sentinels.
 
         Iterates ``_custom_registry`` and collects entries that have a ``ts_src``
         path.  Each source file is read and its content is inlined into
@@ -187,7 +187,7 @@ class ClientBuilder:
         if not custom_entries:
             output_path.write_text(
                 "// Custom observation classes registered via"
-                " mjswan.envs.mdp.observations.register_obs_func().\n"
+                " mjswan.envs.mdp.observations.register_observation().\n"
                 "// This file is auto-generated at build time — do not edit manually.\n"
                 "\n"
                 "export const CustomObservations:"
@@ -197,7 +197,7 @@ class ClientBuilder:
 
         lines = [
             "// Custom observation classes registered via"
-            " mjswan.envs.mdp.observations.register_obs_func().",
+            " mjswan.envs.mdp.observations.register_observation().",
             "// This file is auto-generated at build time — do not edit manually.",
             "",
         ]
@@ -259,7 +259,7 @@ class ClientBuilder:
         if not custom_entries:
             output_path.write_text(
                 "// Custom command terms registered via"
-                " mjswan.register_command_term().\n"
+                " mjswan.register_command().\n"
                 "// This file is auto-generated at build time — do not edit manually.\n"
                 "\n"
                 "import type { CommandTermConstructor } from './types';\n"
@@ -270,7 +270,7 @@ class ClientBuilder:
             return
 
         lines = [
-            "// Custom command terms registered via mjswan.register_command_term().",
+            "// Custom command terms registered via mjswan.register_command().",
             "// This file is auto-generated at build time — do not edit manually.",
             "",
             "import type { CommandTermConstructor } from './types';",
@@ -332,7 +332,7 @@ class ClientBuilder:
         if not custom_entries:
             output_path.write_text(
                 "// Custom termination classes registered via"
-                " mjswan.envs.mdp.terminations.register_termination_func().\n"
+                " mjswan.envs.mdp.terminations.register_termination().\n"
                 "// This file is auto-generated at build time — do not edit manually.\n"
                 "\n"
                 "type TerminationConstructor ="
@@ -345,7 +345,7 @@ class ClientBuilder:
 
         lines = [
             "// Custom termination classes registered via"
-            " mjswan.envs.mdp.terminations.register_termination_func().",
+            " mjswan.envs.mdp.terminations.register_termination().",
             "// This file is auto-generated at build time — do not edit manually.",
             "",
             "type TerminationConstructor = new (config: import('./TerminationBase').TerminationConfig) => import('./TerminationBase').TerminationBase;",
@@ -437,7 +437,7 @@ class ClientBuilder:
         if not custom_entries:
             output_path.write_text(
                 "// Custom event classes registered via"
-                " mjswan.envs.mdp.events.register_event_func().\n"
+                " mjswan.envs.mdp.events.register_event().\n"
                 "// This file is auto-generated at build time — do not edit manually.\n"
                 "\n"
                 "import type { EventConstructor } from './EventBase';\n"
@@ -448,7 +448,7 @@ class ClientBuilder:
 
         lines = [
             "// Custom event classes registered via"
-            " mjswan.envs.mdp.events.register_event_func().",
+            " mjswan.envs.mdp.events.register_event().",
             "// This file is auto-generated at build time — do not edit manually.",
             "",
             "import type { EventConstructor } from './EventBase';",
@@ -490,7 +490,7 @@ class ClientBuilder:
 
     def generate_viewer_config_defaults(self) -> None:
         """Generate viewer_config_defaults.ts from Python ViewerConfig defaults."""
-        from mjswan.viewer_config import ViewerConfig
+        from mjswan.viewer import ViewerConfig
 
         d = ViewerConfig()
         fovy_default = 45  # Python fovy=None means "use 45 degrees"

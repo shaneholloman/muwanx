@@ -10,7 +10,7 @@ mjswan is a Python framework that packages browser-based MuJoCo simulations with
 ```
 src/mjswan/          Python package source
   builder.py           Builder — top-level entry point
-  app.py               mjswanApp — launch / serve / publish built apps
+  app.py               MjswanApp — launch / serve / publish built apps
   publish.py           Publish a built dist/ to mjswan Cloud (data-file upload protocol)
   project.py           ProjectConfig / ProjectHandle
   scene.py             SceneConfig / SceneHandle
@@ -18,9 +18,9 @@ src/mjswan/          Python package source
   motion.py            MotionConfig / MotionHandle
   splat.py             SplatConfig / SplatHandle (Gaussian Splat)
   command.py           Command terms (Slider, Button, Checkbox, velocity_command, ui_command)
-  viewer_config.py     ViewerConfig
+  viewer.py     ViewerConfig
   utils.py             ZIP-DEFLATE bundling, XML path rewriting, name2id slug helper
-  wandb_utils.py       W&B motion artifact downloads
+  wandb_io.py       W&B motion artifact downloads
   _cli.py              Typer-based `mjswan` CLI + legacy entry points
   _build_client.py     Frontend build orchestration (npm/vite)
   adapters/            mjlab soft-dependency adapter + compat helpers
@@ -47,23 +47,25 @@ assets/              Demo GIF and banner SVG
 ```
 Builder(base_path, gtm_id, mt, debug)
   ├── Builder.from_mjlab(task_id, run_path=..., play=...) → Builder  # classmethod factory
+  ├── .add_project_mjlab(task_id, run_path=..., play=...) → ProjectHandle
   └── .add_project(name, id) → ProjectHandle
+        ├── .add_scene_mjlab(task_id, play=...) → SceneHandle
         └── .add_scene(name, model|spec, metadata) → SceneHandle
               ├── .add_policy(name, policy, ...) → PolicyHandle
-              │     ├── .add_velocity_command(...) → PolicyHandle
-              │     └── .add_motion(...) / .add_motion_from_wandb(...) → MotionHandle
+              │     └── .add_motion(...) / .add_motion_wandb(...) → MotionHandle
+              ├── .add_policy_wandb(run_path, ...) → list[PolicyHandle]
               ├── .add_splat(name, source|url, ...) → SplatHandle
-              └── .set_viewer_config(ViewerConfig)
+              └── .set_viewer(ViewerConfig)
 
-builder.build(output_dir) → mjswanApp
-mjswanApp.launch(host, port, open_browser)   # blocking; Colab-aware
+builder.build(output_dir) → MjswanApp
+MjswanApp.launch(host, port, open_browser)   # blocking; Colab-aware
 ```
 
-`Builder.from_mjlab(task_id, run_path=...)` is the one-liner shortcut for the common "visualize a single mjlab task" pattern: it creates a project, adds an mjlab scene, and optionally attaches all `model_*.pt` checkpoints from one or more W&B runs (converted to ONNX via mjlab+torch). Drop down to `builder.get_projects()[0].scenes[0].add_policy_from_wandb(...)` for finer control.
+`Builder.from_mjlab(task_id, run_path=...)` is the one-liner shortcut for the common "visualize a single mjlab task" pattern; it delegates to the instance method `Builder.add_project_mjlab`, which creates a project, adds an mjlab scene, and optionally attaches all `model_*.pt` checkpoints from one or more W&B runs (converted to ONNX via mjlab+torch). For finer control, build manually: `add_project` → `ProjectHandle.add_scene_mjlab` → `SceneHandle.add_policy_wandb(...)`.
 
 Each `*Handle` wraps a `*Config` dataclass — the handle is the fluent API, the config is the serializable state.
 
-The package's `__init__.py` is the canonical public API. Re-exports cover: `Builder` / `mjswanApp`; the five `*Handle` and `*Config` pairs; mjlab-compatible MDP cfgs (`ObservationGroupCfg`, `ObservationTermCfg`, `ActionTermCfg`, `JointPositionActionCfg`, `JointEffortActionCfg`, `TerminationTermCfg`); command UI (`SliderConfig`/`ButtonConfig`/`CheckboxConfig` and their `Slider`/`Button`/`Checkbox` aliases, `CommandTermConfig`, `ui_command`, `velocity_command`); and the `register_obs_func` / `register_event_func` / `register_termination_func` / `register_command_term` extension hooks.
+The package's `__init__.py` is the canonical public API. Re-exports cover: `Builder` / `MjswanApp`; the five `*Handle` and `*Config` pairs; mjlab-compatible MDP cfgs (`ObservationGroupCfg`, `ObservationTermCfg`, `ActionTermCfg`, `JointPositionActionCfg`, `JointEffortActionCfg`, `TerminationTermCfg`); command UI (`SliderConfig`/`ButtonConfig`/`CheckboxConfig` and their `Slider`/`Button`/`Checkbox` aliases, `CommandTermConfig`, `ui_command`, `velocity_command`); and the `register_observation` / `register_event` / `register_termination` / `register_command` extension hooks.
 
 
 ## Key modules
@@ -71,14 +73,14 @@ The package's `__init__.py` is the canonical public API. Re-exports cover: `Buil
 ### `builder.py` — `Builder`
 Main entry point. Accumulates `ProjectConfig` objects and calls `ClientBuilder` to invoke the Vite frontend build, then writes `config.json` + per-scene DEFLATE-compressed ZIPs (via `utils.to_zip_deflated`, since `mujoco.to_zip` stores entries uncompressed) plus policy/motion/splat assets into the output directory.
 
-### `app.py` — `mjswanApp`
+### `app.py` — `MjswanApp`
 Wraps a built `dist/` directory. `launch()` starts a stdlib HTTP server (COOP/COEP headers required for SharedArrayBuffer / MuJoCo WASM threading); detects Google Colab and displays an inline iframe instead.
 
 ### `policy.py` — `PolicyConfig` / `PolicyHandle`
 Holds an `onnx.ModelProto` plus observation groups, action terms, termination terms, commands, and motion references. Compatible with mjlab config classes via the adapter layer. Serialized to a per-policy `<name>.json` at build time.
 
 ### `command.py`
-Defines command terms consumed by policies: `SliderConfig`, `ButtonConfig`, `CheckboxConfig` (aliased as `Slider` / `Button` / `Checkbox`), `CommandTermConfig`, `CommandTermSpec`, `CommandUiConfig`, and the `CommandInput` union of input types. `velocity_command()` is a convenience factory for the standard locomotion 3-DoF velocity command, and `ui_command()` builds a generic UI-driven command term. Custom command terms can be registered with `register_command_term`.
+Defines command terms consumed by policies: `SliderConfig`, `ButtonConfig`, `CheckboxConfig` (aliased as `Slider` / `Button` / `Checkbox`), `CommandTermConfig`, `CommandBinding`, `CommandUiConfig`, and the `CommandInput` union of input types. `velocity_command()` is a convenience factory for the standard locomotion 3-DoF velocity command, and `ui_command()` builds a generic UI-driven command term. Custom command terms can be registered with `register_command`.
 
 ### `scene.py` — `SceneConfig` / `SceneHandle`
 A scene owns one MuJoCo model (as `MjModel` → binary `.mjb` or `MjSpec` → XML), zero or more policies, and zero or more Gaussian splat backgrounds.
@@ -86,7 +88,7 @@ A scene owns one MuJoCo model (as `MjModel` → binary `.mjb` or `MjSpec` → XM
 ### `splat.py` — `SplatConfig` / `SplatHandle`
 Configures a 3D Gaussian Splat (`.spz` format) background: scale, position offsets, Euler rotations, optional collider mesh URL.
 
-### `viewer_config.py` — `ViewerConfig`
+### `viewer.py` — `ViewerConfig`
 Camera parameters (lookat, distance, fovy, elevation, azimuth) + tracking mode (`OriginType`: AUTO / WORLD / ASSET_ROOT / ASSET_BODY). `ViewerConfig.from_position()` computes spherical params from a Cartesian viewer position.
 
 ### `adapters/`
@@ -94,15 +96,15 @@ Camera parameters (lookat, distance, fovy, elevation, azimuth) + tracking mode (
 - `mjlab_compat.py`: Monkey-patches `MujocoCfg.apply_to_spec()` onto mjlab when needed.
 
 ### `envs/mdp/` and `managers/`
-mjlab-compatible MDP layer. `envs/mdp/` holds the config-side building blocks: observation groups, action terms (`JointPositionActionCfg`, `JointEffortActionCfg`, `MuscleActivationActionCfg`), event functions, and termination functions. `managers/` holds the runtime counterparts (`observation_manager`, `event_manager`, `action_manager`, `termination_manager`) that mjlab's training loop hands to the policy. Custom obs/event/termination functions are registered via `register_obs_func` / `register_event_func` / `register_termination_func`.
+mjlab-compatible MDP layer. `envs/mdp/` holds the config-side building blocks: observation groups, action terms (`JointPositionActionCfg`, `JointEffortActionCfg`, `MuscleActivationActionCfg`), event functions, and termination functions. `managers/` holds the runtime counterparts (`observation_manager`, `event_manager`, `action_manager`, `termination_manager`) that mjlab's training loop hands to the policy. Custom obs/event/termination functions are registered via `register_observation` / `register_event` / `register_termination`.
 
 **Muscle action term.** `MuscleActivationActionCfg` drives MuJoCo muscle actuators. `normalize=True` (default) applies the canonical MyoSuite sigmoid `σ(5(scale·a + offset − 0.5))` to map policy outputs into excitation in (0, 1); `normalize=False` clips `scale·a + offset` to [0, 1]. The semantics mirror myosuite4's `MuscleActionTermCfg.normalize`. The mjlab adapter translates `MyoMuscleActivationActionCfg` (the class actually used by every myo* mjlab task) to `MuscleActivationActionCfg`; see [docs/adr/0002](./docs/adr/0002-muscle-action-term-aligned-with-myomuscleactivationactioncfg.md).
 
 ### `_build_client.py`
 Orchestrates the Node.js / Vite frontend build. Manages a local `nodeenv` if Node isn't available system-wide.
 
-### `wandb_utils.py`
-Downloads motion `.npz` artifacts from Weights & Biases runs. Used by `PolicyHandle.add_motion_from_wandb()`.
+### `wandb_io.py`
+Downloads motion `.npz` artifacts from Weights & Biases runs. Used by `PolicyHandle.add_motion_wandb()`.
 
 ### `utils.py`
 Asset bundling and path helpers. `to_zip_deflated()` is the per-scene packager: it collects mesh/texture/hfield/skin files from disk (with `spec.assets` fallback for mjlab's prefixed-key layout), encodes buffer-only textures as PNGs, rewrites the MuJoCo XML so meshdir/texturedir hints are eliminated and all paths are ZIP-safe, and writes a DEFLATE-compressed ZIP that JSZip decodes on the client. `name2id()` is the lowercase-underscore slug helper used everywhere project / scene / policy IDs are derived from human-readable names.

@@ -65,10 +65,13 @@ scene.add_policy(
     name="Locomotion",
     policy=onnx.load("robot/locomotion.onnx"),
     config_path="robot/locomotion.json",
-).add_velocity_command(
-    lin_vel_x=(-1.5, 1.5),
-    lin_vel_y=(-0.5, 0.5),
-    default_lin_vel_x=0.5,
+    commands={
+        "velocity": mjswan.velocity_command(
+            lin_vel_x=(-1.5, 1.5),
+            lin_vel_y=(-0.5, 0.5),
+            default_lin_vel_x=0.5,
+        )
+    },
 )
 
 builder.build().launch()
@@ -85,13 +88,15 @@ scene.add_policy(
     name="Policy A",
     policy=onnx.load("policy_a.onnx"),
     config_path="policy_a.json",
-).add_velocity_command()
+    commands={"velocity": mjswan.velocity_command()},
+)
 
 scene.add_policy(
     name="Policy B",
     policy=onnx.load("policy_b.onnx"),
     config_path="policy_b.json",
-).add_velocity_command()
+    commands={"velocity": mjswan.velocity_command()},
+)
 ```
 
 The browser UI shows a selector for choosing between policies at runtime.
@@ -183,11 +188,11 @@ scene.add_splat("Lab B", source="lab_b.spz", scale=1.20, z_offset=0.65)
 
 ## Splat URL input without pre-configured splats
 
-Call `add_splat_section()` to show the Splat selector in the control panel even when no splats are pre-configured. Users can then paste an arbitrary `.spz` URL at runtime.
+Call `enable_splat_section()` to show the Splat selector in the control panel even when no splats are pre-configured. Users can then paste an arbitrary `.spz` URL at runtime.
 
 ```python
 scene = project.add_scene(name="Demo", spec=spec)
-scene.add_splat_section()
+scene.enable_splat_section()
 ```
 
 ## Calibrating a new splat capture

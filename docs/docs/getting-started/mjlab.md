@@ -29,9 +29,9 @@ app.launch()
 
 The W&B form requires both `mjlab` and `torch` (the `model_*.pt` → ONNX conversion runs locally). For finer control, drop down to the next two patterns.
 
-## 2. Scene helper: `ProjectHandle.add_mjlab_scene`
+## 2. Scene helper: `ProjectHandle.add_scene_mjlab`
 
-When you need multiple scenes (one per task) or want to mix mjlab tasks with hand-written scenes, use `add_mjlab_scene(task_id, play=...)` on a `ProjectHandle`. It loads the task's MuJoCo spec, applies the task's `viewer` / `events` / terrain data, and returns a normal `SceneHandle`.
+When you need multiple scenes (one per task) or want to mix mjlab tasks with hand-written scenes, use `add_scene_mjlab(task_id, play=...)` on a `ProjectHandle`. It loads the task's MuJoCo spec, applies the task's `viewer` / `events` / terrain data, and returns a normal `SceneHandle`.
 
 ```python
 import mjswan
@@ -41,14 +41,14 @@ builder = mjswan.Builder()
 project = builder.add_project(name="mjlab Tasks")
 
 for task_id in list_tasks():
-    project.add_mjlab_scene(task_id, play=True)
+    project.add_scene_mjlab(task_id, play=True)
 
 builder.build().launch()
 ```
 
 ### Attaching trained policies from W&B
 
-Use `scene.add_policy_from_wandb(run_path, task_id=..., ...)` to fetch checkpoints from one or more W&B runs and attach them all to the scene. Pass `observations` / `commands` / `actions` / `terminations` from the mjlab `env_cfg` — mjswan adapts mjlab config classes automatically.
+Use `scene.add_policy_wandb(run_path, task_id=..., ...)` to fetch checkpoints from one or more W&B runs and attach them all to the scene. Pass `observations` / `commands` / `actions` / `terminations` from the mjlab `env_cfg` — mjswan adapts mjlab config classes automatically.
 
 ```python
 import mjswan
@@ -60,8 +60,8 @@ project = builder.add_project(name="ANYmal C")
 task_id = "Mjlab-Velocity-Flat-Anymal-C"
 env_cfg = load_env_cfg(task_id, play=True)
 
-scene = project.add_mjlab_scene(task_id, play=True)
-scene.add_policy_from_wandb(
+scene = project.add_scene_mjlab(task_id, play=True)
+scene.add_policy_wandb(
     "<entity>/<project>/<run_id>",
     task_id=task_id,
     commands=env_cfg.commands,
@@ -72,7 +72,7 @@ scene.add_policy_from_wandb(
 builder.build().launch()
 ```
 
-`add_policy_from_wandb` accepts a `list[str]` for the run path if you want to bundle checkpoints from multiple runs together. The latest checkpoint (highest training step) is marked as the default.
+`add_policy_wandb` accepts a `list[str]` for the run path if you want to bundle checkpoints from multiple runs together. The latest checkpoint (highest training step) is marked as the default.
 
 If you only want the exported `.onnx` artifact (skipping the `.pt → .onnx` conversion), pass `only_latest=True` — `task_id` is then optional.
 

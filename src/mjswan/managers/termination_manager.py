@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from ..envs.mdp.terminations import TermFunc
+from ..envs.mdp.terminations import TerminationBinding
 
 
 @dataclass
@@ -35,7 +35,7 @@ class TerminationTermCfg:
 
     ``func`` accepts either:
 
-    - A legacy :class:`TermFunc` sentinel: the build emits the existing
+    - A legacy :class:`TerminationBinding` sentinel: the build emits the existing
       ``{"name": ..., "params": ...}`` shape and the engine resolves the
       class from its registry.
     - A plain Python callable taking ``(env, **params)``: the build traces
@@ -44,8 +44,8 @@ class TerminationTermCfg:
       in ADR 0003.
     """
 
-    func: TermFunc | Callable[..., Any]
-    """Termination function — TermFunc sentinel (legacy) or DSL callable."""
+    func: TerminationBinding | Callable[..., Any]
+    """Termination function — TerminationBinding sentinel (legacy) or DSL callable."""
 
     params: dict[str, Any] = field(default_factory=dict)
     """Additional keyword arguments forwarded to the function or TS constructor."""
@@ -57,15 +57,15 @@ class TerminationTermCfg:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for the TS ``TerminationManager``.
 
-        Legacy ``TermFunc`` produces ``{"name": ..., "params": ..., "time_out": ...}``.
+        Legacy ``TerminationBinding`` produces ``{"name": ..., "params": ..., "time_out": ...}``.
         A DSL callable produces ``{"kind": "termination", "nodes": [...], ...}``.
         """
-        if isinstance(self.func, TermFunc):
+        if isinstance(self.func, TerminationBinding):
             return self._to_dict_legacy()
         return self._to_dict_traced()
 
     def _to_dict_legacy(self) -> dict[str, Any]:
-        func: TermFunc = self.func  # type: ignore[assignment]
+        func: TerminationBinding = self.func  # type: ignore[assignment]
         if func.unsupported_reason is not None:
             raise NotImplementedError(func.unsupported_reason)
 

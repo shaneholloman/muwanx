@@ -14,7 +14,7 @@ import mujoco
 from .adapters import apply_mjlab_sim_options, ensure_mjlab_extensions
 from .scene import SceneConfig, SceneHandle
 from .utils import collect_spec_assets
-from .viewer_config import ViewerConfig
+from .viewer import ViewerConfig
 
 if TYPE_CHECKING:
     from .builder import Builder
@@ -117,7 +117,7 @@ class ProjectHandle:
         self._config.scenes.append(scene_config)
         return SceneHandle(scene_config, self)
 
-    def add_mjlab_scene(self, task_id: str, *, play: bool = False) -> SceneHandle:
+    def add_scene_mjlab(self, task_id: str, *, play: bool = False) -> SceneHandle:
         """Add a MuJoCo scene from an mjlab task.
 
         Loads the task's MuJoCo spec from the mjlab task registry and adds it
@@ -136,7 +136,7 @@ class ProjectHandle:
             ```python
             builder = mjswan.Builder()
             project = builder.add_project(name="My App")
-            scene = project.add_mjlab_scene("go2_flat", play=True)
+            scene = project.add_scene_mjlab("go2_flat", play=True)
             app = builder.build()
             ```
         """
@@ -145,7 +145,7 @@ class ProjectHandle:
             from mjlab.tasks.registry import load_env_cfg
         except ImportError as e:
             raise ImportError(
-                "mjlab is required for add_mjlab_scene(). "
+                "mjlab is required for add_scene_mjlab(). "
                 "Install it with: pip install mjlab"
             ) from e
 
@@ -158,7 +158,7 @@ class ProjectHandle:
         handle = self.add_scene(spec=scene.spec, name=task_id)
         viewer_cfg = _adapt_mjlab_viewer_config(getattr(env_cfg, "viewer", None))
         if viewer_cfg is not None:
-            handle.set_viewer_config(viewer_cfg)
+            handle.set_viewer(viewer_cfg)
         terrain_data = _extract_terrain_data(scene)
         if terrain_data:
             # Expose terrain spawn positions as data.  Using them to override

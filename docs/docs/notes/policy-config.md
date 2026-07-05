@@ -68,7 +68,7 @@ obs = {
 }
 ```
 
-`ObservationTermCfg` fields used at runtime: `func` (a built-in sentinel below or a custom one registered via `register_obs_func`), `params` (forwarded to the browser-side class), `scale`, `clip`, `history_length`. Other mjlab fields (`noise`, `delay_*`) are accepted for config compatibility but ignored — there's no training in the browser.
+`ObservationTermCfg` fields used at runtime: `func` (a built-in sentinel below or a custom one registered via `register_observation`), `params` (forwarded to the browser-side class), `scale`, `clip`, `history_length`. Other mjlab fields (`noise`, `delay_*`) are accepted for config compatibility but ignored — there's no training in the browser.
 
 ### Built-in observation sentinels
 
@@ -97,7 +97,7 @@ Defined in `mjswan.envs.mdp.observations`:
 
 `height_scan` is exported for mjlab compatibility but raises `NotImplementedError` at build time (the browser has no ray-cast sensor).
 
-For a custom observation backed by your own TypeScript class, see `register_obs_func` in the API reference.
+For a custom observation backed by your own TypeScript class, see `register_observation` in the API reference.
 
 ## Actions
 
@@ -146,7 +146,7 @@ commands = {
 }
 ```
 
-To adapt a custom mjlab command class to a browser-side TS class, use `mjswan.register_command_term(mjlab_name, spec)` — see the [API reference](../api/core.md#register_command_term).
+To adapt a custom mjlab command class to a browser-side TS class, use `mjswan.register_command(mjlab_name, spec)` — see the [API reference](../api/core.md#register_command).
 
 ## Terminations
 
@@ -173,7 +173,7 @@ terminations = {
 | `bad_orientation` | `BadOrientation` | `limit_angle` (radians) |
 | `root_height_below_minimum` | `RootHeightBelowMinimum` | `minimum_height` (metres) |
 
-Other mjlab termination sentinels are exported for config compatibility but raise `NotImplementedError` at build time. Register a custom one with `register_termination_func`.
+Other mjlab termination sentinels are exported for config compatibility but raise `NotImplementedError` at build time. Register a custom one with `register_termination`.
 
 ## End-to-end examples
 

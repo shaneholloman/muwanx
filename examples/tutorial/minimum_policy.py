@@ -100,7 +100,7 @@ def main():
     project.add_scene(
         spec=build_spec(),
         name="Hovering Box",
-    ).set_viewer_config(
+    ).set_viewer(
         mjswan.ViewerConfig(
             lookat=(0.0, 0.0, 1.0),
             distance=3.5,

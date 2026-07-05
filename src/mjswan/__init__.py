@@ -5,7 +5,7 @@ Interactive MuJoCo simulations with ONNX policies running entirely in the browse
 
 __version__ = "0.7.1"
 
-from .app import mjswanApp
+from .app import MjswanApp
 from .builder import Builder
 from .command import (
     Button,
@@ -15,23 +15,22 @@ from .command import (
     CommandBinding,
     CommandInput,
     CommandTermConfig,
-    CommandTermSpec,
     CommandUiConfig,
     Slider,
     SliderConfig,
-    register_command_term,
+    register_command,
     ui_command,
     velocity_command,
 )
-from .envs.mdp import MjlabMdpBinding
+from .envs.mdp import MdpBinding
 from .envs.mdp.actions import (
     ActionTermCfg,
     JointEffortActionCfg,
     JointPositionActionCfg,
 )
-from .envs.mdp.events import EventBinding, EventFunc, register_event_func
-from .envs.mdp.observations import ObsBinding, ObsFunc, register_obs_func
-from .envs.mdp.terminations import TermBinding, TermFunc, register_termination_func
+from .envs.mdp.events import EventBinding, register_event
+from .envs.mdp.observations import ObservationBinding, register_observation
+from .envs.mdp.terminations import TerminationBinding, register_termination
 from .managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from .managers.termination_manager import TerminationTermCfg
 from .motion import MotionConfig, MotionHandle
@@ -39,12 +38,12 @@ from .policy import PolicyConfig, PolicyHandle
 from .project import ProjectConfig, ProjectHandle
 from .scene import SceneConfig, SceneHandle
 from .splat import SplatConfig, SplatHandle
-from .viewer_config import ViewerConfig
+from .viewer import ViewerConfig
 
 __all__ = [
     # Builder and App
     "Builder",
-    "mjswanApp",
+    "MjswanApp",
     # Handles
     "ProjectHandle",
     "SceneHandle",
@@ -59,17 +58,15 @@ __all__ = [
     "PolicyConfig",
     "MotionConfig",
     # MDP bindings (mjlab-name → browser impl; see ADR 0003).
-    # *Func names are kept as backwards-compatible aliases.
-    "MjlabMdpBinding",
-    "ObsBinding",
-    "ObsFunc",
-    "register_obs_func",
+    # Pre-0.8 register_*_func / register_command_term names remain as deprecated
+    # function aliases via _compat (the *Binding class aliases were removed).
+    "MdpBinding",
+    "ObservationBinding",
+    "register_observation",
     "EventBinding",
-    "EventFunc",
-    "register_event_func",
-    "TermBinding",
-    "TermFunc",
-    "register_termination_func",
+    "register_event",
+    "TerminationBinding",
+    "register_termination",
     # MDP config (mjlab-compatible)
     "ObservationGroupCfg",
     "ObservationTermCfg",
@@ -87,9 +84,11 @@ __all__ = [
     "CommandInput",
     "CommandTermConfig",
     "CommandBinding",
-    "CommandTermSpec",
     "CommandUiConfig",
-    "register_command_term",
+    "register_command",
     "ui_command",
     "velocity_command",
 ]
+
+# Deprecated pre-0.8 aliases (methods, classes, modules). Remove in 0.9.
+from . import _compat  # noqa: E402, F401

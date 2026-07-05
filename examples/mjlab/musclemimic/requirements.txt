@@ -1,2 +1,3 @@
 huggingface_hub
 musclemimic_models
+myosuite @ git+https://github.com/ttktjmt/myosuite4.git@musclemimic-mjlab

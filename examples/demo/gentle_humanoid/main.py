@@ -116,10 +116,10 @@ def _ensure_default_motion_file(tracking_cfg: dict[str, Any]) -> Path:
     return path
 
 
-def _register_gentle_humanoid_extensions() -> dict[str, mjswan.ObsFunc]:
-    mjswan.register_command_term(
+def _register_gentle_humanoid_extensions() -> dict[str, mjswan.ObservationBinding]:
+    mjswan.register_command(
         "GentleHumanoidTrackingCommandCfg",
-        mjswan.CommandTermSpec(
+        mjswan.CommandBinding(
             ts_name="GentleHumanoidTrackingCommand",
             serializer=lambda _cfg: {},
             ts_src=str(COMMAND_TS),
@@ -140,11 +140,11 @@ def _register_gentle_humanoid_extensions() -> dict[str, mjswan.ObsFunc]:
         "prev_actions": "GentleHumanoidPrevActions",
     }
     obs_funcs = {
-        key: mjswan.ObsFunc(ts_name=ts_name, ts_src=str(OBS_TS))
+        key: mjswan.ObservationBinding(ts_name=ts_name, ts_src=str(OBS_TS))
         for key, ts_name in obs_names.items()
     }
     for key, obs_func in obs_funcs.items():
-        mjswan.register_obs_func(f"gentle_humanoid_{key}", obs_func)
+        mjswan.register_observation(f"gentle_humanoid_{key}", obs_func)
     return obs_funcs
 
 
@@ -198,7 +198,7 @@ def setup_builder() -> mjswan.Builder:
             str(gentle_humanoid_root / "assets" / "g1" / "g1.xml")
         ),
     )
-    scene.set_viewer_config(
+    scene.set_viewer(
         mjswan.ViewerConfig(
             lookat=(0, 0, 0),
             distance=3,

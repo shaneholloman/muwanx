@@ -468,7 +468,7 @@ class TestPublishDist:
 
 class TestAppPublish:
     def test_delegates_to_publish_dist(self, tmp_path: Path, monkeypatch):
-        from mjswan.app import mjswanApp
+        from mjswan.app import MjswanApp
 
         captured: dict = {}
 
@@ -481,7 +481,7 @@ class TestAppPublish:
 
         monkeypatch.setattr("mjswan.publish.publish_dist", fake_publish_dist)
         dist = _make_dist(tmp_path)
-        result = mjswanApp(dist).publish(title="Hello", tags=["x"])
+        result = MjswanApp(dist).publish(title="Hello", tags=["x"])
         assert result.id == "zzz"
         assert captured["title"] == "Hello"
         assert captured["tags"] == ["x"]

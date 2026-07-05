@@ -27,7 +27,7 @@ from .adapters import (
 from .motion import MotionConfig
 from .policy import PolicyConfig, PolicyHandle
 from .splat import SplatConfig, SplatHandle
-from .viewer_config import ViewerConfig
+from .viewer import ViewerConfig
 
 if TYPE_CHECKING:
     from .envs.mdp.actions.actions import ActionTermCfg
@@ -123,7 +123,7 @@ def _enrich_joint_observations(
     if model is None:
         return
 
-    # Legacy ObsFunc terms are keyed by ts_name; DSL terms (ADR 0003) are
+    # Legacy ObservationBinding terms are keyed by ts_name; DSL terms (ADR 0003) are
     # plain callables keyed by their function name.  Both need joint_names /
     # default_joint_pos resolved from the scene spec when not given explicitly.
     legacy_pos = {"JointPos", "JointPositions"}
@@ -281,6 +281,7 @@ class SceneHandle:
                 policy=onnx.load("locomotion.onnx"),
                 name="Locomotion",
                 config_path="locomotion.json",
+                commands={"velocity": mjswan.velocity_command()},
                 observations={
                     "policy": ObservationGroupCfg(
                         terms={
@@ -294,7 +295,6 @@ class SceneHandle:
                     ),
                 },
             )
-            policy.add_velocity_command()
         """
         if metadata is None:
             metadata = {}
@@ -329,7 +329,7 @@ class SceneHandle:
         self._config.policies.append(policy_config)
         return PolicyHandle(policy_config, self)
 
-    def add_policy_from_wandb(
+    def add_policy_wandb(
         self,
         run_path: str | list[str],
         *,
@@ -383,7 +383,7 @@ class SceneHandle:
 
         Example — all logged checkpoints from a single run (default):
             ```python
-            scene.add_policy_from_wandb(
+            scene.add_policy_wandb(
                 run_path="my-org/my-project/run-id",
                 task_id="go2_flat",
                 config_path="assets/locomotion.json",
@@ -393,7 +393,7 @@ class SceneHandle:
 
         Example — latest checkpoint only:
             ```python
-            scene.add_policy_from_wandb(
+            scene.add_policy_wandb(
                 run_path="my-org/my-project/run-id",
                 only_latest=True,
                 config_path="assets/locomotion.json",
@@ -403,7 +403,7 @@ class SceneHandle:
 
         Example — multiple runs:
             ```python
-            scene.add_policy_from_wandb(
+            scene.add_policy_wandb(
                 run_path=[
                     "my-org/my-project/run-id-1",
                     "my-org/my-project/run-id-2",
@@ -428,7 +428,7 @@ class SceneHandle:
         seen_names: set[str] = set()
         if only_latest:
             for path in run_paths:
-                from .wandb_utils import fetch_onnx_from_wandb_run
+                from .wandb_io import fetch_onnx_from_wandb_run
 
                 name, model = fetch_onnx_from_wandb_run(path)
                 if name not in seen_names:
@@ -453,7 +453,7 @@ class SceneHandle:
                     handles.append(handle)
         else:
             assert task_id is not None
-            from .wandb_utils import (
+            from .wandb_io import (
                 create_pt_onnx_export_context,
                 fetch_motion_npz_from_wandb_run,
                 fetch_pt_onnx_from_wandb_run,
@@ -629,7 +629,7 @@ class SceneHandle:
         self._config.splats.append(splat_config)
         return SplatHandle(splat_config, self)
 
-    def add_splat_section(self) -> SceneHandle:
+    def enable_splat_section(self) -> SceneHandle:
         """Show the Splat section in the control panel even when no splats are defined.
 
         This allows users to load splats by pasting a .spz URL directly in the
@@ -639,12 +639,12 @@ class SceneHandle:
             Self for method chaining.
 
         Example:
-            scene.add_splat_section()
+            scene.enable_splat_section()
         """
         self._config.splat_section = True
         return self
 
-    def set_viewer_config(self, config: ViewerConfig) -> SceneHandle:
+    def set_viewer(self, config: ViewerConfig) -> SceneHandle:
         """Set viewer configuration for this scene.
 
         Args:
@@ -657,7 +657,7 @@ class SceneHandle:
         Example::
 
             from mjswan import ViewerConfig
-            scene.set_viewer_config(ViewerConfig(
+            scene.set_viewer(ViewerConfig(
                 lookat=(0.0, 0.0, 0.7),
                 distance=4.3,
                 elevation=-33,
@@ -725,7 +725,7 @@ def _attach_tracking_motion(
     if tracking_motion_term is None:
         return
 
-    from .wandb_utils import fetch_motion_npz_from_wandb_run
+    from .wandb_io import fetch_motion_npz_from_wandb_run
 
     motion_file = getattr(tracking_motion_term, "motion_file", None)
     motion_path = Path(motion_file).expanduser() if motion_file else None

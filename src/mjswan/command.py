@@ -135,14 +135,10 @@ class CommandBinding:
     ts_src: str | None = None
 
 
-# Backwards-compatible alias (pre-ADR-0003 name).
-CommandTermSpec = CommandBinding
-
-
 _custom_registry: dict[str, CommandBinding] = {}
 
 
-def register_command_term(mjlab_name: str, spec: CommandTermSpec) -> None:
+def register_command(mjlab_name: str, spec: CommandBinding) -> None:
     """Register a custom command term adapter.
 
     ``mjlab_name`` should typically be the mjlab config class name, e.g.
@@ -221,9 +217,9 @@ def _serialize_motion_command(cfg: Any) -> dict[str, Any]:
 
 
 # Bridges mjlab's MotionCommandCfg (e.g. isaac_lab_tasks MotionCommandCfg) to the TrackingCommand term.
-register_command_term(
+register_command(
     "MotionCommandCfg",
-    CommandTermSpec(
+    CommandBinding(
         ts_name="TrackingCommand",
         serializer=_serialize_motion_command,
     ),
@@ -238,13 +234,12 @@ __all__ = [
     "CommandBinding",
     "CommandInput",
     "CommandTermConfig",
-    "CommandTermSpec",
     "CommandType",
     "CommandUiConfig",
     "Slider",
     "SliderConfig",
     "_custom_registry",
-    "register_command_term",
+    "register_command",
     "ui_command",
     "velocity_command",
 ]

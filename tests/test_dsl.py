@@ -132,12 +132,13 @@ class TestTermCfgDualPath:
         assert "name" not in out
 
     def test_legacy_termfunc_emits_named_entry(self):
-        # `illegal_contact` is still a legacy TermFunc sentinel (unsupported,
+        # `illegal_contact` is still a legacy TerminationBinding sentinel (unsupported,
         # but exercises the legacy serialization path with a fake func).
-        from mjswan.envs.mdp.terminations import TermFunc
+        from mjswan.envs.mdp.terminations import TerminationBinding
 
         cfg = TerminationTermCfg(
-            func=TermFunc(ts_name="ExampleLegacy"), params={"limit_angle": 0.7}
+            func=TerminationBinding(ts_name="ExampleLegacy"),
+            params={"limit_angle": 0.7},
         )
         out = cfg.to_dict()
         assert out["name"] == "ExampleLegacy"
@@ -154,7 +155,7 @@ class TestTermCfgDualPath:
 
 
 class TestMigratedTerminations:
-    """The remaining terminations migrated off TermFunc sentinels trace to
+    """The remaining terminations migrated off TerminationBinding sentinels trace to
     well-formed graphs referencing the expected primitive ops."""
 
     def _ops(self, func, params):
@@ -346,7 +347,7 @@ class TestMigratedObservations:
         assert "RootLinkQuatW" in ops and "QuatApplyInv" in ops
 
     def test_registered_dsl_callable_resolves_via_adapter(self):
-        # register_obs_func with a DSL callable → adapter resolves it (no core
+        # register_observation with a DSL callable → adapter resolves it (no core
         # built-in needed) → ObservationTermCfg serializes a graph envelope.
         from mjswan.adapters.mjlab_adapter import _adapt_obs_func
         from mjswan.envs.mdp import observations as obs_mod
@@ -422,14 +423,14 @@ class TestMigratedEvents:
         assert targets == ["freejoint_pos"]
 
     def test_event_cfg_dual_path(self):
-        # DSL builder → event envelope; EventFunc binding (e.g. a task ts_src
+        # DSL builder → event envelope; EventBinding binding (e.g. a task ts_src
         # event) → named entry.
         dsl = EventTermCfg(func=event_fns.reset_joints_by_offset).to_dict()
         assert dsl["kind"] == "event"
         assert "name" not in dsl
 
         legacy = EventTermCfg(
-            func=event_fns.EventFunc(ts_name="TaskTsSrcEvent")
+            func=event_fns.EventBinding(ts_name="TaskTsSrcEvent")
         ).to_dict()
         assert legacy["name"] == "TaskTsSrcEvent"
         assert "kind" not in legacy

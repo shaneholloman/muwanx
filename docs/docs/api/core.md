@@ -47,11 +47,27 @@ def from_mjlab(
 ) -> Builder
 ```
 
-Convenience factory that creates a `Builder` pre-configured with a single mjlab task. The returned `Builder` already contains one project and one scene; call `build()` directly, or modify it further before building.
+Convenience factory that creates a `Builder` pre-configured with a single mjlab task. Delegates to the instance method `Builder.add_project_mjlab`. The returned `Builder` already contains one project and one scene; call `build()` directly, or modify it further before building.
 
-When `run_path` is supplied, every `model_*.pt` checkpoint from each W&B run is fetched and converted to ONNX via mjlab + torch (both required). For finer control, drop down to `builder.get_projects()[0].scenes[0].add_policy_from_wandb(...)`.
+When `run_path` is supplied, every `model_*.pt` checkpoint from each W&B run is fetched and converted to ONNX via mjlab + torch (both required). For finer control, build manually with `add_project` → `ProjectHandle.add_scene_mjlab` → `SceneHandle.add_policy_wandb`.
 
 **Returns** — `Builder`
+
+### Builder.add_project_mjlab
+
+```python
+def add_project_mjlab(
+    task_id: str,
+    *,
+    run_path: str | list[str] | None = None,
+    project_name: str = "mjlab",
+    play: bool = False,
+) -> ProjectHandle
+```
+
+Add a project pre-configured with a single mjlab task (project + mjlab scene + optional W&B policies). The instance-method counterpart to `Builder.from_mjlab`; use it to add an mjlab task to a builder that already has other projects.
+
+**Returns** — `ProjectHandle`
 
 ### Builder.add_project
 
@@ -73,7 +89,7 @@ Add a project to the application.
 ### Builder.build
 
 ```python
-def build(output_dir: str | Path | None = None) -> mjswanApp
+def build(output_dir: str | Path | None = None) -> MjswanApp
 ```
 
 Compile and save the application.
@@ -84,7 +100,7 @@ Compile and save the application.
 |---|---|---|---|
 | `output_dir` | `str \| Path \| None` | `None` | Output directory. Defaults to `dist/` next to the calling script. Relative paths are resolved against the caller's directory. |
 
-**Returns** — `mjswanApp`
+**Returns** — `MjswanApp`
 
 **Raises** — `ValueError` if no projects have been added.
 
@@ -129,10 +145,10 @@ Add a MuJoCo scene. Provide exactly one of `model` or `spec`.
 
 **Raises** — `ValueError` if both or neither of `model`/`spec` are provided.
 
-### ProjectHandle.add_mjlab_scene
+### ProjectHandle.add_scene_mjlab
 
 ```python
-def add_mjlab_scene(task_id: str, *, play: bool = False) -> SceneHandle
+def add_scene_mjlab(task_id: str, *, play: bool = False) -> SceneHandle
 ```
 
 Load an mjlab task's MuJoCo spec from the task registry and add it as a scene. Requires `mjlab` to be installed. Automatically applies the task's `viewer`, `events`, and any terrain data.
@@ -210,10 +226,10 @@ Attach an ONNX policy to the scene. `observations`, `commands`, `actions`, and `
 
 **Returns** — `PolicyHandle`
 
-### SceneHandle.add_policy_from_wandb
+### SceneHandle.add_policy_wandb
 
 ```python
-def add_policy_from_wandb(
+def add_policy_wandb(
     run_path: str | list[str],
     *,
     only_latest: bool = False,
@@ -279,10 +295,10 @@ Add a Gaussian Splat background to the scene. Exactly one of `source` or `url` m
 
 **Raises** — `ValueError` if both or neither of `source`/`url` are provided.
 
-### SceneHandle.add_splat_section
+### SceneHandle.enable_splat_section
 
 ```python
-def add_splat_section() -> SceneHandle
+def enable_splat_section() -> SceneHandle
 ```
 
 Show the Splat selector in the control panel even when no splats are pre-configured. This lets users load a `.spz` file by pasting an external URL at runtime, without requiring any `add_splat()` calls.
@@ -291,10 +307,10 @@ Has no effect when at least one splat is already attached (the selector is shown
 
 Returns `self` for chaining.
 
-### SceneHandle.set_viewer_config
+### SceneHandle.set_viewer
 
 ```python
-def set_viewer_config(config: ViewerConfig) -> SceneHandle
+def set_viewer(config: ViewerConfig) -> SceneHandle
 ```
 
 Set the camera, tracking mode, and rendering options for the scene. See [`ViewerConfig`](#viewerconfig).
@@ -331,25 +347,7 @@ Set a metadata entry for the scene. Returns `self` for chaining.
 
 Returned by `SceneHandle.add_policy()`. Use it to attach commands, motions, and metadata.
 
-Note that command groups are normally passed to `add_policy(commands=...)` directly — `add_velocity_command()` below is a shortcut for the common locomotion case.
-
-### PolicyHandle.add_velocity_command
-
-```python
-def add_velocity_command(
-    lin_vel_x: tuple[float, float] = (-1.0, 1.0),
-    lin_vel_y: tuple[float, float] = (-0.5, 0.5),
-    ang_vel_z: tuple[float, float] = (-1.0, 1.0),
-    default_lin_vel_x: float = 0.5,
-    default_lin_vel_y: float = 0.0,
-    default_ang_vel_z: float = 0.0,
-    name: str = "velocity",
-) -> PolicyHandle
-```
-
-Convenience method: adds a `"velocity"` command group with `lin_vel_x`, `lin_vel_y`, and `ang_vel_z` sliders — the standard pattern for locomotion policies. Equivalent to passing `commands={name: mjswan.velocity_command(...)}` to `add_policy()`.
-
-**Returns** — `self` for chaining.
+Note that command groups are normally passed to `add_policy(commands=...)` directly. For the standard locomotion case pass `commands={"velocity": mjswan.velocity_command(...)}`.
 
 ### PolicyHandle.add_motion
 
@@ -371,13 +369,13 @@ Attach a bundled `.npz` reference motion to the policy (used by motion-tracking 
 
 **Returns** — `MotionHandle`
 
-### PolicyHandle.add_motion_from_wandb
+### PolicyHandle.add_motion_wandb
 
 ```python
-def add_motion_from_wandb(
+def add_motion_wandb(
     *,
     name: str | None = None,
-    wandb_run_path: str | None = None,
+    run_path: str | None = None,
     run_id: str | None = None,
     entity: str | None = None,
     project: str | None = None,
@@ -390,7 +388,7 @@ def add_motion_from_wandb(
 ) -> MotionHandle
 ```
 
-Download a motion `.npz` artifact from a W&B run and attach it to the policy. Supply either `wandb_run_path="entity/project/run_id"` or the three pieces separately.
+Download a motion `.npz` artifact from a W&B run and attach it to the policy. Supply either `run_path="entity/project/run_id"` or the three pieces separately.
 
 **Returns** — `MotionHandle`
 
@@ -441,7 +439,7 @@ Set a metadata entry for the splat. Returns `self` for chaining.
 
 ## MotionHandle
 
-Returned by `PolicyHandle.add_motion()` and `add_motion_from_wandb()`.
+Returned by `PolicyHandle.add_motion()` and `add_motion_wandb()`.
 
 ### MotionHandle.set_metadata
 
@@ -481,7 +479,7 @@ class mjswan.ViewerConfig(
 )
 ```
 
-Camera and rendering configuration applied to a scene via `SceneHandle.set_viewer_config()`. Matches the API of `mjlab.viewer.ViewerConfig`.
+Camera and rendering configuration applied to a scene via `SceneHandle.set_viewer()`. Matches the API of `mjlab.viewer.ViewerConfig`.
 
 **Selected fields**
 
@@ -590,12 +588,12 @@ mjswan.velocity_command(
 ) -> CommandTermConfig
 ```
 
-Build a standard `"velocity"` command group (three sliders: `lin_vel_x`, `lin_vel_y`, `ang_vel_z`). Equivalent to `PolicyHandle.add_velocity_command()` but returns the config object directly so it can be passed via `commands={...}`.
+Build a standard `"velocity"` command group (three sliders: `lin_vel_x`, `lin_vel_y`, `ang_vel_z`). Pass it via `commands={"velocity": mjswan.velocity_command(...)}` to `add_policy()`.
 
-### register_command_term
+### register_command
 
 ```python
-mjswan.register_command_term(mjlab_name: str, spec: CommandTermSpec) -> None
+mjswan.register_command(mjlab_name: str, spec: CommandBinding) -> None
 ```
 
 Register an adapter from a custom mjlab `*CommandCfg` class to a browser-side command term. `mjlab_name` should typically be the mjlab config class name (e.g. `"LiftingCommandCfg"`).
@@ -607,20 +605,20 @@ Register an adapter from a custom mjlab `*CommandCfg` class to a browser-side co
 For configs that go beyond mjlab's built-in observations / events / terminations, register custom functions with these decorators / helpers. The custom function name becomes the value of the `name` field in the serialized policy JSON.
 
 ```python
-mjswan.register_obs_func(name: str, func: ObsFunc) -> None
-mjswan.register_event_func(name: str, func: EventFunc) -> None
-mjswan.register_termination_func(name: str, func: TermFunc) -> None
+mjswan.register_observation(name: str, func: ObservationBinding) -> None
+mjswan.register_event(name: str, func: EventBinding) -> None
+mjswan.register_termination(name: str, func: TerminationBinding) -> None
 ```
 
-`ObsFunc`, `EventFunc`, and `TermFunc` are exported as type aliases for use in custom MDP modules.
+`ObservationBinding`, `EventBinding`, and `TerminationBinding` are exported as type aliases for use in custom MDP modules.
 
 ---
 
-## mjswanApp
+## MjswanApp
 
 Returned by `Builder.build()`.
 
-### mjswanApp.launch
+### MjswanApp.launch
 
 ```python
 def launch(

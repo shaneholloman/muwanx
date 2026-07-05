@@ -138,7 +138,7 @@ def setup_builder() -> mjswan.Builder:
     demo_project.add_scene(
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
         name="G1",
-    ).set_viewer_config(
+    ).set_viewer(
         mjswan.ViewerConfig(
             lookat=(0.0, 0.0, 0.0),
             distance=2.5,
@@ -185,11 +185,14 @@ def setup_builder() -> mjswan.Builder:
                 }
             )
         },
-    ).add_velocity_command(
-        lin_vel_x=(-2.0, 2.0),
-        lin_vel_y=(-0.5, 0.5),
-        default_lin_vel_x=0.5,
-        default_lin_vel_y=0.0,
+        commands={
+            "velocity": mjswan.velocity_command(
+                lin_vel_x=(-2.0, 2.0),
+                lin_vel_y=(-0.5, 0.5),
+                default_lin_vel_x=0.5,
+                default_lin_vel_y=0.0,
+            )
+        },
     )
     demo_project.add_scene(
         # model=mujoco.MjModel.from_xml_path("assets/unitree_go2/scene.xml"),

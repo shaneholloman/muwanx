@@ -1,6 +1,6 @@
-"""mjswanApp class for exporting and running applications.
+"""MjswanApp class for exporting and running applications.
 
-This module defines the mjswanApp class which represents a built application
+This module defines the MjswanApp class which represents a built application
 that can be saved to disk or launched in a web browser.
 """
 
@@ -22,7 +22,7 @@ def _detect_colab() -> bool:
         return False
 
 
-class mjswanApp:
+class MjswanApp:
     """A built mjswan application ready to be launched.
 
     This class encapsulates the built application and provides methods
@@ -176,4 +176,4 @@ class mjswanApp:
             print("\nServer stopped.")
 
 
-__all__ = ["mjswanApp"]
+__all__ = ["MjswanApp"]

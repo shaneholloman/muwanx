@@ -38,7 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from ..envs.mdp.observations import ObsFunc
+from ..envs.mdp.observations import ObservationBinding
 
 
 @dataclass
@@ -53,7 +53,7 @@ class ObservationTermCfg:
 
     ``func`` accepts either:
 
-    - A legacy :class:`ObsFunc` sentinel: the build emits the existing
+    - A legacy :class:`ObservationBinding` sentinel: the build emits the existing
       ``{"name": ..., ...params}`` shape and the engine resolves the class
       from its registry.
     - A plain Python callable taking ``(env, **params)``: the build traces
@@ -62,8 +62,8 @@ class ObservationTermCfg:
       in ADR 0003.
     """
 
-    func: ObsFunc | Callable[..., Any]
-    """Observation function — ObsFunc sentinel (legacy) or DSL callable."""
+    func: ObservationBinding | Callable[..., Any]
+    """Observation function — ObservationBinding sentinel (legacy) or DSL callable."""
 
     params: dict[str, Any] = field(default_factory=dict)
     """Additional keyword arguments forwarded to the TS observation constructor."""
@@ -96,15 +96,15 @@ class ObservationTermCfg:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for the TS ``PolicyRunner``.
 
-        Legacy ``ObsFunc`` produces ``{"name": "BaseLinearVelocity", ...}``.
+        Legacy ``ObservationBinding`` produces ``{"name": "BaseLinearVelocity", ...}``.
         A DSL callable produces ``{"kind": "observation", "nodes": [...], ...}``.
         """
-        if isinstance(self.func, ObsFunc):
+        if isinstance(self.func, ObservationBinding):
             return self._to_dict_legacy()
         return self._to_dict_traced()
 
     def _to_dict_legacy(self) -> dict[str, Any]:
-        func: ObsFunc = self.func  # type: ignore[assignment]
+        func: ObservationBinding = self.func  # type: ignore[assignment]
         if func.unsupported_reason is not None:
             raise NotImplementedError(func.unsupported_reason)
 
@@ -172,7 +172,7 @@ class ObservationGroupCfg:
         result = []
         for term_cfg in self.terms.values():
             if (
-                isinstance(term_cfg.func, ObsFunc)
+                isinstance(term_cfg.func, ObservationBinding)
                 and term_cfg.func.unsupported_reason is not None
             ):
                 continue

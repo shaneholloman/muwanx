@@ -8,13 +8,13 @@ import os
 from dataclasses import asdict
 from typing import Any
 
-from mjswan import CommandTermSpec, register_command_term
+from mjswan import CommandBinding, register_command
 
 _CMD_DIR = os.path.dirname(os.path.abspath(__file__))
 
-register_command_term(
+register_command(
     "LiftingCommandCfg",
-    CommandTermSpec(
+    CommandBinding(
         ts_name="LiftingCommand",
         ts_src=os.path.join(_CMD_DIR, "LiftingCommand.ts"),
         serializer=asdict,
@@ -61,9 +61,9 @@ def _serialize_uniform_velocity_command(cfg: Any) -> dict[str, Any]:
     }
 
 
-register_command_term(
+register_command(
     "UniformVelocityCommandCfg",
-    CommandTermSpec(
+    CommandBinding(
         ts_name="UiCommand",
         serializer=_serialize_uniform_velocity_command,
     ),
