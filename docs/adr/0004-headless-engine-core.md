@@ -37,7 +37,7 @@ Delete `mount()`. Introduce a **pure-TS, instance-scoped engine** created by
 `createEngine(element, options?)`. Three layers:
 
 ```
-① @mjswan/engine (pure TS)   createEngine / MjswanEngine / camera / commands.
+① mjswan (pure-TS engine)    createEngine / MjswanEngine / camera / commands.
                              No React, no catalog, no config.json, no fetch hijack.
                              One loaded simulation at a time.
 ② mjswan/manifest (plain TS) config.json + a byte source → a typed catalog.
@@ -108,6 +108,12 @@ So the cache subsystem (`SceneCacheManager` / `resourceTracker` / `memoryMonitor
 as **multiple engine instances** (one per warm scene, zero rebuild, app-bounded
 memory). Resource/memory risk becomes the app's explicit call.
 
+Relatedly, **OOM ownership moves to the app**. Today `MjswanViewer` catches
+`WasmMemoryLimitError` and calls `window.location.reload()`; the new engine must not own a
+page reload (a host/platform action, like fullscreen). The engine surfaces the error —
+`loadScene` rejects and `state.error` is set — and the host decides recovery (reload, drop
+a warm instance, show a message).
+
 ### 4. Byte delivery — direct inputs; delete the `fetch` hijack
 
 Every asset today flows through `fetch(baseUrl + path)`, with
@@ -144,7 +150,7 @@ await engine.loadScene({ model, policy, splat, viewer });
   the build-time `__MUJOCO_MT__` define. `true` dynamically imports `mujoco/mt` and
   requires COOP/COEP (the app's responsibility): Cloud stays single-threaded; the Python
   SPA / mjlab (service-worker headers) opt in.
-- Init options stay minimal (`multithreaded`, `plugins` — §9). Renderer knobs
+- Init options stay minimal (`multithreaded` only). Renderer knobs
   (antialias/shadows/tone-mapping) remain hardcoded until a consumer needs them.
 
 ### 6. Two channels: promises for requests, one snapshot stream for engine state
@@ -173,7 +179,7 @@ A fourth camera driver alongside (1) initial `ViewerConfig`, (2) body tracking, 
 ```ts
 engine.camera.set({ lookat?, distance?, azimuth?, elevation?, fovy? }); // one-shot overwrite
 engine.camera.get(): CameraView;                                         // current values
-engine.camera.frame(): void;                                             // auto-fit (AUTO)
+engine.camera.frame(): void;                                             // re-fit to scene bounds (new capability)
 ```
 
 Precedence: `set()` overwrites the current camera state; **body tracking continues**
@@ -192,8 +198,11 @@ after it (change the angle, still follow the subject); **user drag is always liv
 - **Commands**: read via the snapshot (`commands` descriptors + `commandValues`); write
   via a namespace mirroring `camera`: `engine.commands.set(id, value)` /
   `engine.commands.trigger(id)`.
+- **`setReferenceVisible(visible)`** toggles the reference-motion ghost for tracking
+  policies (existing capability); it is a live display toggle the app owns, so it is not in
+  the snapshot.
 
-### 9. Public API (`@mjswan/engine`)
+### 9. Public API (`mjswan`)
 
 ```ts
 export type Bytes = ArrayBuffer | (() => Promise<ArrayBuffer>);
@@ -201,8 +210,6 @@ export type Bytes = ArrayBuffer | (() => Promise<ArrayBuffer>);
 export interface CreateEngineOptions {
   /** Load `mujoco/mt` (SharedArrayBuffer; requires COOP/COEP). Default false. */
   multithreaded?: boolean;
-  /** Runtime-registered custom MDP terms (trusted contexts only — see §10). */
-  plugins?: EnginePlugins;
 }
 export function createEngine(
   element: HTMLElement,
@@ -215,11 +222,13 @@ export interface SceneInput {
   policy?: PolicyInput | null;
   splat?: SplatInput | null;
   viewer?: ViewerConfig;
+  plugins?: EnginePlugins;         // scene-scoped custom terms (events); trusted only — §10
 }
 export interface PolicyInput {
   config: object;                  // parsed policy.json; opaque to app, engine interprets
   onnx: Bytes;
   motions?: MotionInput[];
+  plugins?: EnginePlugins;         // policy-scoped custom terms (obs/termination/command); §10
 }
 export interface MotionInput { name: string; data: Bytes; default?: boolean; }
 export interface SplatInput { data: Bytes; collider?: Bytes; transform?: SplatTransform; }
@@ -307,8 +316,13 @@ export interface EnginePlugins {
   events?:       Record<string, EventCtor>;
   commands?:     Record<string, CommandCtor>;
 }
-// createEngine(el, { plugins })  — the app hands author terms to a pinned engine
+// SceneInput.plugins / PolicyInput.plugins — author terms handed to a pinned engine at load
 ```
+
+Plugins ride with the **content that declares the terms**, not with `createEngine`: scene-
+scoped terms (events) on `SceneInput`, policy-scoped terms (observations/terminations/
+commands) on `PolicyInput`, so a live `setPolicy` can bring its own new terms. A single
+engine loads many scenes, so an engine-level plugin set would be the wrong granularity.
 
 The author's TS is compiled by `Builder` (esbuild) into a **standalone ESM asset emitted
 beside `config.json`** — the engine bundle is never rebuilt; only a tiny per-project
