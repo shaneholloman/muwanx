@@ -20,3 +20,8 @@ npm-debug.log*
 /src/core/observation/custom_observations.ts
 /src/core/event/custom_events.ts
 /src/core/engine/viewer_config_defaults.ts
+
+# playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/

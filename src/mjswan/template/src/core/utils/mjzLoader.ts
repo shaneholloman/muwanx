@@ -3,14 +3,18 @@
 import JSZip from 'jszip';
 import type { MainModule } from 'mujoco';
 
+/**
+ * Unzip an .mjz archive into the Emscripten VFS under /working and return the
+ * root XML path **relative to /working** (e.g. `scene.xml`) — the form
+ * loadSceneFromURL expects, which prefixes /working itself.
+ */
 export async function loadMjzFile(
     mujoco: MainModule,
     mjzBytes: ArrayBuffer
 ): Promise<string> {
-    // Unzip the .mjz archive supplied by the app into the Emscripten VFS.
     const zip = await JSZip.loadAsync(mjzBytes);
 
-    // Find root XML
+    // Root XML path, relative to /working.
     let xmlPath: string | null = null;
 
     // Extract all files to Emscripten FS
@@ -41,7 +45,7 @@ export async function loadMjzFile(
 
         // Track root XML
         if (sanitized.endsWith('.xml') && !sanitized.includes('/')) {
-            xmlPath = fsPath;
+            xmlPath = sanitized;
         }
     }
 
