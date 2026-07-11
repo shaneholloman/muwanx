@@ -245,7 +245,9 @@ export interface CameraControls {
 }
 
 // ── commands ────────────────────────────────────────────────────────
-export interface CommandTerm {
+// Named CommandDescriptor (not CommandTerm) to avoid colliding with the internal
+// `CommandTerm` in core/command/types.ts, which is the term *implementation* interface.
+export interface CommandDescriptor {
   id: string; group: string;
   type: 'slider' | 'checkbox' | 'button';
   label: string; min?: number; max?: number; step?: number;
@@ -261,7 +263,7 @@ export interface MjswanEngineState {
   loading: boolean;
   loadingMessage: string | null;
   error: Error | null;
-  commands: ReadonlyArray<CommandTerm>;
+  commands: ReadonlyArray<CommandDescriptor>;
   commandValues: Readonly<Record<string, number>>;
 }
 
