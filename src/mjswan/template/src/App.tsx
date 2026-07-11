@@ -295,6 +295,13 @@ function AppContent() {
             splatSection={sceneEntry.splatSection}
             splatValue={splatName}
             onSplatChange={handleSplatChange}
+            splatConfig={(() => {
+              const s = sceneEntry.splats.find((x) => x.name === splatName);
+              return s ? { name: s.name, control: s.control, ...s.transform } : null;
+            })()}
+            onCalibrateSplat={(scale, xOffset, yOffset, zOffset, roll, pitch, yaw) =>
+              engineRef.current?.calibrateSplat({ scale, xOffset, yOffset, zOffset, roll, pitch, yaw })
+            }
             policies={options(sceneEntry.policies)}
             policyValue={policyName}
             onPolicyChange={handlePolicyChange}

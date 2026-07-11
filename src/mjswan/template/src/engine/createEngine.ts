@@ -20,6 +20,7 @@ import type {
   PolicyInput,
   SceneInput,
   SplatInput,
+  SplatTransform,
 } from './types';
 
 function toDescriptor(def: CommandDefinition): CommandDescriptor {
@@ -145,6 +146,10 @@ class Engine implements MjswanEngine {
 
   setReferenceVisible(visible: boolean): void {
     this.runtime.setReferenceVisible(visible);
+  }
+
+  calibrateSplat(transform: SplatTransform): void {
+    this.runtime.calibrateSplat(transform);
   }
 
   play(): void {

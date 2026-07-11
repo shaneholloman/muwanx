@@ -101,6 +101,8 @@ export interface MjswanEngine {
   setSplat(input: SplatInput | null): Promise<void>;    // live
   setMotion(name: string | null): Promise<boolean>;     // live; returns whether accepted
   setReferenceVisible(visible: boolean): void;          // motion ghost toggle
+  /** Live-update the current splat's placement (dev calibration; no reload). */
+  calibrateSplat(transform: SplatTransform): void;
 
   // playback
   play(): void;

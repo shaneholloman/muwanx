@@ -10,7 +10,7 @@
 import type { Bytes } from '../core/utils/bytes';
 import type { ViewerConfig } from '../core/engine/viewer_config';
 import type { EventConfig, TerrainData } from '../core/event/EventBase';
-import type { SplatConfig } from '../core/scene/splat';
+import type { SplatConfig, SplatTransform } from '../core/scene/splat';
 import type { PolicyInput, SceneInput, SplatInput } from '../engine/types';
 
 /** Maps a build-relative asset path (e.g. `main/assets/humanoid/scene.mjz`) to bytes. */
@@ -56,6 +56,8 @@ export interface SplatEntry {
   name: string;
   /** Whether the UI should show calibration controls. */
   control: boolean;
+  /** Initial placement, for seeding a calibration UI (engine.calibrateSplat). */
+  transform: SplatTransform;
   build(): Promise<SplatInput>;
 }
 export interface SceneEntry {
@@ -115,6 +117,18 @@ async function fetchJson(bytes: Bytes): Promise<Record<string, unknown>> {
   return JSON.parse(new TextDecoder().decode(buffer)) as Record<string, unknown>;
 }
 
+function splatTransform(splat: SplatConfig): SplatTransform {
+  return {
+    scale: splat.scale,
+    xOffset: splat.xOffset,
+    yOffset: splat.yOffset,
+    zOffset: splat.zOffset,
+    roll: splat.roll,
+    pitch: splat.pitch,
+    yaw: splat.yaw,
+  };
+}
+
 function buildSplat(project: ConfigProject, splat: SplatConfig, source: ByteSource): SplatInput {
   const data = splat.path ? source(projectAsset(project, splat.path)) : urlBytes(splat.url!);
   const collider = splat.colliderUrl
@@ -122,19 +136,7 @@ function buildSplat(project: ConfigProject, splat: SplatConfig, source: ByteSour
         ? urlBytes(splat.colliderUrl)
         : source(projectAsset(project, splat.colliderUrl)))
     : undefined;
-  return {
-    data,
-    collider,
-    transform: {
-      scale: splat.scale,
-      xOffset: splat.xOffset,
-      yOffset: splat.yOffset,
-      zOffset: splat.zOffset,
-      roll: splat.roll,
-      pitch: splat.pitch,
-      yaw: splat.yaw,
-    },
-  };
+  return { data, collider, transform: splatTransform(splat) };
 }
 
 async function buildPolicy(
@@ -176,6 +178,7 @@ function toSceneEntry(project: ConfigProject, scene: ConfigScene, source: ByteSo
   const splats: SplatEntry[] = (scene.splats ?? []).map((s) => ({
     name: s.name,
     control: s.control ?? false,
+    transform: splatTransform(s),
     build: async () => buildSplat(project, s, source),
   }));
 
