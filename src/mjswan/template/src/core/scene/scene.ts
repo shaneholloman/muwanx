@@ -1,29 +1,8 @@
 import * as THREE from 'three';
 import type { MainModule, MjData, MjModel } from 'mujoco';
-import { mujocoAssetCollector } from '../utils/mujocoAssetCollector';
-import { collapseSlashes, normalizeScenePath } from '../utils/pathUtils';
-import { loadMjzFile } from '../utils/mjzLoader';
 import { createLights } from './lights';
 import { createTexture, createSkyboxTexture } from './textures';
 import { createTendonMeshes } from './tendons';
-
-const DEFAULT_BASE_URL = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-const BINARY_EXTENSIONS = ['.png', '.stl', '.skn', '.mjb', '.mjz', '.msh', '.npy'];
-const sceneDownloadPromises = new Map<string, Promise<void>>();
-
-/**
- * Clear download promise cache for a specific scene
- * This is used by the cache manager when evicting scenes
- */
-export function clearSceneDownloadCache(scenePath: string): void {
-  const normalizedPath = normalizeScenePath(scenePath);
-  sceneDownloadPromises.delete(normalizedPath);
-}
-
-function isBinaryAsset(path: string): boolean {
-  const lower = path.toLowerCase();
-  return BINARY_EXTENSIONS.some((ext) => lower.endsWith(ext));
-}
 
 function isInlineXML(input: string): boolean {
   if (!input) {
@@ -31,19 +10,6 @@ function isInlineXML(input: string): boolean {
   }
   const trimmed = input.trim();
   return trimmed.startsWith('<mujoco') || trimmed.startsWith('<?xml');
-}
-
-function ensureWorkingDirectories(mujoco: MainModule, segments: string[]): void {
-  if (!segments.length) {
-    return;
-  }
-  let working = '/working';
-  for (const segment of segments) {
-    working += `/${segment}`;
-    if (!mujoco.FS.analyzePath(working, false).exists) {
-      mujoco.FS.mkdir(working);
-    }
-  }
 }
 
 function normalizePathSegments(path: string): string {
@@ -236,12 +202,6 @@ export async function loadSceneFromURL(
         vfs.delete();
       }
     } else {
-      // TODO: Remove mjzLoader after mujoco wasm mj_loadXML() supports mjz format loading.
-      if (modelPath.toLowerCase().endsWith('.mjz')) {
-        const xmlPath = await loadMjzFile(mujoco, modelPath);
-        modelPath = xmlPath;
-      }
-
       newModel = mujoco.MjModel.mj_loadXML(modelPath);
     }
   } catch (error: unknown) {
@@ -757,168 +717,4 @@ export function getQuaternion(
     buffer[index * 4 + 2],
     buffer[index * 4 + 3]
   );
-}
-
-export async function downloadExampleScenesFolder(
-  mujoco: MainModule,
-  scenePath: string,
-  baseUrl: string = DEFAULT_BASE_URL
-): Promise<void> {
-  if (!scenePath) {
-    return;
-  }
-
-  const basePrefix = baseUrl ? baseUrl.replace(/\/+$/, '') : '';
-
-  if (isInlineXML(scenePath)) {
-    const xmlHash = Math.abs(
-      scenePath.split('').reduce((a, b) => {
-        a = (a << 5) - a + b.charCodeAt(0);
-        return a & a;
-      }, 0)
-    );
-    const virtualPath = `inline_model_${xmlHash}.xml`;
-    const fullPath = `/working/${virtualPath}`;
-
-    try {
-      mujoco.FS.writeFile(fullPath, scenePath);
-    } catch (error) {
-      console.error('[downloadExampleScenesFolder] Failed to write inline XML:', error);
-      throw error;
-    }
-    return;
-  }
-
-  const normalizedPath = normalizeScenePath(scenePath);
-  const pathParts = normalizedPath.split('/');
-
-  const xmlDirectory = pathParts.slice(0, -1).join('/');
-  if (!xmlDirectory) {
-    return;
-  }
-
-  const cacheKey = normalizedPath;
-  if (sceneDownloadPromises.has(cacheKey)) {
-    return sceneDownloadPromises.get(cacheKey)!;
-  }
-
-  const downloadPromise = (async () => {
-    let manifest: string[];
-    try {
-      manifest = await mujocoAssetCollector.analyzeScene(normalizedPath, basePrefix || '/');
-
-      if (!Array.isArray(manifest)) {
-        throw new Error(
-          `Asset collector returned invalid result (not an array): ${typeof manifest}`
-        );
-      }
-
-      if (manifest.length === 0) {
-        throw new Error('No assets found by collector');
-      }
-      console.log(`[downloadExampleScenesFolder] Analyzed ${normalizedPath}: found ${manifest.length} assets`);
-      console.log(`[downloadExampleScenesFolder] Asset manifest:`, manifest);
-    } catch {
-      try {
-        const manifestResponse = await fetch(
-          collapseSlashes(`${basePrefix}/${xmlDirectory}/index.json`)
-        );
-        if (!manifestResponse.ok) {
-          throw new Error(
-            `Failed to load scene manifest for ${xmlDirectory}: ${manifestResponse.status}`
-          );
-        }
-        manifest = await manifestResponse.json();
-        if (!Array.isArray(manifest)) {
-          throw new Error(`Invalid scene manifest for ${xmlDirectory}`);
-        }
-        console.log(`[downloadExampleScenesFolder] Loaded manifest from index.json: ${manifest.length} assets`);
-      } catch (fallbackError: unknown) {
-        const fallbackMsg =
-          fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-        throw new Error(
-          `Both asset analysis and index.json fallback failed: ${fallbackMsg}`
-        );
-      }
-    }
-
-    const localAssets = manifest
-      .filter(
-        (asset) =>
-          typeof asset === 'string' && !asset.startsWith('http://') && !asset.startsWith('https://')
-      )
-      .map((assetPath) => {
-        let assetNormalized = assetPath
-          .trim()
-          .replace(/^(\.\/)+/, '')
-          .replace(/^public\//, '');
-        if (assetNormalized.startsWith('/')) {
-          assetNormalized = assetNormalized.slice(1);
-        }
-        if (!assetNormalized) {
-          console.warn(
-            `[downloadExampleScenesFolder] Skipping asset with empty path: ${assetPath}`
-          );
-          return null;
-        }
-        return { originalPath: assetPath, normalizedPath: assetNormalized };
-      })
-      .filter(Boolean) as { originalPath: string; normalizedPath: string }[];
-
-    const seenPaths = new Set<string>();
-    const uniqueAssets: { originalPath: string; normalizedPath: string }[] = [];
-    for (const asset of localAssets) {
-      if (seenPaths.has(asset.normalizedPath)) {
-        continue;
-      }
-      seenPaths.add(asset.normalizedPath);
-      uniqueAssets.push(asset);
-    }
-
-    console.log(`[downloadExampleScenesFolder] Downloading ${uniqueAssets.length} unique assets for ${xmlDirectory}`);
-
-    const requests = uniqueAssets.map(({ normalizedPath }) => {
-      const fullPath = collapseSlashes(`${basePrefix}/${normalizedPath}`);
-      return fetch(fullPath);
-    });
-
-    const responses = await Promise.all(requests);
-
-    for (let i = 0; i < responses.length; i++) {
-      const response = responses[i];
-      const { originalPath, normalizedPath } = uniqueAssets[i];
-
-      if (!response.ok) {
-        console.warn(
-          `[downloadExampleScenesFolder] Failed to fetch scene asset ${originalPath}: ${response.status}`
-        );
-        continue;
-      }
-
-      const assetPath = normalizedPath;
-      const segments = assetPath.split('/');
-      ensureWorkingDirectories(mujoco, segments.slice(0, -1));
-
-      const targetPath = `/working/${assetPath}`;
-      try {
-        if (isBinaryAsset(normalizedPath) || isBinaryAsset(originalPath)) {
-          const arrayBuffer = await response.arrayBuffer();
-          mujoco.FS.writeFile(targetPath, new Uint8Array(arrayBuffer));
-        } else {
-          const text = await response.text();
-          mujoco.FS.writeFile(targetPath, text);
-        }
-      } catch (error) {
-        console.error(`[downloadExampleScenesFolder] Error writing ${targetPath}:`, error);
-      }
-    }
-  })();
-
-  sceneDownloadPromises.set(normalizedPath, downloadPromise);
-  try {
-    await downloadPromise;
-  } catch (error) {
-    sceneDownloadPromises.delete(normalizedPath);
-    throw error;
-  }
 }

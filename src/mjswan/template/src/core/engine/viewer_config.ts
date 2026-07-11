@@ -38,8 +38,17 @@ export type ViewerState = {
   prevBodyPos: THREE.Vector3 | null;
 };
 
+/** Camera pose in spherical MuJoCo coordinates (x forward, y left, z up). */
+export type CameraView = {
+  lookat: [number, number, number];
+  distance: number;
+  azimuth: number;
+  elevation: number;
+  fovy: number;
+};
 
-function computeCameraPosition(
+
+export function computeCameraPosition(
   lookat: [number, number, number],
   distance: number,
   elevation: number,

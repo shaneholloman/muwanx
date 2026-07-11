@@ -23,13 +23,7 @@ import FloatingPanel from './FloatingPanel';
 import { LabeledInput } from './LabeledInput';
 import { CommandSection } from './CommandSection';
 import { SplatSection } from './SplatSection';
-import {
-  getCommandInputId,
-  getCommandManager,
-  type CheckboxCommandConfig,
-  type CommandDefinition,
-  type SliderCommandConfig,
-} from '../core/command';
+import type { CommandDescriptor } from '../engine';
 
 export interface SelectOption {
   value: string;
@@ -66,7 +60,13 @@ interface ControlPanelProps {
   onShowReferenceMotionChange: (value: boolean) => void;
   /** Whether command controls are enabled */
   commandsEnabled?: boolean;
-  /** Callback when reset button is pressed */
+  /** Command descriptors from the engine state snapshot. */
+  commands: CommandDescriptor[];
+  /** Current command values keyed by descriptor id. */
+  commandValues: Record<string, number>;
+  /** Write a slider/checkbox command value (engine.commands.set). */
+  onCommandChange: (id: string, value: number) => void;
+  /** Reset the simulation (engine.reset). */
   onReset?: () => void;
 }
 
@@ -106,14 +106,13 @@ function SliderControl({
   disabled,
   enabledWhenValue,
 }: {
-  command: CommandDefinition;
+  command: CommandDescriptor;
   value: number;
   onChange: (id: string, value: number) => void;
   disabled?: boolean;
   enabledWhenValue?: number;
 }) {
-  const config = command.config as SliderCommandConfig;
-  const dependencyDisabled = config.enabled_when !== undefined && (enabledWhenValue ?? 0) < 0.5;
+  const dependencyDisabled = command.enabledWhen !== undefined && (enabledWhenValue ?? 0) < 0.5;
   const isDisabled = disabled || dependencyDisabled;
 
   return (
@@ -136,15 +135,15 @@ function SliderControl({
           flexShrink: 0,
         }}
       >
-        {config.label}
+        {command.label}
       </Text>
       <Box style={{ width: '50%' }}>
         <Slider
           value={value}
           onChange={(val) => onChange(command.id, val)}
-          min={config.min}
-          max={config.max}
-          step={config.step}
+          min={command.min}
+          max={command.max}
+          step={command.step}
           size="xs"
           disabled={isDisabled}
           styles={{
@@ -164,17 +163,15 @@ function CheckboxControl({
   onChange,
   disabled,
 }: {
-  command: CommandDefinition;
+  command: CommandDescriptor;
   value: number;
   onChange: (id: string, value: number) => void;
   disabled?: boolean;
 }) {
-  const config = command.config as CheckboxCommandConfig;
-
   return (
     <Box pb="0.5em" px="xs">
       <Checkbox
-        label={config.label}
+        label={command.label}
         checked={value >= 0.5}
         onChange={(event) => onChange(command.id, event.currentTarget.checked ? 1.0 : 0.0)}
         size="xs"
@@ -211,6 +208,9 @@ function ControlPanel(props: ControlPanelProps) {
     showReferenceMotion,
     onShowReferenceMotionChange,
     commandsEnabled = false,
+    commands,
+    commandValues,
+    onCommandChange,
     onReset,
   } = props;
 
@@ -236,45 +236,11 @@ function ControlPanel(props: ControlPanelProps) {
     }
   }, [onSplatUrlLoad, splatSearchValue, splats]);
 
-  // Command state
-  const [commands, setCommands] = useState<CommandDefinition[]>([]);
-  const [commandGroups, setCommandGroups] = useState<string[]>([]);
-  const [values, setValues] = useState<Record<string, number>>({});
+  // Command groups derived from the engine-supplied descriptors.
+  const commandGroups = Array.from(new Set(commands.map((c) => c.group)));
 
-  // Initialize commands from CommandManager
-  useEffect(() => {
-    const commandManager = getCommandManager();
-
-    const updateCommands = () => {
-      setCommands(commandManager.getCommands());
-      setCommandGroups(commandManager.getCommandGroups());
-      setValues(commandManager.getValues());
-    };
-
-    updateCommands();
-
-    // Subscribe to command changes
-    commandManager.addEventListener(updateCommands);
-
-    return () => {
-      commandManager.removeEventListener(updateCommands);
-    };
-  }, []);
-
-  // Handle slider value changes
-  const handleSliderChange = useCallback((id: string, value: number) => {
-    const commandManager = getCommandManager();
-    commandManager.setValue(id, value);
-    setValues((prev) => ({ ...prev, [id]: value }));
-  }, []);
-
-  // Handle reset button click
   const handleReset = useCallback(() => {
-    const commandManager = getCommandManager();
-    commandManager.triggerButton('_system:reset');
-    if (onReset) {
-      onReset();
-    }
+    onReset?.();
   }, [onReset]);
 
   useEffect(() => {
@@ -313,9 +279,9 @@ function ControlPanel(props: ControlPanelProps) {
     };
   }, [visible, onVisibleChange, handleReset]);
 
-  const getValueCommandsForGroup = (groupName: string): CommandDefinition[] => {
+  const getValueCommandsForGroup = (groupName: string): CommandDescriptor[] => {
     return commands.filter(
-      (cmd) => cmd.groupName === groupName && (cmd.config.type === 'slider' || cmd.config.type === 'checkbox')
+      (cmd) => cmd.group === groupName && (cmd.type === 'slider' || cmd.type === 'checkbox')
     );
   };
 
@@ -593,7 +559,7 @@ function ControlPanel(props: ControlPanelProps) {
           )}
 
           {/* Command Groups - only show if there are commands */}
-          {commandGroups.length > 0 && commands.some(cmd => cmd.config.type === 'slider' || cmd.config.type === 'checkbox') && (
+          {commandGroups.length > 0 && commands.some(cmd => cmd.type === 'slider' || cmd.type === 'checkbox') && (
             <>
               {commandGroups.map((groupName) => {
                 const groupCommands = getValueCommandsForGroup(groupName);
@@ -606,30 +572,30 @@ function ControlPanel(props: ControlPanelProps) {
                     expandByDefault={true}
                   >
                     {groupCommands.map((command) => {
-                      if (command.config.type === 'checkbox') {
+                      if (command.type === 'checkbox') {
                         return (
                           <CheckboxControl
                             key={command.id}
                             command={command}
-                            value={values[command.id] ?? 0}
-                            onChange={handleSliderChange}
+                            value={commandValues[command.id] ?? 0}
+                            onChange={onCommandChange}
                             disabled={!commandsEnabled}
                           />
                         );
                       }
-                      if (command.config.type !== 'slider') {
+                      if (command.type !== 'slider') {
                         return null;
                       }
                       return (
                         <SliderControl
                           key={command.id}
                           command={command}
-                          value={values[command.id] ?? 0}
-                          onChange={handleSliderChange}
+                          value={commandValues[command.id] ?? 0}
+                          onChange={onCommandChange}
                           disabled={!commandsEnabled}
                           enabledWhenValue={
-                            command.config.enabled_when
-                              ? values[getCommandInputId(command.groupName, command.config.enabled_when)]
+                            command.enabledWhen
+                              ? commandValues[`${command.group}:${command.enabledWhen}`]
                               : undefined
                           }
                         />

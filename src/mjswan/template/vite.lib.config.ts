@@ -5,9 +5,10 @@ import path from 'path';
 import fs from 'fs';
 
 // Library build: emits a single self-contained ESM (`dist/mjswan.js`) exposing
-// `mount(element, configUrl)`, with every dependency bundled and the MuJoCo /
-// ONNX WASM co-located flat in `dist/` so they resolve relative to the bundle
-// on a public CDN (jsDelivr). See src/mount.tsx and mjswan-cloud ADR 0001.
+// `createEngine(element, options?)` (the headless engine; no React/Mantine),
+// with every dependency bundled and the MuJoCo / ONNX WASM co-located flat in
+// `dist/` so they resolve relative to the bundle on a public CDN (jsDelivr).
+// See src/engine/ and docs/adr/0004-headless-engine-core.md.
 
 function getOrtCdnBase(): string {
   // Bake the installed ort version into the bundle so OnnxModule.ts can redirect
@@ -154,8 +155,6 @@ export default defineConfig({
   ],
   define: {
     __APP_VERSION__: JSON.stringify(getVersionFromPython()),
-    // The library build is always single-threaded (COOP/COEP-independent).
-    __MUJOCO_MT__: JSON.stringify(false),
     // Library mode (unlike app mode) does NOT replace `process.env.NODE_ENV`, so
     // React/Mantine's bare `process` references would throw `ReferenceError` when
     // loaded from a CDN. Fold to "production"; other `process`/`Buffer` refs are
@@ -200,7 +199,8 @@ export default defineConfig({
     // Bundle all CSS into one asset so the inject plugin can hoist it into JS.
     cssCodeSplit: false,
     lib: {
-      entry: path.resolve(__dirname, 'src/mount.tsx'),
+      // The engine entry (createEngine) — no React/Mantine in the CDN bundle.
+      entry: path.resolve(__dirname, 'src/engine/index.ts'),
       formats: ['es'],
       fileName: () => 'mjswan.js',
     },

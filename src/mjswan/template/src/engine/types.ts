@@ -6,39 +6,15 @@
  * time, takes bytes directly (no fetching), and exposes switch verbs whose names
  * match the real cost (loadScene = rebuild; setPolicy/setSplat/setMotion = live).
  */
-import type { ViewerConfig } from '../core/engine/viewer_config';
-import type { ObservationConstructor } from '../core/policy/PolicyRunner';
-import type { TerminationConstructor } from '../core/termination/terminations';
-import type { EventConstructor } from '../core/event/EventBase';
-import type { CommandTermConstructor } from '../core/command/types';
+import type { CameraView, ViewerConfig } from '../core/engine/viewer_config';
+import type { EventConfig, TerrainData } from '../core/event/EventBase';
+import type { Bytes } from '../core/utils/bytes';
+import type { SplatTransform } from '../core/scene/splat';
+import type { EnginePlugins } from '../core/plugins';
 
-/** Asset bytes: already in hand, or a lazy loader fetched on demand. */
-export type Bytes = ArrayBuffer | (() => Promise<ArrayBuffer>);
-
-/**
- * Custom MDP terms registered into a pinned engine at load. Trusted contexts
- * only — mjswan Cloud rejects author code (ADR 0004 §10). Scene-scoped terms
- * (events) ride on {@link SceneInput}; policy-scoped terms (observations /
- * terminations / commands) on {@link PolicyInput}.
- */
-export interface EnginePlugins {
-  observations?: Record<string, ObservationConstructor>;
-  terminations?: Record<string, TerminationConstructor>;
-  events?: Record<string, EventConstructor>;
-  commands?: Record<string, CommandTermConstructor>;
-}
-
-/** Spherical splat placement (a subset of the internal SplatConfig), in the splat's own frame. */
-export interface SplatTransform {
-  scale?: number;
-  xOffset?: number;
-  yOffset?: number;
-  zOffset?: number;
-  /** Degrees, applied on top of the COLMAP→Three.js base rotation. */
-  roll?: number;
-  pitch?: number;
-  yaw?: number;
-}
+// Bytes: asset bytes in hand or a lazy loader. SplatTransform: spherical splat placement.
+// EnginePlugins: custom MDP term constructors (trusted-only; ADR 0004 §10).
+export type { Bytes, SplatTransform, EnginePlugins };
 
 export interface SplatInput {
   data: Bytes;            // .spz
@@ -66,18 +42,15 @@ export interface SceneInput {
   policy?: PolicyInput | null;
   splat?: SplatInput | null;
   viewer?: ViewerConfig;
+  /** Declarative reset events (e.g. terrain randomization) + their terrain data. */
+  events?: EventConfig[];
+  terrainData?: TerrainData;
   /** Scene-scoped custom terms (events). */
   plugins?: EnginePlugins;
 }
 
 /** Camera pose in spherical MuJoCo coordinates (x forward, y left, z up). */
-export interface CameraView {
-  lookat: [number, number, number];
-  distance: number;
-  azimuth: number;
-  elevation: number;
-  fovy: number;
-}
+export type { CameraView };
 
 export interface CameraControls {
   /** Overwrite the current pose; body tracking (if any) continues, user drag stays live. */
@@ -96,6 +69,8 @@ export interface CommandDescriptor {
   min?: number;           // slider only
   max?: number;           // slider only
   step?: number;          // slider only
+  /** Slider only: name of a sibling checkbox that gates this control. */
+  enabledWhen?: string;
 }
 
 export interface CommandControls {

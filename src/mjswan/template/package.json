@@ -9,6 +9,8 @@
   "files": [
     "dist",
     "src/core",
+    "src/engine",
+    "src/manifest",
     "lib.d.ts",
     "index.html",
     "README.md",
@@ -23,6 +25,7 @@
       "import": "./dist/mjswan.js",
       "default": "./dist/mjswan.js"
     },
+    "./manifest": "./src/manifest/index.ts",
     "./observation": "./src/core/observation/index.ts",
     "./command": "./src/core/command/index.ts",
     "./math": "./src/core/observation/math.ts",

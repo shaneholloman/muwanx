@@ -11,7 +11,7 @@
 import type { PolicyState } from '../policy/types';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 import type { DslPrimitiveValue } from './types';
-import { getCommandManager, isTrackingSource } from '../command';
+import { isTrackingSource } from '../command';
 import { quatApplyInv, quatInverse, quatMultiply, quatToRot6d } from '../observation/math';
 
 export type EvalContext = {
@@ -66,8 +66,8 @@ type TrackingSource = {
 };
 
 /** The active motion tracking command, or null when none is ready. */
-function trackingTerm(): TrackingSource | null {
-  const term = getCommandManager().getTerm('motion');
+function trackingTerm(ctx: EvalContext): TrackingSource | null {
+  const term = ctx.runner.getContext()?.commandManager?.getTerm('motion');
   return isTrackingSource(term) && term.isReady() ? (term as TrackingSource) : null;
 }
 
@@ -251,16 +251,16 @@ export const Primitives: Record<string, Primitive> = {
   QuatApplyInv: (inputs) => Float32Array.from(quatApplyInv(asVec(inputs[0]), asVec(inputs[1]))),
 
   // -- Motion-tracking sources --------------------------------------------
-  TrackingAnchorPos: () => {
-    const pos = trackingTerm()?.getAnchorPos() ?? null;
+  TrackingAnchorPos: (_in, _attrs, ctx) => {
+    const pos = trackingTerm(ctx)?.getAnchorPos() ?? null;
     return pos ? new Float32Array(pos) : new Float32Array(3);
   },
-  TrackingAnchorQuat: () => {
-    const quat = trackingTerm()?.getAnchorQuat() ?? null;
+  TrackingAnchorQuat: (_in, _attrs, ctx) => {
+    const quat = trackingTerm(ctx)?.getAnchorQuat() ?? null;
     return quat ? new Float32Array(quat) : new Float32Array([1, 0, 0, 0]);
   },
   TrackingCurrentAnchorPos: (_in, _attrs, ctx) => {
-    const term = trackingTerm();
+    const term = trackingTerm(ctx);
     const name = term?.getAnchorBodyName() ?? null;
     const mjData = ctx.runner.getContext()?.mjData ?? null;
     if (!name || !mjData) return new Float32Array(3);
@@ -269,7 +269,7 @@ export const Primitives: Record<string, Primitive> = {
     return new Float32Array([mjData.xpos[id * 3], mjData.xpos[id * 3 + 1], mjData.xpos[id * 3 + 2]]);
   },
   TrackingCurrentAnchorQuat: (_in, _attrs, ctx) => {
-    const term = trackingTerm();
+    const term = trackingTerm(ctx);
     const name = term?.getAnchorBodyName() ?? null;
     const mjData = ctx.runner.getContext()?.mjData ?? null;
     if (!name || !mjData) return new Float32Array([1, 0, 0, 0]);
@@ -278,7 +278,7 @@ export const Primitives: Record<string, Primitive> = {
     return new Float32Array(mjData.xquat.slice(id * 4, id * 4 + 4));
   },
   TrackingBodyPosZDeviationMax: (_in, attrs, ctx) => {
-    const term = trackingTerm();
+    const term = trackingTerm(ctx);
     const mjData = ctx.runner.getContext()?.mjData ?? null;
     if (!term || !mjData) return 0;
     const refBodyPosW = term.getBodyPosW();
@@ -400,9 +400,9 @@ export const Primitives: Record<string, Primitive> = {
   PrevAction: (_in, _attrs, ctx) => new Float32Array(ctx.runner.getLastActions()),
 
   // -- Commands ------------------------------------------------------------
-  CommandValue: (_in, attrs) => {
+  CommandValue: (_in, attrs, ctx) => {
     const name = String(attrs.command ?? '');
-    const cmd = name ? getCommandManager().getCommand(name) : null;
+    const cmd = name ? ctx.runner.getContext()?.commandManager?.getCommand(name) : null;
     return cmd ? new Float32Array(cmd) : new Float32Array(0);
   },
 
@@ -438,8 +438,8 @@ export const Primitives: Record<string, Primitive> = {
   },
 
   // -- Tracking reference, per body (world frame) --------------------------
-  TrackingRefBodyPos: (_in, attrs) => {
-    const term = trackingTerm();
+  TrackingRefBodyPos: (_in, attrs, ctx) => {
+    const term = trackingTerm(ctx);
     if (!term) return new Float32Array(3);
     const refBodyPosW = term.getBodyPosW();
     if (!refBodyPosW) return new Float32Array(3);

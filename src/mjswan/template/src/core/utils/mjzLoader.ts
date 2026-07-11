@@ -5,15 +5,10 @@ import type { MainModule } from 'mujoco';
 
 export async function loadMjzFile(
     mujoco: MainModule,
-    mjzPath: string
+    mjzBytes: ArrayBuffer
 ): Promise<string> {
-    // Read .mjz file from Emscripten virtual filesystem (already downloaded by downloadExampleScenesFolder)
-    const data: Uint8Array = mujoco.FS.readFile(mjzPath);
-    const arrayBuffer = new ArrayBuffer(data.byteLength);
-    new Uint8Array(arrayBuffer).set(data);
-
-    // Unzip
-    const zip = await JSZip.loadAsync(arrayBuffer);
+    // Unzip the .mjz archive supplied by the app into the Emscripten VFS.
+    const zip = await JSZip.loadAsync(mjzBytes);
 
     // Find root XML
     let xmlPath: string | null = null;
