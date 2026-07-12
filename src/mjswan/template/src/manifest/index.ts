@@ -41,6 +41,8 @@ interface ConfigProject {
 export interface AppConfig {
   version: string;
   uses_custom_js?: boolean;
+  /** Build-relative path to the runtime custom-MDP plugin ESM (custom-JS builds). */
+  plugins?: string;
   projects: ConfigProject[];
 }
 
@@ -72,6 +74,12 @@ export interface SceneEntry {
 export interface Catalog {
   name: string;
   scenes: SceneEntry[];
+  /**
+   * Build-relative path to the author custom-MDP plugin ESM, when present. The
+   * app (trusted contexts only) dynamically imports it and passes the exports
+   * as {@link EnginePlugins}; mjswan Cloud ignores it (ADR 0004 §10).
+   */
+  pluginsPath?: string;
 }
 
 /** Lowercase-underscore slug, mirroring the Python `name2id` helper. */
@@ -219,5 +227,6 @@ export function parseManifest(config: AppConfig | string, source: ByteSource): C
   return {
     name: project.name,
     scenes: project.scenes.map((scene) => toSceneEntry(project, scene, source)),
+    pluginsPath: parsed.plugins,
   };
 }

@@ -213,7 +213,11 @@ class Builder:
         self._projects.append(project)
         return ProjectHandle(project, self)
 
-    def build(self, output_dir: str | Path | None = None) -> MjswanApp:
+    def build(
+        self,
+        output_dir: str | Path | None = None,
+        build_frontend: bool | None = None,
+    ) -> MjswanApp:
         """Build the application from the configured projects.
 
         This method finalizes the configuration and creates a MjswanApp
@@ -255,7 +259,7 @@ class Builder:
             output_path = base_dir / Path(output_dir)
 
         # TODO: Build with separate function (and then save the web app with _save_web). And set scene.path and policy.path after building.
-        self._save_web(output_path)
+        self._save_web(output_path, build_frontend=build_frontend)
 
         return MjswanApp(output_path)
 
@@ -266,9 +270,13 @@ class Builder:
         Individual project assets (scenes/policies) are saved under project-id/assets/.
         """
         # Create root config with project metadata and structure info
+        uses_custom_js = _build_uses_custom_js()
         root_config = {
             "version": __version__,
-            "uses_custom_js": _build_uses_custom_js(),
+            "uses_custom_js": uses_custom_js,
+            # Runtime plugin module (author custom-MDP terms), loaded by the app
+            # in trusted contexts and passed to createEngine (ADR 0004 §10).
+            **({"plugins": "assets/plugins.js"} if uses_custom_js else {}),
             "projects": [
                 {
                     "name": project.name,
@@ -427,7 +435,7 @@ class Builder:
         for term_name, cfg in muscle_terms:
             validate_muscle_actuators(model, cfg, term_name=term_name)
 
-    def _save_web(self, output_path: Path) -> None:
+    def _save_web(self, output_path: Path, build_frontend: bool | None = None) -> None:
         """Save as a complete web application.
 
         Output structure:
@@ -457,17 +465,19 @@ class Builder:
 
         # Copy template directory
         template_dir = Path(__file__).parent / "template"
+        client_builder: ClientBuilder | None = None
         if template_dir.exists():
-            # Build client first
+            # Build client first (reuses a cached SPA build when it matches)
             package_json = template_dir / "package.json"
             if package_json.exists():
                 print("Building the mjswan application...")
-                builder = ClientBuilder(template_dir)
-                builder.build(
+                client_builder = ClientBuilder(template_dir)
+                client_builder.build(
                     base_path=self._base_path,
                     gtm_id=self._gtm_id,
                     mt=self._mt,
                     debug=self._debug,
+                    build_frontend=build_frontend,
                 )
 
             # Copy all files from template to output_path
@@ -533,6 +543,12 @@ class Builder:
 
         # Save root configuration (project metadata and structure)
         self._save_config_json(output_path)
+
+        # Compile author custom-MDP terms into a standalone runtime ESM beside
+        # config.json (esbuild; never rebuilds the engine). ADR 0004 §10.
+        if _build_uses_custom_js() and client_builder is not None:
+            print("Compiling custom-MDP term module (plugins.js)...")
+            client_builder.build_plugins_module(output_path / "assets" / "plugins.js")
 
         # Write COOP/COEP headers for multi-threaded MuJoCo (SharedArrayBuffer)
         if self._mt:

@@ -6,7 +6,7 @@ import { LoadingProvider, useLoading } from './contexts/LoadingContext';
 import { Loader } from './components/Loader';
 import { signalReady, signalError } from './core/utils/readySignal';
 import { createEngine } from './engine';
-import type { MjswanEngine, MjswanEngineState } from './engine';
+import type { EnginePlugins, MjswanEngine, MjswanEngineState, SceneInput } from './engine';
 import { parseManifest, sanitizeName, type Catalog, type ByteSource } from './manifest';
 import './App.css';
 
@@ -69,15 +69,32 @@ function AppContent() {
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<MjswanEngine | null>(null);
+  // Author custom-MDP terms (trusted contexts only). Passed to both scene and
+  // policy inputs; the engine registers each kind at the relevant load (ADR §10).
+  const pluginsRef = useRef<EnginePlugins | null>(null);
   const { showLoading, hideLoading, setLoadingMessage } = useLoading();
 
   const base = import.meta.env.BASE_URL || '/';
+
+  const withPlugins = useCallback((input: SceneInput): SceneInput => {
+    const plugins = pluginsRef.current;
+    if (!plugins) return input;
+    input.plugins = plugins;
+    if (input.policy) input.policy.plugins = plugins;
+    return input;
+  }, []);
 
   // ── load the catalog + pick the initial selection from the URL query ──────
   useEffect(() => {
     showLoading('Loading…');
     loadCatalog(base)
-      .then((cat) => {
+      .then(async (cat) => {
+        // Trusted-only: load the author plugin ESM before the first scene so the
+        // engine has the custom terms at registration time (ADR 0004 §10).
+        if (cat.pluginsPath) {
+          const url = `${base}${cat.pluginsPath}`.replace(/([^:])\/{2,}/g, '$1/');
+          pluginsRef.current = (await import(/* @vite-ignore */ url)) as EnginePlugins;
+        }
         const params = new URLSearchParams(window.location.search);
         const scene = pickByName(cat.scenes, params.get('scene'), cat.scenes[0]);
         const policy = scene
@@ -121,7 +138,7 @@ function AppContent() {
       try {
         setLoadingMessage('Loading scene…');
         const input = await sceneEntry.buildScene({ policy: policyName, splat: splatName });
-        await engine.loadScene(input);
+        await engine.loadScene(withPlugins(input));
         if (motionName) await engine.setMotion(motionName);
         engine.setReferenceVisible(showReference);
         hideLoading();
@@ -186,7 +203,7 @@ function AppContent() {
     syncUrl({ scene: scene.name, policy: policy?.name ?? null });
     showLoading(`Loading scene "${scene.name}"…`);
     try {
-      await engine.loadScene(await scene.buildScene({ policy: policy?.name, splat }));
+      await engine.loadScene(withPlugins(await scene.buildScene({ policy: policy?.name, splat })));
       if (motion) await engine.setMotion(motion.name);
       engine.setReferenceVisible(showReference);
     } catch (err) {
@@ -206,7 +223,9 @@ function AppContent() {
     if (!engine) return;
     showLoading(value ? `Loading policy "${value}"…` : 'Clearing policy…');
     try {
-      await engine.setPolicy(policy ? await policy.build() : null);
+      const input = policy ? await policy.build() : null;
+      if (input && pluginsRef.current) input.plugins = pluginsRef.current;
+      await engine.setPolicy(input);
       if (motion) await engine.setMotion(motion.name);
       engine.setReferenceVisible(showReference);
     } catch (err) {

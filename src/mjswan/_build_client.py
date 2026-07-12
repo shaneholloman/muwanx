@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -159,334 +158,149 @@ class ClientBuilder:
             env=build_env,
         )
 
-    def generate_custom_observations(self) -> None:
-        """Generate custom_observations.ts from user-registered ObservationBinding sentinels.
+    # Empty stubs for the engine's Custom* registries. Author terms no longer
+    # inline into the engine bundle (ADR 0004 §10) — they compile to a runtime
+    # plugins.js instead — so these stay empty and the SPA is project-independent.
+    _EMPTY_CUSTOM_STUBS = {
+        "observation/custom_observations.ts": (
+            "// Auto-generated. Custom observations load at runtime via plugins.js"
+            " (ADR 0004 §10).\n"
+            "export const CustomObservations:"
+            " Record<string, new (...args: never[]) => unknown> = {};\n"
+        ),
+        "command/custom_commands.ts": (
+            "// Auto-generated. Custom commands load at runtime via plugins.js"
+            " (ADR 0004 §10).\n"
+            "import type { CommandTermConstructor } from './types';\n"
+            "export const CustomCommands:"
+            " Record<string, CommandTermConstructor> = {};\n"
+        ),
+        "termination/custom_terminations.ts": (
+            "// Auto-generated. Custom terminations load at runtime via plugins.js"
+            " (ADR 0004 §10).\n"
+            "type TerminationConstructor = new (config:"
+            " import('./TerminationBase').TerminationConfig) =>"
+            " import('./TerminationBase').TerminationBase;\n"
+            "export const CustomTerminations:"
+            " Record<string, TerminationConstructor> = {};\n"
+        ),
+        "event/custom_events.ts": (
+            "// Auto-generated. Custom events load at runtime via plugins.js"
+            " (ADR 0004 §10).\n"
+            "import type { EventConstructor } from './EventBase';\n"
+            "export const CustomEvents: Record<string, EventConstructor> = {};\n"
+        ),
+    }
 
-        Iterates ``_custom_registry`` and collects entries that have a ``ts_src``
-        path.  Each source file is read and its content is inlined into
-        ``custom_observations.ts``, which is then re-exported via the
-        ``CustomObservations`` map so the browser-side ``PolicyRunner`` can
-        resolve the class by name.
+    def generate_empty_custom_stubs(self) -> None:
+        """Write empty Custom* registry files so the engine compiles project-independently."""
+        core = self.project_dir / "src" / "core"
+        for rel, content in self._EMPTY_CUSTOM_STUBS.items():
+            (core / rel).write_text(content)
 
-        Entries without ``ts_src`` (unsupported sentinels) are ignored — they
-        need no JavaScript representation.
+    def _plugin_alias_args(self) -> list[str]:
+        """esbuild `--alias:` args mapping each `mjswan/<sub>` export to its engine source.
+
+        Lets author term files (which import base classes from `mjswan/event`,
+        `mjswan/observation`, …) resolve deterministically to this engine's
+        source when bundled standalone.
         """
-        from mjswan.envs.mdp.observations import _custom_registry
-
-        output_path = (
-            self.project_dir / "src" / "core" / "observation" / "custom_observations.ts"
-        )
-
-        custom_entries = {
-            name: sentinel
-            for name, sentinel in _custom_registry.items()
-            if getattr(sentinel, "ts_src", None) is not None
-            and getattr(sentinel, "ts_name", None)
-        }
-
-        if not custom_entries:
-            output_path.write_text(
-                "// Custom observation classes registered via"
-                " mjswan.envs.mdp.observations.register_observation().\n"
-                "// This file is auto-generated at build time — do not edit manually.\n"
-                "\n"
-                "export const CustomObservations:"
-                " Record<string, new (...args: never[]) => unknown> = {};\n"
-            )
-            return
-
-        lines = [
-            "// Custom observation classes registered via"
-            " mjswan.envs.mdp.observations.register_observation().",
-            "// This file is auto-generated at build time — do not edit manually.",
-            "",
-        ]
-
-        # Collect imports (deduplicated) and class bodies separately
-        seen_imports: list[str] = []
-        class_bodies: list[str] = []
-        class_names: list[str] = []
-        seen_sources: set[Path] = set()
-        for sentinel in custom_entries.values():
-            src_path = Path(sentinel.ts_src).expanduser().resolve()  # type: ignore[arg-type]
-            if not src_path.exists():
-                raise FileNotFoundError(
-                    f"Custom observation ts_src not found: {src_path}"
-                )
-            class_names.append(sentinel.ts_name)
-            if src_path in seen_sources:
+        package_json = self.project_dir / "package.json"
+        with open(package_json) as f:
+            exports = json.load(f).get("exports", {})
+        args: list[str] = []
+        for subpath, target in exports.items():
+            if subpath in (".", "./manifest") or not isinstance(target, str):
                 continue
-            seen_sources.add(src_path)
-            src_lines = src_path.read_text().splitlines()
-            body_lines = []
-            for src_line in src_lines:
-                if src_line.startswith("import "):
-                    if src_line not in seen_imports:
-                        seen_imports.append(src_line)
-                else:
-                    body_lines.append(src_line)
-            class_bodies.append("\n".join(body_lines).strip())
+            name = "mjswan/" + subpath[len("./") :]
+            abs_target = (self.project_dir / target).resolve()
+            args.append(f"--alias:{name}={abs_target}")
+        return args
 
-        # Emit deduplicated imports, then class bodies, then the registry map
-        lines.extend(seen_imports)
-        lines.append("")
-        for body in class_bodies:
-            lines.append(body)
-            lines.append("")
-        lines.append("export const CustomObservations = {")
-        for cls in class_names:
-            lines.append(f"  {cls},")
-        lines.append("};")
-        lines.append("")
+    @staticmethod
+    def _collect_custom_terms() -> dict[str, dict[str, Path]]:
+        """Map each MDP kind to {ts_name: source_path} for registered ts_src terms."""
+        from mjswan.command import _custom_registry as cmd_reg
+        from mjswan.envs.mdp.events import _custom_registry as evt_reg
+        from mjswan.envs.mdp.observations import _custom_registry as obs_reg
+        from mjswan.envs.mdp.terminations import _custom_registry as term_reg
 
-        output_path.write_text("\n".join(lines))
-
-    def generate_custom_commands(self) -> None:
-        """Generate custom_commands.ts from user-registered command terms."""
-        from mjswan.command import _custom_registry
-
-        output_path = (
-            self.project_dir / "src" / "core" / "command" / "custom_commands.ts"
-        )
-
-        custom_entries = {
-            name: spec
-            for name, spec in _custom_registry.items()
-            if getattr(spec, "ts_src", None) is not None
-            and getattr(spec, "ts_name", None)
+        kinds = {
+            "observations": obs_reg,
+            "terminations": term_reg,
+            "events": evt_reg,
+            "commands": cmd_reg,
         }
+        result: dict[str, dict[str, Path]] = {}
+        for kind, registry in kinds.items():
+            entries: dict[str, Path] = {}
+            for sentinel in registry.values():
+                ts_src = getattr(sentinel, "ts_src", None)
+                ts_name = getattr(sentinel, "ts_name", None)
+                if ts_src and ts_name:
+                    src = Path(ts_src).expanduser().resolve()
+                    if not src.exists():
+                        raise FileNotFoundError(
+                            f"Custom {kind} ts_src not found: {src}"
+                        )
+                    entries[ts_name] = src
+            if entries:
+                result[kind] = entries
+        return result
 
-        if not custom_entries:
-            output_path.write_text(
-                "// Custom command terms registered via"
-                " mjswan.register_command().\n"
-                "// This file is auto-generated at build time — do not edit manually.\n"
-                "\n"
-                "import type { CommandTermConstructor } from './types';\n"
-                "\n"
-                "export const CustomCommands:"
-                " Record<string, CommandTermConstructor> = {};\n"
+    def build_plugins_module(self, dest: Path) -> bool:
+        """Bundle author-supplied custom-MDP terms into a standalone ESM at ``dest``.
+
+        Uses esbuild to inline the terms plus their engine base classes into one
+        self-contained module (no bare imports), exporting term constructors
+        grouped by kind (``events``/``observations``/``terminations``/``commands``)
+        — the ``EnginePlugins`` shape the app hands to ``createEngine`` at load.
+        The engine bundle is never rebuilt. Returns False when there are no
+        custom terms. Needs Node (esbuild), unlike declarative builds.
+        """
+        terms = self._collect_custom_terms()
+        if not terms:
+            return False
+
+        # Generate an entry that imports each term and re-exports it grouped by kind.
+        by_src: dict[Path, list[str]] = {}
+        for names in terms.values():
+            for ts_name, src in names.items():
+                by_src.setdefault(src, []).append(ts_name)
+        lines = ["// Auto-generated plugin entry — do not edit."]
+        for src, names in by_src.items():
+            lines.append(
+                f"import {{ {', '.join(sorted(set(names)))} }} from {json.dumps(str(src))};"
             )
-            return
+        for kind, names in terms.items():
+            pairs = ", ".join(sorted(names.keys()))
+            lines.append(f"export const {kind} = {{ {pairs} }};")
+        entry = self.project_dir / "src" / ".plugins-entry.ts"
+        entry.write_text("\n".join(lines) + "\n")
 
-        lines = [
-            "// Custom command terms registered via mjswan.register_command().",
-            "// This file is auto-generated at build time — do not edit manually.",
-            "",
-            "import type { CommandTermConstructor } from './types';",
-            "",
-        ]
+        esbuild = self.project_dir / "node_modules" / ".bin" / "esbuild"
+        if not esbuild.exists():
+            # Custom-JS builds need Node; install if a cached SPA skipped it.
+            self.create_env()
+            self.install_dependencies()
 
-        seen_imports: list[str] = []
-        class_bodies: list[str] = []
-        class_names: list[str] = []
-        seen_sources: set[Path] = set()
-        for spec in custom_entries.values():
-            src_path = Path(spec.ts_src).expanduser().resolve()  # type: ignore[arg-type]
-            if not src_path.exists():
-                raise FileNotFoundError(f"Custom command ts_src not found: {src_path}")
-            class_names.append(spec.ts_name)
-            if src_path in seen_sources:
-                continue
-            seen_sources.add(src_path)
-            src_lines = src_path.read_text().splitlines()
-            body_lines = []
-            for src_line in src_lines:
-                if src_line.startswith("import "):
-                    if src_line not in seen_imports:
-                        seen_imports.append(src_line)
-                else:
-                    body_lines.append(src_line)
-            class_bodies.append("\n".join(body_lines).strip())
-
-        lines.extend(seen_imports)
-        lines.append("")
-        for body in class_bodies:
-            lines.append(body)
-            lines.append("")
-        lines.append(
-            "export const CustomCommands: Record<string, CommandTermConstructor> = {"
-        )
-        for cls in class_names:
-            lines.append(f"  {cls},")
-        lines.append("};")
-        lines.append("")
-
-        output_path.write_text("\n".join(lines))
-
-    def generate_custom_terminations(self) -> None:
-        """Generate custom_terminations.ts from user-registered terminations."""
-        from mjswan.envs.mdp.terminations import _custom_registry
-
-        output_path = (
-            self.project_dir / "src" / "core" / "termination" / "custom_terminations.ts"
-        )
-
-        custom_entries = {
-            name: sentinel
-            for name, sentinel in _custom_registry.items()
-            if getattr(sentinel, "ts_src", None) is not None
-            and getattr(sentinel, "ts_name", None)
-        }
-
-        if not custom_entries:
-            output_path.write_text(
-                "// Custom termination classes registered via"
-                " mjswan.envs.mdp.terminations.register_termination().\n"
-                "// This file is auto-generated at build time — do not edit manually.\n"
-                "\n"
-                "type TerminationConstructor ="
-                " new (config: import('./TerminationBase').TerminationConfig) => import('./TerminationBase').TerminationBase;\n"
-                "\n"
-                "export const CustomTerminations:"
-                " Record<string, TerminationConstructor> = {};\n"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.check_call(
+                [
+                    str(esbuild),
+                    str(entry),
+                    "--bundle",
+                    "--format=esm",
+                    "--platform=browser",
+                    f"--outfile={dest}",
+                    *self._plugin_alias_args(),
+                ],
+                cwd=self.project_dir,
             )
-            return
-
-        lines = [
-            "// Custom termination classes registered via"
-            " mjswan.envs.mdp.terminations.register_termination().",
-            "// This file is auto-generated at build time — do not edit manually.",
-            "",
-            "type TerminationConstructor = new (config: import('./TerminationBase').TerminationConfig) => import('./TerminationBase').TerminationBase;",
-            "",
-        ]
-
-        seen_imports: set[str] = set()
-        deduped_imports: list[str] = []
-        class_bodies: list[str] = []
-        class_names: list[str] = []
-        inlined_utils_lines: list[str] = []
-        seen_utils_paths: set[str] = set()
-        for sentinel in custom_entries.values():
-            src_path = Path(sentinel.ts_src).expanduser().resolve()  # type: ignore[arg-type]
-            if not src_path.exists():
-                raise FileNotFoundError(
-                    f"Custom termination ts_src not found: {src_path}"
-                )
-            src_lines = src_path.read_text().splitlines()
-            body_lines = []
-            for src_line in src_lines:
-                if src_line.startswith("import "):
-                    # Detect local sibling imports (e.g. from './utils') and inline
-                    # their content instead of emitting an unresolvable import statement.
-                    local_match = re.match(
-                        r"^import\s+(?:type\s+)?\{[^}]+\}\s+from\s+['\"](\./[^'\"]+)['\"];?$",
-                        src_line,
-                    )
-                    if local_match:
-                        utils_rel = local_match.group(1)
-                        utils_path = (src_path.parent / (utils_rel + ".ts")).resolve()
-                        if utils_path.exists():
-                            if str(utils_path) not in seen_utils_paths:
-                                seen_utils_paths.add(str(utils_path))
-                                for u_line in utils_path.read_text().splitlines():
-                                    if not u_line.startswith("import "):
-                                        # Strip leading 'export' so symbols become file-local.
-                                        stripped = (
-                                            u_line[len("export ") :]
-                                            if u_line.startswith("export ")
-                                            and not u_line.startswith("export default")
-                                            else u_line
-                                        )
-                                        inlined_utils_lines.append(stripped)
-                            # Skip the import line — content is inlined above.
-                        elif src_line not in seen_imports:
-                            seen_imports.add(src_line)
-                            deduped_imports.append(src_line)
-                    else:
-                        if src_line not in seen_imports:
-                            seen_imports.add(src_line)
-                            deduped_imports.append(src_line)
-                else:
-                    body_lines.append(src_line)
-            class_bodies.append("\n".join(body_lines).strip())
-            class_names.append(sentinel.ts_name)
-
-        lines.extend(deduped_imports)
-        lines.append("")
-        if inlined_utils_lines:
-            lines.extend(inlined_utils_lines)
-            lines.append("")
-        for body in class_bodies:
-            lines.append(body)
-            lines.append("")
-        lines.append(
-            "export const CustomTerminations: Record<string, TerminationConstructor> = {"
-        )
-        for cls in class_names:
-            lines.append(f"  {cls},")
-        lines.append("};")
-        lines.append("")
-
-        output_path.write_text("\n".join(lines))
-
-    def generate_custom_events(self) -> None:
-        """Generate custom_events.ts from user-registered event functions."""
-        from mjswan.envs.mdp.events import _custom_registry
-
-        output_path = self.project_dir / "src" / "core" / "event" / "custom_events.ts"
-
-        custom_entries = {
-            name: sentinel
-            for name, sentinel in _custom_registry.items()
-            if getattr(sentinel, "ts_src", None) is not None
-            and getattr(sentinel, "ts_name", None)
-        }
-
-        if not custom_entries:
-            output_path.write_text(
-                "// Custom event classes registered via"
-                " mjswan.envs.mdp.events.register_event().\n"
-                "// This file is auto-generated at build time — do not edit manually.\n"
-                "\n"
-                "import type { EventConstructor } from './EventBase';\n"
-                "\n"
-                "export const CustomEvents: Record<string, EventConstructor> = {};\n"
-            )
-            return
-
-        lines = [
-            "// Custom event classes registered via"
-            " mjswan.envs.mdp.events.register_event().",
-            "// This file is auto-generated at build time — do not edit manually.",
-            "",
-            "import type { EventConstructor } from './EventBase';",
-            "",
-        ]
-
-        seen_imports: set[str] = set()
-        deduped_imports: list[str] = []
-        class_bodies: list[str] = []
-        class_names: list[str] = []
-        for sentinel in custom_entries.values():
-            src_path = Path(sentinel.ts_src).expanduser().resolve()  # type: ignore[arg-type]
-            if not src_path.exists():
-                raise FileNotFoundError(f"Custom event ts_src not found: {src_path}")
-            src_lines = src_path.read_text().splitlines()
-            body_lines = []
-            for src_line in src_lines:
-                if src_line.startswith("import "):
-                    if src_line not in seen_imports:
-                        seen_imports.add(src_line)
-                        deduped_imports.append(src_line)
-                else:
-                    body_lines.append(src_line)
-            class_bodies.append("\n".join(body_lines).strip())
-            class_names.append(sentinel.ts_name)
-
-        lines.extend(deduped_imports)
-        lines.append("")
-        for body in class_bodies:
-            lines.append(body)
-            lines.append("")
-        lines.append("export const CustomEvents: Record<string, EventConstructor> = {")
-        for cls in class_names:
-            lines.append(f"  {cls},")
-        lines.append("};")
-        lines.append("")
-
-        output_path.write_text("\n".join(lines))
+        finally:
+            entry.unlink(missing_ok=True)
+        return True
 
     def generate_viewer_config_defaults(self) -> None:
         """Generate viewer_config_defaults.ts from Python ViewerConfig defaults."""
@@ -518,6 +332,34 @@ class ClientBuilder:
         )
         output_path.write_text("\n".join(lines))
 
+    def _build_meta(
+        self, base_path: str, gtm_id: str | None, mt: bool, debug: bool
+    ) -> dict[str, object]:
+        """Cache key for a built SPA: it varies only with the version + these opts.
+
+        The SPA is project-independent now (custom terms load at runtime via
+        plugins.js, ADR 0004 §10), so any build with a matching key is reusable.
+        """
+        from mjswan import __version__
+
+        return {
+            "version": __version__,
+            "base_path": base_path,
+            "gtm_id": gtm_id,
+            "mt": mt,
+            "debug": debug,
+        }
+
+    def _cached_spa_matches(self, meta: dict[str, object]) -> bool:
+        dist = self.project_dir / "dist"
+        marker = dist / ".mjswan-build-meta.json"
+        if not (dist / "index.html").exists() or not marker.exists():
+            return False
+        try:
+            return json.loads(marker.read_text()) == meta
+        except (OSError, json.JSONDecodeError):
+            return False
+
     def build(
         self,
         clean: bool = False,
@@ -525,14 +367,28 @@ class ClientBuilder:
         gtm_id: str | None = None,
         mt: bool = False,
         debug: bool = False,
+        build_frontend: bool | None = None,
     ) -> None:
+        """Build the standalone SPA into ``dist/``.
+
+        ``build_frontend``: True forces a build; False requires a matching cached
+        artifact (raises otherwise); None (default) reuses the cache when it
+        matches and builds only when it doesn't. The SPA is project-independent,
+        so the cache is keyed on the mjswan version + base_path/gtm_id/mt/debug.
+        """
+        meta = self._build_meta(base_path, gtm_id, mt, debug)
+        if not clean and build_frontend is not True and self._cached_spa_matches(meta):
+            print("✓ Reusing cached frontend build (dist/)")
+            return
+        if build_frontend is False:
+            raise RuntimeError(
+                "build_frontend=False but no matching prebuilt dist/ was found."
+            )
         try:
             self.create_env(clean=clean)
             self.sync_version_from_python()
-            self.generate_custom_observations()
-            self.generate_custom_commands()
-            self.generate_custom_events()
-            self.generate_custom_terminations()
+            # Custom terms are runtime plugins now, so the engine stubs stay empty.
+            self.generate_empty_custom_stubs()
             self.generate_viewer_config_defaults()
             self.install_dependencies(clean=clean)
             env: dict[str, str] = {"MJSWAN_BASE_PATH": base_path}
@@ -543,10 +399,13 @@ class ClientBuilder:
             if debug:
                 env["MJSWAN_DEBUG"] = "1"
             # The standalone app needs only the SPA build. The library build
-            # (`mjswan.js` mount entry, consumed by mjswan Cloud) is produced by
-            # the full `build` script during npm publish — see vite.lib.config.ts.
+            # (`mjswan.js` createEngine entry, consumed by mjswan Cloud) is produced
+            # by the full `build` script during npm publish — see vite.lib.config.ts.
             script = "build:spa" if self._has_script("build:spa") else "build"
             self.run_build_script(script, env=env)
+            (self.project_dir / "dist" / ".mjswan-build-meta.json").write_text(
+                json.dumps(meta)
+            )
             print("✓ Build completed successfully")
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Build failed with exit code {e.returncode}") from e

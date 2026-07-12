@@ -80,6 +80,14 @@ describe('parseManifest', () => {
   it('prefers the id:null project and throws on an empty catalog', () => {
     expect(() => parseManifest({ version: '0', projects: [] }, fakeSource({}).source)).toThrow();
   });
+
+  it('surfaces the runtime plugin module path when present', () => {
+    const withPlugins = { ...CONFIG, plugins: 'assets/plugins.js' };
+    expect(parseManifest(withPlugins, fakeSource(POLICY_JSON).source).pluginsPath).toBe(
+      'assets/plugins.js',
+    );
+    expect(parseManifest(CONFIG, fakeSource(POLICY_JSON).source).pluginsPath).toBeUndefined();
+  });
 });
 
 describe('sanitizeName', () => {
