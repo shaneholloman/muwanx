@@ -1104,6 +1104,57 @@ class TestMtHeaders:
 
 
 # ===========================================================================
+# L3 slow — Phase 4: cache reuse + custom-JS runtime plugin module
+# Run with: pytest -m slow
+# ===========================================================================
+@pytest.mark.slow
+class TestFullBuildPhase4:
+    def test_second_build_reuses_cached_frontend(self, tmp_path, minimal_model, capsys):
+        builder = Builder()
+        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.build(tmp_path / "out1")  # warms the cache
+        capsys.readouterr()
+        builder2 = Builder()
+        builder2.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder2.build(tmp_path / "out2")  # identical inputs → no frontend rebuild
+        assert "Reusing cached frontend build" in capsys.readouterr().out
+        assert (tmp_path / "out2" / "assets" / "config.json").exists()
+
+    def test_custom_js_build_emits_plugins_module(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
+        from mjswan.envs.mdp import events as evt_mod
+
+        template = Path(mjswan.__file__).parent / "template"
+        if not (template / "node_modules" / ".bin" / "esbuild").exists():
+            pytest.skip("esbuild not installed (run npm install in template)")
+
+        term = tmp_path / "MyEvent.ts"
+        term.write_text(
+            "import { EventBase, type EventContext } from 'mjswan/event';\n"
+            "export class MyEvent extends EventBase {\n"
+            "  onReset(_ctx: EventContext): void {}\n"
+            "}\n"
+        )
+        monkeypatch.setattr(
+            evt_mod,
+            "_custom_registry",
+            {"my_event": SimpleNamespace(ts_name="MyEvent", ts_src=str(term))},
+        )
+        out = tmp_path / "out"
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.build(out)
+
+        config = json.loads((out / "assets" / "config.json").read_text())
+        assert config["uses_custom_js"] is True
+        assert config["plugins"] == "assets/plugins.js"
+        plugins = (out / "assets" / "plugins.js").read_text()
+        assert "MyEvent" in plugins and "events" in plugins
+        assert "mjswan/event" not in plugins  # standalone (base class bundled)
+
+
+# ===========================================================================
 # L3 slow — full mt=True build (triggers frontend compilation)
 # Run with: pytest -m slow
 # ===========================================================================
