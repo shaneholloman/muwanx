@@ -151,6 +151,28 @@ class TestFrontendBuildCache:
         with pytest.raises(RuntimeError, match="no matching prebuilt"):
             ClientBuilder(tmp_path).build(build_frontend=False)
 
+    def test_source_change_invalidates_fingerprint(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        app = tmp_path / "src" / "App.tsx"
+        app.write_text("export default 1;\n")
+        cb = ClientBuilder(tmp_path)
+        before = cb._source_fingerprint()
+        app.write_text("export default 2;\n")
+        assert cb._source_fingerprint() != before
+
+    def test_version_bump_alone_does_not_churn_fingerprint(self, tmp_path):
+        pkg = tmp_path / "package.json"
+        pkg.write_text(
+            json.dumps({"name": "mjswan", "version": "0.7.0", "scripts": {}})
+        )
+        cb = ClientBuilder(tmp_path)
+        before = cb._source_fingerprint()
+        # Version is keyed separately and normalized out of the fingerprint.
+        pkg.write_text(
+            json.dumps({"name": "mjswan", "version": "0.8.0", "scripts": {}})
+        )
+        assert cb._source_fingerprint() == before
+
 
 @pytest.mark.slow
 class TestBuildPluginsModule:

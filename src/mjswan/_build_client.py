@@ -9,6 +9,7 @@ This module handles:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -335,10 +336,11 @@ class ClientBuilder:
     def _build_meta(
         self, base_path: str, gtm_id: str | None, mt: bool, debug: bool
     ) -> dict[str, object]:
-        """Cache key for a built SPA: it varies only with the version + these opts.
+        """Cache key for a built SPA: version + build opts + a source fingerprint.
 
-        The SPA is project-independent now (custom terms load at runtime via
+        The SPA is project-independent (custom terms load at runtime via
         plugins.js, ADR 0004 §10), so any build with a matching key is reusable.
+        The fingerprint rebuilds the SPA whenever the app codebase changes.
         """
         from mjswan import __version__
 
@@ -348,7 +350,60 @@ class ClientBuilder:
             "gtm_id": gtm_id,
             "mt": mt,
             "debug": debug,
+            "source": self._source_fingerprint(),
         }
+
+    # Auto-generated (derived) files, excluded from the source fingerprint: they
+    # are regenerated identically each build, so hashing them would churn the key.
+    _GENERATED_TS = frozenset(
+        {
+            "src/core/observation/custom_observations.ts",
+            "src/core/command/custom_commands.ts",
+            "src/core/event/custom_events.ts",
+            "src/core/termination/custom_terminations.ts",
+            "src/core/engine/viewer_config_defaults.ts",
+        }
+    )
+
+    def _source_fingerprint(self) -> str:
+        """SHA-256 over the frontend build inputs (app source + config + declared deps).
+
+        Invalidates the cache whenever the app codebase changes. Excludes derived
+        outputs (node_modules / dist / .nodeenv), the auto-generated stubs above,
+        and package-lock.json (npm may rewrite it); package.json's ``version`` is
+        normalized out since it is already a separate part of the key.
+        """
+        inputs: list[Path] = []
+        for top in (
+            "package.json",
+            "vite.config.ts",
+            "vite.lib.config.ts",
+            "tsconfig.json",
+            "index.html",
+        ):
+            p = self.project_dir / top
+            if p.exists():
+                inputs.append(p)
+        for root in ("src", "public"):
+            base = self.project_dir / root
+            if base.exists():
+                inputs.extend(p for p in base.rglob("*") if p.is_file())
+
+        digest = hashlib.sha256()
+        for path in sorted(
+            inputs, key=lambda p: p.relative_to(self.project_dir).as_posix()
+        ):
+            rel = path.relative_to(self.project_dir).as_posix()
+            if rel in self._GENERATED_TS:
+                continue
+            digest.update(rel.encode())
+            if rel == "package.json":
+                data = json.loads(path.read_text())
+                data.pop("version", None)
+                digest.update(json.dumps(data, sort_keys=True).encode())
+            else:
+                digest.update(path.read_bytes())
+        return digest.hexdigest()
 
     def _cached_spa_matches(self, meta: dict[str, object]) -> bool:
         dist = self.project_dir / "dist"
