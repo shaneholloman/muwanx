@@ -1029,6 +1029,33 @@ class TestFullBuild:
         app = builder.build(tmp_path / "out")
         assert isinstance(app, mjswan.MjswanApp)
 
+    def test_build_output_excludes_dev_and_test_files(self, tmp_path, minimal_model):
+        builder = Builder()
+        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        out = tmp_path / "out"
+        builder.build(out)
+        # Dev/test scaffolding (harness, e2e, configs, type shims, fixtures) must
+        # not ship in the published SPA.
+        for leaked in (
+            "e2e",
+            "harness.html",
+            "fixtures",
+            "vite.config.ts",
+            "vite.lib.config.ts",
+            "vite.manifest.config.ts",
+            "vitest.config.ts",
+            "playwright.config.ts",
+            "lib.d.ts",
+            "manifest.d.ts",
+            "src",
+            "node_modules",
+            "package.json",
+        ):
+            assert not (out / leaked).exists(), f"dev file leaked into build: {leaked}"
+        assert (out / "index.html").exists() and (
+            out / "assets" / "config.json"
+        ).exists()
+
 
 # ===========================================================================
 # L1 — mt parameter: _save_mt_headers / no-headers when mt=False

@@ -514,10 +514,23 @@ class Builder:
                     "package-lock.json",
                     "tsconfig.json",
                     "vite.config.ts",
+                    "vite.lib.config.ts",
+                    "vite.manifest.config.ts",
+                    "vitest.config.ts",
+                    "playwright.config.ts",
                     "eslint.config.cjs",
                     ".browserslistrc",
                     ".gitignore",
                     "README.md",
+                    # Engine/manifest type shims + headless test harness (dev-only).
+                    "lib.d.ts",
+                    "manifest.d.ts",
+                    "e2e",
+                    "harness.html",
+                    "test-results",
+                    "playwright-report",
+                    # The E2E fixture scene is copied from public/ into the build root.
+                    "fixtures",
                 ]
                 for dev_file in dev_files:
                     dev_path = output_path / dev_file
