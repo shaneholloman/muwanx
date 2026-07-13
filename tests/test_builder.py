@@ -205,6 +205,32 @@ class TestBuildPluginsModule:
         assert "EventBase" in code  # base class bundled (self-contained)
         assert "mjswan/event" not in code  # no bare imports remain
 
+    def test_term_importing_three_reuses_engine_instance(self, tmp_path, monkeypatch):
+        # A term that imports `three` must resolve to the engine's single instance
+        # (global), not a bundled duplicate — else instanceof / raycasting break.
+        template = Path(mjswan.__file__).parent / "template"
+        if not (template / "node_modules" / ".bin" / "esbuild").exists():
+            pytest.skip("esbuild not installed (run npm install in template)")
+
+        src = tmp_path / "ThreeObs.ts"
+        src.write_text(
+            "import * as THREE from 'three';\n"
+            "import { EventBase, type EventContext } from 'mjswan/event';\n"
+            "export class ThreeObs extends EventBase {\n"
+            "  onReset(_ctx: EventContext): void { void new THREE.Vector3(); }\n"
+            "}\n"
+        )
+        monkeypatch.setattr(
+            evt_fns,
+            "_custom_registry",
+            {"three_obs": SimpleNamespace(ts_name="ThreeObs", ts_src=str(src))},
+        )
+        out = tmp_path / "plugins.js"
+        assert ClientBuilder(template).build_plugins_module(out) is True
+        code = out.read_text()
+        assert "__mjswanThree" in code  # `three` resolved to the shared-instance shim
+        assert "three" not in code.split("\n")[0]  # no bare `three` import survived
+
 
 # ===========================================================================
 # L1 — validation

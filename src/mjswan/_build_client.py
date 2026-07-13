@@ -200,11 +200,15 @@ class ClientBuilder:
             (core / rel).write_text(content)
 
     def _plugin_alias_args(self) -> list[str]:
-        """esbuild `--alias:` args mapping each `mjswan/<sub>` export to its engine source.
+        """esbuild `--alias:` args for bundling author custom-MDP terms.
 
-        Lets author term files (which import base classes from `mjswan/event`,
-        `mjswan/observation`, …) resolve deterministically to this engine's
-        source when bundled standalone.
+        - Each `mjswan/<sub>` export → its engine source, so author term files
+          (which import base classes from `mjswan/event`, `mjswan/observation`, …)
+          resolve deterministically when bundled standalone.
+        - `three` → a shim that reuses the engine bundle's single three instance
+          at runtime, not a bundled duplicate (so instanceof / shared scene /
+          raycasting work across the separately-loaded plugin ESM). See
+          src/engine/plugin-three-shim.cjs and src/engine/index.ts.
         """
         package_json = self.project_dir / "package.json"
         with open(package_json) as f:
@@ -216,6 +220,8 @@ class ClientBuilder:
             name = "mjswan/" + subpath[len("./") :]
             abs_target = (self.project_dir / target).resolve()
             args.append(f"--alias:{name}={abs_target}")
+        three_shim = self.project_dir / "src" / "engine" / "plugin-three-shim.cjs"
+        args.append(f"--alias:three={three_shim.resolve()}")
         return args
 
     @staticmethod
