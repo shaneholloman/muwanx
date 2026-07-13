@@ -150,3 +150,34 @@ class TestLibBuild:
             "in vite.lib.config.ts must fold it to a literal so the CDN-loaded "
             "engine needs no host-side `process` shim."
         )
+
+
+@pytest.fixture(scope="class")
+def manifest_dist() -> Path:
+    """Build the `mjswan/manifest` CDN bundle once for the whole test class."""
+    builder = ClientBuilder(TEMPLATE_DIR)
+    builder.create_env()
+    builder.install_dependencies()
+    builder.run_build_script("build:manifest")
+    return TEMPLATE_DIR / "dist"
+
+
+@pytest.mark.slow
+class TestManifestBuild:
+    """`dist/manifest.js` is a standalone, CDN-loadable parser (ADR 0004 §9/§11).
+
+    mjswan Cloud imports it from jsDelivr alongside the engine bundle, so it must
+    be self-contained (no bare imports) and export `parseManifest`.
+    """
+
+    def test_manifest_js_emitted(self, manifest_dist: Path):
+        assert (manifest_dist / "manifest.js").is_file()
+
+    def test_exports_parse_manifest(self, manifest_dist: Path):
+        assert "parseManifest" in (manifest_dist / "manifest.js").read_text()
+
+    def test_no_bare_imports(self, manifest_dist: Path):
+        code = (manifest_dist / "manifest.js").read_text()
+        specs = _IMPORT_FROM.findall(code) + _DYNAMIC_IMPORT.findall(code)
+        offenders = [s for s in specs if _is_bare(s)]
+        assert not offenders, f"bare imports in manifest.js: {offenders}"

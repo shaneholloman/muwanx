@@ -12,6 +12,7 @@
     "src/engine",
     "src/manifest",
     "lib.d.ts",
+    "manifest.d.ts",
     "index.html",
     "README.md",
     "LICENSE"
@@ -25,7 +26,11 @@
       "import": "./dist/mjswan.js",
       "default": "./dist/mjswan.js"
     },
-    "./manifest": "./src/manifest/index.ts",
+    "./manifest": {
+      "types": "./manifest.d.ts",
+      "import": "./dist/manifest.js",
+      "default": "./dist/manifest.js"
+    },
     "./observation": "./src/core/observation/index.ts",
     "./command": "./src/core/command/index.ts",
     "./math": "./src/core/observation/math.ts",
@@ -38,9 +43,10 @@
   },
   "scripts": {
     "dev": "vite --host",
-    "build": "tsc && vite build && vite build --config vite.lib.config.ts",
+    "build": "tsc && vite build && vite build --config vite.lib.config.ts && vite build --config vite.manifest.config.ts",
     "build:spa": "tsc && vite build",
     "build:lib": "vite build --config vite.lib.config.ts",
+    "build:manifest": "vite build --config vite.manifest.config.ts",
     "preview": "vite preview",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
