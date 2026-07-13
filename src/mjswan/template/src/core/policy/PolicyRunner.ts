@@ -343,10 +343,12 @@ export class PolicyRunner {
   }
 
   private buildFrame(obsList: ObservationBase[], state: PolicyState): Float32Array {
-    const size = obsList.reduce((sum, obs) => sum + obs.size, 0);
-    const output = new Float32Array(size);
-    let offset = 0;
-    for (const obs of obsList) {
+    // Compute every term first, then size the buffer from the actual arrays, so
+    // an observation whose output length changes between frames can never
+    // overflow `set()` (a term's `size` getter may lag its output — e.g. it is
+    // cached from the previous frame). The guard keeps a clear error for a
+    // genuine size mismatch.
+    const arrays = obsList.map((obs) => {
       const value = obs.compute(state);
       const array = value instanceof Float32Array ? value : Float32Array.from(value);
       if (array.length !== obs.size) {
@@ -354,6 +356,12 @@ export class PolicyRunner {
           `Observation size mismatch: expected ${obs.size}, got ${array.length}`
         );
       }
+      return array;
+    });
+    const total = arrays.reduce((sum, array) => sum + array.length, 0);
+    const output = new Float32Array(total);
+    let offset = 0;
+    for (const array of arrays) {
       output.set(array, offset);
       offset += array.length;
     }
