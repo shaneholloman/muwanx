@@ -179,8 +179,9 @@ class ClientBuilder:
         "termination/custom_terminations.ts": (
             "// Auto-generated. Custom terminations load at runtime via plugins.js"
             " (ADR 0004 §10).\n"
-            "type TerminationConstructor = new (config:"
-            " import('./TerminationBase').TerminationConfig) =>"
+            "type TerminationConstructor = new ("
+            "runner: import('../policy/PolicyRunner').PolicyRunner,"
+            " config: import('./TerminationBase').TerminationConfig) =>"
             " import('./TerminationBase').TerminationBase;\n"
             "export const CustomTerminations:"
             " Record<string, TerminationConstructor> = {};\n"

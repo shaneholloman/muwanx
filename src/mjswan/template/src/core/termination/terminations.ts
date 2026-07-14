@@ -6,7 +6,10 @@ import { CustomTerminations } from './custom_terminations';
 // are no named built-in termination classes.  This registry only carries
 // ts_src custom terminations (resolved by name via the legacy path).
 
-export type TerminationConstructor = new (config: TerminationConfig) => TerminationBase;
+export type TerminationConstructor = new (
+  runner: import('../policy/PolicyRunner').PolicyRunner,
+  config: TerminationConfig,
+) => TerminationBase;
 
 export const Terminations: Record<string, TerminationConstructor> = {
   ...CustomTerminations,

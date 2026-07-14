@@ -37,6 +37,7 @@
     "./types": "./src/core/types.ts",
     "./scene": "./src/core/scene/scene.ts",
     "./npz": "./src/core/scene/npz.ts",
+    "./bytes": "./src/core/utils/bytes.ts",
     "./event": "./src/core/event/EventBase.ts",
     "./termination": "./src/core/termination/TerminationBase.ts",
     "./coordinate": "./src/core/scene/coordinate.ts"

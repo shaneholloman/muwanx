@@ -1,6 +1,7 @@
 import { ObservationBase } from '../observation/ObservationBase';
 import { DslObservation } from '../observation/DslObservation';
 import type { DslNode } from '../dsl/types';
+import { type Bytes, resolveBytes } from '../utils/bytes';
 import { PolicyModule } from './PolicyModule';
 import type {
   ObservationConfigEntry,
@@ -18,6 +19,8 @@ export type ObservationConstructor = new (
 export type PolicyRunnerOptions = {
   policyModules?: Record<string, PolicyModuleConstructor>;
   observations?: Record<string, ObservationConstructor>;
+  /** App-supplied motion clips (name → bytes), exposed to terms via getMotionData. */
+  motions?: Array<{ name: string; data: Bytes }>;
 };
 
 export class PolicyRunner {
@@ -36,6 +39,7 @@ export class PolicyRunner {
   private encoderBias: Float32Array;
   private numActions: number;
   private lastActions: Float32Array;
+  private motionCache: Map<string, Promise<ArrayBuffer | null>> = new Map();
 
   constructor(config: PolicyConfig, options: PolicyRunnerOptions = {}) {
     this.config = config;
@@ -197,6 +201,22 @@ export class PolicyRunner {
 
   getConfig(): PolicyConfig {
     return this.config;
+  }
+
+  /**
+   * Resolve an app-supplied motion clip's raw bytes by name (cached), or null
+   * if not supplied. Custom terms that need clip data read this slot instead of
+   * fetching a URL — the app owns and feeds all bytes (ADR 0004 §4/§10).
+   */
+  getMotionData(name: string): Promise<ArrayBuffer | null> {
+    const cached = this.motionCache.get(name);
+    if (cached) return cached;
+    const motion = this.options.motions?.find((m) => m.name === name);
+    const promise: Promise<ArrayBuffer | null> = motion
+      ? resolveBytes(motion.data)
+      : Promise.resolve(null);
+    this.motionCache.set(name, promise);
+    return promise;
   }
 
   setLastActions(actions: Float32Array): void {

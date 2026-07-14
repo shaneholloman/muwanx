@@ -17,13 +17,11 @@ import type { DslGraph } from '../dsl/types';
  */
 export class DslTermination extends TerminationBase {
   private readonly graph: DslGraph;
-  private readonly runner: PolicyRunner;
   private readonly params: Record<string, unknown>;
   private readonly store = new NodeStateStore();
 
   constructor(runner: PolicyRunner, config: TerminationConfig & { graph: DslGraph }) {
-    super(config);
-    this.runner = runner;
+    super(runner, config);
     this.graph = config.graph;
     this.params = config.params ?? {};
   }

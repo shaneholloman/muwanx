@@ -734,6 +734,9 @@ export class mjswanRuntime {
           locomotion: LocomotionPolicy,
         },
         observations: { ...Observations, ...this.policyPlugins.observations },
+        // Expose the app-supplied clips to custom terms (they read bytes via
+        // runner.getMotionData instead of fetching — ADR 0004 §4/§10).
+        motions: policy.motions,
       });
 
       await runner.init({

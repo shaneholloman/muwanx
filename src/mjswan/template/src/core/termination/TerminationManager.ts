@@ -52,7 +52,7 @@ export class TerminationManager {
       };
       this.terms.push({
         name,
-        term: new TermClass(termConfig),
+        term: new TermClass(runner, termConfig),
         isTimeOut: entry.time_out ?? false,
       });
     }
