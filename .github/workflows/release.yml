@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. 0.3.0)"
+        description: "Version: X.Y.Z (stable, main only) or X.Y.Z-beta.N (prerelease, any branch)"
         required: true
         type: string
 
@@ -13,24 +13,35 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      is_prerelease: ${{ steps.type.outputs.is_prerelease }}
+      npm_tag: ${{ steps.type.outputs.npm_tag }}
 
     steps:
+      # Checks out the dispatched ref: main for a stable release; the feature
+      # branch for a prerelease (prereleases may ship before the PR merges).
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          ref: main
 
-      - name: Ensure workflow runs from main
+      - name: Determine release type
+        id: type
         run: |
-          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
-            echo "::error::This workflow can only be run from the main branch. Current ref: ${{ github.ref }}"
+          v="${{ inputs.version }}"
+          if echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          elif echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$'; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Invalid version '$v'. Expected X.Y.Z or X.Y.Z-beta.N"
             exit 1
           fi
 
-      - name: Validate version format
+      - name: Ensure stable releases run from main
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Invalid version format '${{ inputs.version }}'. Expected semver (e.g. 0.3.0)"
+          if [ "${{ steps.type.outputs.is_prerelease }}" != "true" ] && [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Stable releases must run from main. Current ref: ${{ github.ref }}"
             exit 1
           fi
 
@@ -53,7 +64,11 @@ jobs:
           jq --arg v "${{ inputs.version }}" '.version = $v' package.json > package.json.tmp
           mv package.json.tmp package.json
 
-      - name: Commit version bump
+      # Stable releases bump the version on main. Prereleases do NOT commit — the
+      # publish jobs set the version from the `version` input, so the branch/PR
+      # stays clean and no throwaway bump lands in history.
+      - name: Commit version bump (stable only)
+        if: steps.type.outputs.is_prerelease != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -79,6 +94,7 @@ jobs:
     uses: ./.github/workflows/publish-pypi.yml
     with:
       ref: v${{ inputs.version }}
+      version: ${{ inputs.version }}
     permissions:
       id-token: write
       contents: read
@@ -88,12 +104,15 @@ jobs:
     uses: ./.github/workflows/publish-npm.yml
     with:
       ref: v${{ inputs.version }}
+      version: ${{ inputs.version }}
+      tag: ${{ needs.release.outputs.npm_tag }}
     permissions:
       id-token: write
       contents: read
 
   create-release:
     needs:
+      - release
       - publish-pypi
       - publish-npm
     runs-on: ubuntu-latest
@@ -105,12 +124,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          PRERELEASE_FLAG: ${{ needs.release.outputs.is_prerelease == 'true' && '--prerelease' || '' }}
         run: |
           for i in 1 2 3; do
             gh release create "v${{ inputs.version }}" \
               --repo "${GH_REPO}" \
               --title "v${{ inputs.version }}" \
-              --generate-notes && exit 0
+              --generate-notes \
+              ${PRERELEASE_FLAG} && exit 0
             echo "Attempt $i failed, retrying in 15s..."
             [ $i -lt 3 ] && sleep 15
           done
