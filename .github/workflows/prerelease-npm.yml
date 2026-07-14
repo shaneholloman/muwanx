@@ -1,0 +1,72 @@
+name: prerelease-npm
+
+# npm-only prerelease route, activated from ANY branch by pushing a prerelease
+# tag (a version with a hyphen), e.g. from this feature branch:
+#
+#   git tag v0.9.0-beta.0 && git push origin v0.9.0-beta.0
+#
+# It runs from the tagged commit (a tag-push trigger uses the workflow file at
+# that ref, so it does NOT need to be on the default branch), sets the version
+# from the tag, builds the template, and publishes to npm under the `beta`
+# dist-tag — never `latest`. No PyPI, no GitHub release, no version-bump commit.
+#
+# Prerequisite (one-time, on npmjs.com): the `mjswan` package's trusted-publisher
+# config must authorize THIS workflow file (prerelease-npm.yml) — otherwise the
+# OIDC `npm publish` step is rejected.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Derive prerelease version from tag
+        id: v
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$'; then
+            echo "::error::Tag '$GITHUB_REF_NAME' is not a prerelease version (expected e.g. v0.9.0-beta.0)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set version in sources
+        run: |
+          sed -i "s/^__version__ = \".*\"/__version__ = \"${{ steps.v.outputs.version }}\"/" src/mjswan/__init__.py
+          cd src/mjswan/template
+          jq --arg v "${{ steps.v.outputs.version }}" '.version = $v' package.json > package.json.tmp
+          mv package.json.tmp package.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sanity tests (fast tier)
+        run: uv run --extra dev --python 3.12 pytest -m "not slow"
+
+      - name: Setup Node.js for template build
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest # Trusted publishing requires npm >= 11.5.1
+
+      - name: Build web template
+        working-directory: src/mjswan/template
+        run: |
+          npm install
+          npm run build
+
+      - name: Publish prerelease to npm (beta dist-tag)
+        working-directory: src/mjswan/template
+        run: npm publish --access public --tag beta # Auth via OIDC trusted publishing
