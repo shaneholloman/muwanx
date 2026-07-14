@@ -1,10 +1,12 @@
 # `createEngine`: a headless, instance-scoped engine core with an app-owned catalog
 
-> Status: **Proposed**. A large refactor with **no backward-compatibility
-> constraint** (pre-1.0; versioning is managed out-of-band). This replaces an
-> earlier draft of this ADR that proposed an additive `controls` surface on the
-> existing React `mount()`; that additive approach is superseded by the
-> engine/app split below.
+> Status: **Accepted** — Phases 0–4 are implemented and validated on branch
+> `76-…` (PR #77): the engine, `mjswan/manifest`, the React reference app, and
+> the Python build flow. Phase 5 (mjswan Cloud, separate repo) is tracked
+> separately. A large refactor with **no backward-compatibility constraint**
+> (pre-1.0; versioning is managed out-of-band). This replaces an earlier draft
+> of this ADR that proposed an additive `controls` surface on the existing React
+> `mount()`; that additive approach is superseded by the engine/app split below.
 
 ## Context
 
