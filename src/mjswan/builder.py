@@ -531,6 +531,8 @@ class Builder:
                     "playwright-report",
                     # The E2E fixture scene is copied from public/ into the build root.
                     "fixtures",
+                    # SPA build-cache key (see _build_client); dev-only, not shipped.
+                    ".mjswan-build-meta.json",
                 ]
                 for dev_file in dev_files:
                     dev_path = output_path / dev_file
