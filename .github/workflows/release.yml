@@ -67,11 +67,14 @@ jobs:
       # Stable releases bump the version on main. Prereleases do NOT commit — the
       # publish jobs set the version from the `version` input, so the branch/PR
       # stays clean and no throwaway bump lands in history.
-      - name: Commit version bump (stable only)
-        if: steps.type.outputs.is_prerelease != 'true'
+      - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit version bump (stable only)
+        if: steps.type.outputs.is_prerelease != 'true'
+        run: |
           git add src/mjswan/__init__.py src/mjswan/template/package.json
           if git diff --cached --quiet; then
             echo "Version already at ${{ inputs.version }}, skipping commit"
