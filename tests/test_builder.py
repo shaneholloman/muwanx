@@ -1141,19 +1141,20 @@ class TestMtHeaders:
     def test_save_web_excludes_mt_template_dir(
         self, tmp_path, minimal_model, monkeypatch
     ):
-        """_save_web must not copy the template-only _mt directory into output."""
+        """_save_web must not copy the template-only _mt directory into output.
+
+        The output is assembled allowlist-style from the built dist/ (+ LICENSE),
+        so template-root scaffolding like _mt is excluded by construction.
+        """
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
-        copytree = MagicMock()
-        monkeypatch.setattr("mjswan.builder.shutil.copytree", copytree)
+        monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
 
         builder = Builder(mt=False)
         builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         out = tmp_path / "out"
         builder._save_web(out)
 
-        ignore = copytree.call_args.kwargs["ignore"]
-        ignored = set(ignore("", ["_mt", "src", "README.md", "__pycache__"]))
-        assert "_mt" in ignored
+        assert not (out / "_mt").exists()
 
 
 # ===========================================================================

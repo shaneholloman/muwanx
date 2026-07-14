@@ -480,72 +480,35 @@ class Builder:
                     build_frontend=build_frontend,
                 )
 
-            # Copy all files from template to output_path
-            shutil.copytree(
-                template_dir,
-                output_path,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns(
-                    ".nodeenv", "__pycache__", "*.pyc", ".md", "_mt"
-                ),
-            )
-
-            # Move built files from nested dist/ to output_path root
-            built_dist = output_path / "dist"
-            if built_dist.exists() and built_dist.is_dir():
-                # Move all files from dist/ to output_path
+            # Copy only the built SPA into the output. Everything the standalone
+            # app needs is produced into the client build's dist/, so copying just
+            # that — rather than the whole template dir followed by a dev-file
+            # cleanup pass — keeps dev scaffolding (src/, node_modules/, configs,
+            # test dirs, stray .DS_Store, …) out of the output by construction.
+            built_dist = template_dir / "dist"
+            if built_dist.is_dir():
+                # Dev-only artifacts vite emits into dist/ that the app doesn't
+                # need: fixtures/ (E2E scene copied from public/) and the SPA
+                # build-cache key (see _build_client).
+                spa_excludes = {"fixtures", ".mjswan-build-meta.json"}
                 for item in built_dist.iterdir():
+                    if item.name in spa_excludes:
+                        continue
                     dest = output_path / item.name
-                    if dest.exists():
-                        if dest.is_dir():
-                            shutil.rmtree(dest)
-                        else:
-                            dest.unlink()
-                    shutil.move(str(item), str(output_path))
-                # Remove the now-empty dist directory
-                built_dist.rmdir()
-
-                # Clean up development files that shouldn't be in production
-                dev_files = [
-                    "src",
-                    "node_modules",
-                    ".nodeenv",
-                    "package.json",
-                    "package-lock.json",
-                    "tsconfig.json",
-                    "vite.config.ts",
-                    "vite.lib.config.ts",
-                    "vite.manifest.config.ts",
-                    "vitest.config.ts",
-                    "playwright.config.ts",
-                    "eslint.config.cjs",
-                    ".browserslistrc",
-                    ".gitignore",
-                    "README.md",
-                    # Engine/manifest type shims + headless test harness (dev-only).
-                    "lib.d.ts",
-                    "manifest.d.ts",
-                    "e2e",
-                    "harness.html",
-                    "test-results",
-                    "playwright-report",
-                    # The E2E fixture scene is copied from public/ into the build root.
-                    "fixtures",
-                    # SPA build-cache key (see _build_client); dev-only, not shipped.
-                    ".mjswan-build-meta.json",
-                ]
-                for dev_file in dev_files:
-                    dev_path = output_path / dev_file
-                    if dev_path.exists():
-                        if dev_path.is_dir():
-                            shutil.rmtree(dev_path)
-                        else:
-                            dev_path.unlink()
-
-                # Remove public directory after build
-                public_dir = output_path / "public"
-                if public_dir.exists():
-                    shutil.rmtree(public_dir)
+                    if item.is_dir():
+                        shutil.copytree(item, dest, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(item, dest)
+                # Ship the license alongside the app.
+                license_file = template_dir / "LICENSE"
+                if license_file.exists():
+                    shutil.copy2(license_file, output_path / license_file.name)
+            else:
+                warnings.warn(
+                    f"No built SPA found at {built_dist}; the output will be "
+                    "missing the web application.",
+                    category=RuntimeWarning,
+                )
         else:
             warnings.warn(
                 f"Template directory not found at {template_dir}.",
