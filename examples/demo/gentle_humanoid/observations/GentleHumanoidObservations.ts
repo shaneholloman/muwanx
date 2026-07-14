@@ -1,7 +1,6 @@
 import { ObservationBase } from 'mjswan/observation';
 import type { ObservationConfig } from 'mjswan/observation';
 import { normalizeQuat, quatInverse, quatMultiply, quatApplyInv, clampFutureIndices } from 'mjswan/math';
-import { getCommandManager } from 'mjswan/command';
 import type { PolicyState } from 'mjswan/types';
 import type { PolicyRunner } from 'mjswan/types';
 
@@ -15,8 +14,8 @@ type GentleHumanoidTrackingSource = {
   isReady(): boolean;
 };
 
-function getTracking(): GentleHumanoidTrackingSource | null {
-  const term = getCommandManager().getTerm('motion');
+function getTracking(runner: PolicyRunner): GentleHumanoidTrackingSource | null {
+  const term = runner.getContext()?.commandManager?.getTerm('motion');
   if (
     typeof term === 'object' &&
     term !== null &&
@@ -59,8 +58,8 @@ function quatToRot6dColumns(q: ArrayLike<number>): number[] {
   return [r00, r10, r20, r01, r11, r21];
 }
 
-function readCompliance(config: ObservationConfig): { enabled: number; force: number } {
-  const command = getCommandManager().getCommand((config.command_name as string | undefined) ?? 'compliance');
+function readCompliance(runner: PolicyRunner, config: ObservationConfig): { enabled: number; force: number } {
+  const command = runner.getContext()?.commandManager?.getCommand((config.command_name as string | undefined) ?? 'compliance') ?? new Float32Array(0);
   const enabled = command.length > 0 ? (command[0] >= 0.5 ? 1.0 : 0.0) : Number(config.default_enabled ?? 1.0);
   const force = command.length > 1 ? command[1] : Number(config.default_force ?? 10.0);
   return { enabled, force };
@@ -143,7 +142,7 @@ export class GentleHumanoidTrackingCommandObsRaw extends ObservationBase {
   }
 
   compute(state: PolicyState): Float32Array {
-    const tracking = getTracking();
+    const tracking = getTracking(this.runner);
     if (!tracking || !tracking.isReady()) {
       return new Float32Array(this.size);
     }
@@ -175,7 +174,7 @@ export class GentleHumanoidComplianceFlagObs extends ObservationBase {
   }
 
   compute(): Float32Array {
-    const { enabled, force } = readCompliance(this.config);
+    const { enabled, force } = readCompliance(this.runner, this.config);
     return new Float32Array([enabled, enabled * force, enabled * force / 0.05]);
   }
 }
@@ -195,7 +194,7 @@ export class GentleHumanoidTargetJointPosObs extends ObservationBase {
   }
 
   compute(state: PolicyState): Float32Array {
-    const tracking = getTracking();
+    const tracking = getTracking(this.runner);
     if (!tracking || !tracking.isReady()) {
       return new Float32Array(this.size);
     }
@@ -229,7 +228,7 @@ export class GentleHumanoidTargetRootZObs extends ObservationBase {
   }
 
   compute(): Float32Array {
-    const tracking = getTracking();
+    const tracking = getTracking(this.runner);
     if (!tracking || !tracking.isReady()) {
       return new Float32Array(this.size);
     }
@@ -255,7 +254,7 @@ export class GentleHumanoidTargetProjectedGravityBObs extends ObservationBase {
   }
 
   compute(): Float32Array {
-    const tracking = getTracking();
+    const tracking = getTracking(this.runner);
     if (!tracking || !tracking.isReady()) {
       return new Float32Array(this.size);
     }

@@ -18,18 +18,28 @@ type MimicClipRaw = {
   nClipSites: number;
 };
 
-const _mimicClipCache = new Map<string, Promise<MimicClipRaw | null>>();
+// The app feeds the clip bytes as the 'mimic_clip' motion; read that slot via
+// the runner (no fetch — the engine no longer serves paths). ADR 0004 §4/§10.
+// Cache the parsed clip per runner so all mimic observers share one load.
+const _mimicClipCache = new WeakMap<PolicyRunner, Promise<MimicClipRaw | null>>();
 
-function _loadMimicClipRaw(url: string): Promise<MimicClipRaw | null> {
-  if (!_mimicClipCache.has(url)) {
-    _mimicClipCache.set(url, _fetchMimicClip(url));
+function _loadMimicClipRaw(runner: PolicyRunner): Promise<MimicClipRaw | null> {
+  let cached = _mimicClipCache.get(runner);
+  if (!cached) {
+    cached = _parseMimicClip(runner);
+    _mimicClipCache.set(runner, cached);
   }
-  return _mimicClipCache.get(url)!;
+  return cached;
 }
 
-async function _fetchMimicClip(url: string): Promise<MimicClipRaw | null> {
+async function _parseMimicClip(runner: PolicyRunner): Promise<MimicClipRaw | null> {
   try {
-    const npz = await loadNpz(url);
+    const bytes = await runner.getMotionData('mimic_clip');
+    if (!bytes) {
+      console.warn('[MimicObservations] mimic_clip motion bytes not supplied');
+      return null;
+    }
+    const npz = await loadNpz(bytes);
     const qposEntry = npz['qpos'];
     const qvelEntry = npz['qvel'];
     const siteEntry = npz['site_xpos'];
@@ -73,12 +83,6 @@ function _resolveBodyIds(runner: PolicyRunner, bodyNames: string[]): number[] {
     console.warn('[MimicObservations] _resolveBodyIds: body not found:', missing);
   }
   return ids;
-}
-
-function _findClipUrl(runner: PolicyRunner): string | null {
-  const motions = runner.getConfig().motions ?? [];
-  const clipMotion = motions.find((m) => m.name === 'mimic_clip');
-  return clipMotion?.path ?? null;
 }
 
 function _frameIndex(simTime: number, fps: number, nFrames: number): number {
@@ -211,12 +215,9 @@ abstract class MimicClipObsBase extends ObservationBase {
   constructor(runner: PolicyRunner, config: ObservationConfig) {
     super(runner, config);
     this.fps = (config.fps as number | undefined) ?? 100;
-    const url = _findClipUrl(runner);
-    if (url) {
-      this._loadPromise = _loadMimicClipRaw(url).then((data) => {
-        this.clip = data;
-      }).catch(() => {});
-    }
+    this._loadPromise = _loadMimicClipRaw(runner).then((data) => {
+      this.clip = data;
+    }).catch(() => {});
   }
 
   preload(): Promise<void> {
