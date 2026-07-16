@@ -1,15 +1,16 @@
-"""Tests for the Vite library build (`mjswan.js` mount entry).
+"""Tests for the Vite library build (`mjswan.js` createEngine entry).
 
 L3 slow (triggers a frontend build): TestLibBuild
 Run with: pytest -m slow -k LibBuild
 
-The library build produces a single self-contained ESM consumed by mjswan
-Cloud from a CDN. These tests enforce the load-bearing invariants:
-  - `dist/mjswan.js` exists and exports `mount` (and `unmount`/default),
+The library build produces a single self-contained ESM (the headless engine,
+no React/Mantine) consumed by mjswan Cloud from a CDN. These tests enforce the
+load-bearing invariants:
+  - `dist/mjswan.js` exists and exports `createEngine` (and default),
   - every dependency is bundled (no bare imports left to resolve from a CDN),
   - the MuJoCo/ONNX WASM is emitted as co-located files (NOT inlined as base64
     data URLs) and referenced relative to the bundle.
-See vite.lib.config.ts and mjswan-cloud ADR 0001.
+See vite.lib.config.ts and docs/adr/0004-headless-engine-core.md.
 """
 
 from __future__ import annotations
@@ -51,12 +52,9 @@ def lib_dist() -> Path:
     builder = ClientBuilder(TEMPLATE_DIR)
     builder.create_env()
     builder.sync_version_from_python()
-    # The core imports these generated modules; ensure they exist (empty stubs
-    # when no custom terms are registered).
-    builder.generate_custom_observations()
-    builder.generate_custom_commands()
-    builder.generate_custom_events()
-    builder.generate_custom_terminations()
+    # The core imports these generated modules; ensure they exist as empty stubs
+    # (custom terms load at runtime via plugins.js, not the engine bundle).
+    builder.generate_empty_custom_stubs()
     builder.generate_viewer_config_defaults()
     builder.install_dependencies()
     builder.run_build_script("build:lib")
@@ -68,10 +66,10 @@ class TestLibBuild:
     def test_mjswan_js_emitted(self, lib_dist: Path):
         assert (lib_dist / "mjswan.js").is_file()
 
-    def test_exports_mount(self, lib_dist: Path):
+    def test_exports_create_engine(self, lib_dist: Path):
         code = (lib_dist / "mjswan.js").read_text()
-        assert re.search(r"\bas mount\b", code) or re.search(
-            r"export\s*\{[^}]*\bmount\b", code
+        assert re.search(r"\bas createEngine\b", code) or re.search(
+            r"export\s*\{[^}]*\bcreateEngine\b", code
         )
 
     def test_no_bare_imports(self, lib_dist: Path):
@@ -120,9 +118,11 @@ class TestLibBuild:
                 break
         assert found, "no co-located `new URL('./*.wasm', import.meta.url)` reference"
 
-    def test_styles_inlined(self, lib_dist: Path):
-        # The CSS is injected by JS so a single import brings its own styles.
-        assert "mjswan-styles" in (lib_dist / "mjswan.js").read_text()
+    def test_no_bundled_react_or_mantine(self, lib_dist: Path):
+        # The engine entry drops the React/Mantine chrome; the CDN bundle must
+        # not carry it (ADR 0004 §11). A cheap proxy: React's dev-warning prefix.
+        code = (lib_dist / "mjswan.js").read_text()
+        assert "Warning: React" not in code and "@mantine" not in code
 
     def test_no_unfolded_process_env_node_env(self, lib_dist: Path):
         """The bundle must be browser-self-contained: no unfolded `process`.
@@ -150,3 +150,34 @@ class TestLibBuild:
             "in vite.lib.config.ts must fold it to a literal so the CDN-loaded "
             "engine needs no host-side `process` shim."
         )
+
+
+@pytest.fixture(scope="class")
+def manifest_dist() -> Path:
+    """Build the `mjswan/manifest` CDN bundle once for the whole test class."""
+    builder = ClientBuilder(TEMPLATE_DIR)
+    builder.create_env()
+    builder.install_dependencies()
+    builder.run_build_script("build:manifest")
+    return TEMPLATE_DIR / "dist"
+
+
+@pytest.mark.slow
+class TestManifestBuild:
+    """`dist/manifest.js` is a standalone, CDN-loadable parser (ADR 0004 §9/§11).
+
+    mjswan Cloud imports it from jsDelivr alongside the engine bundle, so it must
+    be self-contained (no bare imports) and export `parseManifest`.
+    """
+
+    def test_manifest_js_emitted(self, manifest_dist: Path):
+        assert (manifest_dist / "manifest.js").is_file()
+
+    def test_exports_parse_manifest(self, manifest_dist: Path):
+        assert "parseManifest" in (manifest_dist / "manifest.js").read_text()
+
+    def test_no_bare_imports(self, manifest_dist: Path):
+        code = (manifest_dist / "manifest.js").read_text()
+        specs = _IMPORT_FROM.findall(code) + _DYNAMIC_IMPORT.findall(code)
+        offenders = [s for s in specs if _is_bare(s)]
+        assert not offenders, f"bare imports in manifest.js: {offenders}"

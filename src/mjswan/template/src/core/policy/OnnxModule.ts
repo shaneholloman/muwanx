@@ -9,30 +9,24 @@ if (typeof __ORT_CDN_BASE__ !== 'undefined') {
   ort.env.wasm.wasmPaths = __ORT_CDN_BASE__;
 }
 
-export type OnnxConfig = {
-  path: string;
-  meta?: {
-    in_keys?: string[];
-    out_keys?: (string | string[])[];
-  };
+export type OnnxMeta = {
+  in_keys?: string[];
+  out_keys?: (string | string[])[];
 };
 
 export class OnnxModule {
-  private config: OnnxConfig;
+  private bytes: ArrayBuffer;
   private session: ort.InferenceSession | null;
   private configuredInKeys: string[];
   inKeys: string[];
   outKeys: string[];
   isRecurrent: boolean;
 
-  constructor(config: OnnxConfig) {
-    if (!config?.path) {
-      throw new Error('OnnxModule requires a path.');
-    }
-    this.config = config;
+  constructor(bytes: ArrayBuffer, meta?: OnnxMeta) {
+    this.bytes = bytes;
     this.session = null;
-    const inKeys = config.meta?.in_keys ?? ['policy'];
-    const outKeys = config.meta?.out_keys ?? ['action'];
+    const inKeys = meta?.in_keys ?? ['policy'];
+    const outKeys = meta?.out_keys ?? ['action'];
     this.configuredInKeys = inKeys.map((key) => (Array.isArray(key) ? key.join(',') : key));
     this.inKeys = [...this.configuredInKeys];
     this.outKeys = outKeys.map((key) => (Array.isArray(key) ? key.join(',') : key));
@@ -40,12 +34,7 @@ export class OnnxModule {
   }
 
   async init(): Promise<void> {
-    const response = await fetch(this.config.path);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch ONNX model: ${response.status}`);
-    }
-    const buffer = await response.arrayBuffer();
-    this.session = await ort.InferenceSession.create(buffer, {
+    this.session = await ort.InferenceSession.create(this.bytes, {
       executionProviders: ['wasm'],
       graphOptimizationLevel: 'all',
     });

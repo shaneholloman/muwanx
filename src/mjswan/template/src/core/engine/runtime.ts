@@ -3,26 +3,27 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import type { MainModule, MjData, MjModel } from 'mujoco';
 import {
-  downloadExampleScenesFolder,
   getPosition,
   getQuaternion,
   loadSceneFromURL,
 } from '../scene/scene';
-import { type SplatConfig, type SplatMesh, loadSplat, disposeSplat, applySplatTransform } from '../scene/splat';
+import { loadMjzFile } from '../utils/mjzLoader';
+import { type Bytes } from '../utils/bytes';
+import type { EnginePlugins } from '../plugins';
+import { type SplatTransform, type SplatMesh, loadSplat, disposeSplat, applySplatTransform } from '../scene/splat';
 import { loadCollider, disposeCollider } from '../scene/collider';
 import { DragStateManager } from '../utils/dragStateManager';
 import { createTendonState, updateTendonGeometry, updateTendonRendering } from '../scene/tendons';
 import { updateHeadlightFromCamera, updateLightsFromData } from '../scene/lights';
-import { threeToMjcCoordinate } from '../scene/coordinate';
+import { mjcToThreeCoordinate, threeToMjcCoordinate } from '../scene/coordinate';
 import {
+  type CameraView,
   type ViewerConfig,
   type ViewerState,
   applyViewerConfig,
+  computeCameraPosition,
   updateCameraFromData,
 } from './viewer_config';
-import { SceneCacheManager } from '../cache/sceneCacheManager';
-import { SceneResourceTracker } from '../cache/resourceTracker';
-import { MemoryMonitor } from '../cache/memoryMonitor';
 import { Observations } from '../observation/observations';
 import { TerminationManager } from '../termination/TerminationManager';
 import { Terminations } from '../termination/terminations';
@@ -33,13 +34,37 @@ import { PolicyStateBuilder } from '../policy/PolicyStateBuilder';
 import type { PolicyConfig } from '../policy/types';
 import { TrackingPolicy } from '../policy/modules/TrackingPolicy';
 import { LocomotionPolicy } from '../policy/modules/LocomotionPolicy';
-import { getCommandManager, type CommandTermContext, type CommandsConfig } from '../command';
+import { CommandManager, type CommandTermContext, type CommandsConfig } from '../command';
 import { EventManager } from '../event/EventManager';
 import { Events } from '../event/events';
-import type { TerrainData } from '../event/EventBase';
+import type { EventConfig, TerrainData } from '../event/EventBase';
 
-type RuntimeOptions = {
-  baseUrl?: string;
+/** A policy with its ONNX weights resolved to bytes; motion data stays lazy. */
+export type ResolvedPolicy = {
+  config: PolicyConfig;
+  onnx: ArrayBuffer;
+  motions: Array<{ name: string; data: Bytes; default?: boolean }>;
+  /** Policy-scoped custom terms (observations / terminations / commands). */
+  plugins?: EnginePlugins;
+};
+
+/** A splat with its bytes resolved. */
+export type ResolvedSplat = {
+  data: ArrayBuffer;
+  collider?: ArrayBuffer | null;
+  transform?: SplatTransform;
+};
+
+/** A full scene ready to build: model bytes plus resolved policy/splat/config. */
+export type ResolvedScene = {
+  model: ArrayBuffer;
+  policy?: ResolvedPolicy | null;
+  splat?: ResolvedSplat | null;
+  viewer?: ViewerConfig | null;
+  events?: EventConfig[] | null;
+  terrainData?: TerrainData | null;
+  /** Scene-scoped custom terms (events). */
+  plugins?: EnginePlugins;
 };
 
 type MotionCommandTerm = {
@@ -89,7 +114,6 @@ type BodyState = {
 export class mjswanRuntime {
   private mujoco: MainModule;
   private container: HTMLElement;
-  private baseUrl: string;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
@@ -113,12 +137,8 @@ export class mjswanRuntime {
   private resizeObserver: ResizeObserver | null;
   private dragStateManager: DragStateManager | null;
   private dragForceScale: number;
-  private sceneCacheManager: SceneCacheManager;
-  private resourceTracker: SceneResourceTracker;
-  private memoryMonitor: MemoryMonitor;
   private policyRunner: PolicyRunner | null;
   private policyStateBuilder: PolicyStateBuilder | null;
-  private policyConfigPath: string | null;
   private initialQpos: number[] | null;
   private initialQvel: number[] | null;
   private policyControl: Array<{
@@ -150,12 +170,20 @@ export class mjswanRuntime {
   private vrButton: HTMLElement | null;
   private splatMesh: SplatMesh | null;
   private colliderMesh: THREE.Group | null;
+  private currentSplatTransform: SplatTransform;
   private cameraState: ViewerState;
+  private commandManager: CommandManager;
+  // Instance-scoped custom terms: scene-scoped (events) and policy-scoped
+  // (observations / terminations / commands). No module-global registries.
+  private scenePlugins: EnginePlugins;
+  private policyPlugins: EnginePlugins;
 
-  constructor(mujoco: MainModule, container: HTMLElement, options: RuntimeOptions = {}) {
+  constructor(mujoco: MainModule, container: HTMLElement) {
     this.mujoco = mujoco;
     this.container = container;
-    this.baseUrl = options.baseUrl || '/';
+    this.commandManager = new CommandManager();
+    this.scenePlugins = {};
+    this.policyPlugins = {};
 
     const workingPath = '/working';
     try {
@@ -242,7 +270,6 @@ export class mjswanRuntime {
     this.dragForceScale = 100.0;
     this.policyRunner = null;
     this.policyStateBuilder = null;
-    this.policyConfigPath = null;
     this.initialQpos = null;
     this.initialQvel = null;
     this.policyControl = null;
@@ -255,25 +282,15 @@ export class mjswanRuntime {
     this.terrainData = null;
     this.splatMesh = null;
     this.colliderMesh = null;
+    this.currentSplatTransform = {};
     this.cameraState = { trackBodyId: null, prevBodyPos: null };
-
-    // Initialize cache system (singleton shared across runtime instances)
-    this.sceneCacheManager = SceneCacheManager.getInstance(this.mujoco);
-    this.resourceTracker = new SceneResourceTracker();
-    this.memoryMonitor = new MemoryMonitor();
   }
 
-  async loadEnvironment(
-    scenePath: string,
-    policyConfigPath: string | null = null,
-    splatConfig: SplatConfig | null = null,
-    cameraConfig: ViewerConfig | null = null,
-    eventsConfig: import('../event/EventBase').EventConfig[] | null = null,
-    terrainData: TerrainData | null = null
-  ): Promise<void> {
-    this.terrainData = terrainData;
-    if (eventsConfig && eventsConfig.length > 0) {
-      this.eventManager = new EventManager(eventsConfig, Events);
+  async loadEnvironment(scene: ResolvedScene): Promise<void> {
+    this.scenePlugins = scene.plugins ?? {};
+    this.terrainData = scene.terrainData ?? null;
+    if (scene.events && scene.events.length > 0) {
+      this.eventManager = new EventManager(scene.events, { ...Events, ...this.scenePlugins.events });
       console.log(`[EventManager] ${this.eventManager.size} reset event(s) loaded`);
     } else {
       this.eventManager = null;
@@ -290,69 +307,37 @@ export class mjswanRuntime {
       this.colliderMesh = null;
     }
 
-    const startTime = performance.now();
-
     // Initialize CommandManager with default velocity commands
     this.initializeCommands();
 
-    // Check cache first
-    if (this.sceneCacheManager.has(scenePath)) {
-      await this.restoreFromCache(scenePath);
-      const elapsed = performance.now() - startTime;
-      this.memoryMonitor.logCacheOperation('hit', scenePath, { elapsedMs: elapsed });
-    } else {
-      this.memoryMonitor.logCacheOperation('miss', scenePath);
+    // Clear current references before loading the new scene.
+    this.mjModel = null;
+    this.mjData = null;
+    this.bodies = null;
+    this.lights = [];
+    this.mujocoRoot = null;
+    this.dynamicBodyIds = null;
 
-      // Prepare cache for new scene (may trigger eviction)
-      await this.sceneCacheManager.prepareForNewScene();
+    await this.buildSceneFromMjz(scene.model);
 
-      // Clear current references before loading new scene
-      // This prevents loadSceneFromURL from deleting cached objects
-      this.mjModel = null;
-      this.mjData = null;
-      this.bodies = null;
-      this.lights = [];
-      this.mujocoRoot = null;
-      this.dynamicBodyIds = null;
-
-      // Start tracking resources
-      this.resourceTracker.startTracking(this.mujoco);
-
-      // Normal load
-      await downloadExampleScenesFolder(this.mujoco, scenePath, this.baseUrl);
-      await this.loadSceneWithOomRetry(scenePath);
-
-      // Capture and cache resources
-      await this.captureAndCacheResources(scenePath);
+    if (scene.splat) {
+      await this.applySplat(scene.splat);
     }
 
-    // Load splat and optional collider
-    if (splatConfig) {
-      this.splatMesh = loadSplat(splatConfig, this.scene);
-      if (splatConfig.colliderUrl) {
-        this.colliderMesh = await loadCollider(
-          this.resolveAssetUrl(splatConfig.colliderUrl),
-          this.scene
-        );
-      }
-    }
+    await this.loadPolicyConfig(scene.policy ?? null);
 
-    await this.loadPolicyConfig(policyConfigPath);
-
-    this.applyViewerConfig(cameraConfig);
+    this.applyViewerConfig(scene.viewer ?? null);
 
     this.running = true;
     void this.startLoop();
   }
 
   /**
-   * Initialize the CommandManager (clear and set up reset callback)
-   * Commands are registered from policy config in loadPolicyConfig()
+   * Initialize the CommandManager (clear).
+   * Commands are registered from policy config in loadPolicyConfig().
    */
   private initializeCommands(): void {
-    const commandManager = getCommandManager();
-    commandManager.clear();
-    commandManager.setResetCallback(() => this.resetSimulation());
+    this.commandManager.clear();
   }
 
   /**
@@ -362,8 +347,8 @@ export class mjswanRuntime {
     commands: CommandsConfig,
     context: CommandTermContext
   ): void {
-    const commandManager = getCommandManager();
-    commandManager.initialize(commands, context);
+    const commandManager = this.commandManager;
+    commandManager.initialize(commands, context, this.policyPlugins.commands);
     console.log('[mjswanRuntime] Commands loaded from policy config:', Object.keys(commands));
   }
 
@@ -381,7 +366,7 @@ export class mjswanRuntime {
   }
 
   async setSelectedMotion(motionName: string | null): Promise<boolean> {
-    const term = getCommandManager().getTerm('motion');
+    const term = this.commandManager.getTerm('motion');
     if (!isMotionCommandTerm(term)) {
       return false;
     }
@@ -393,7 +378,7 @@ export class mjswanRuntime {
   }
 
   getSelectedMotionName(): string | null {
-    const term = getCommandManager().getTerm('motion');
+    const term = this.commandManager.getTerm('motion');
     if (!isMotionCommandTerm(term)) {
       return null;
     }
@@ -401,14 +386,14 @@ export class mjswanRuntime {
   }
 
   setReferenceVisible(visible: boolean): void {
-    const term = getCommandManager().getTerm('motion');
+    const term = this.commandManager.getTerm('motion');
     if (!isMotionCommandTerm(term) || typeof term.setReferenceVisible !== 'function') {
       return;
     }
     term.setReferenceVisible(visible);
   }
 
-  async loadScene(scenePath: string): Promise<void> {
+  private async buildScene(xmlPath: string): Promise<void> {
     if (this.loadingScene) {
       await this.loadingScene;
     }
@@ -427,7 +412,7 @@ export class mjswanRuntime {
 
       [this.mjModel, this.mjData, this.bodies, this.lights] = await loadSceneFromURL(
         this.mujoco,
-        scenePath,
+        xmlPath,
         parent
       );
 
@@ -470,27 +455,18 @@ export class mjswanRuntime {
     await this.loadingScene;
   }
 
-  // On OOM, evict all cached scenes to reclaim the WASM malloc free-list and
-  // retry once.  If the retry also fails, throw WasmMemoryLimitError.
-  private async loadSceneWithOomRetry(scenePath: string): Promise<void> {
+  // Unpack the app-supplied .mjz bytes into the VFS, then build the scene.
+  // No scene cache to reclaim on OOM, so surface it directly as WasmMemoryLimitError.
+  private async buildSceneFromMjz(model: ArrayBuffer): Promise<void> {
     try {
-      await this.loadScene(scenePath);
+      const xmlPath = await loadMjzFile(this.mujoco, model);
+      await this.buildScene(xmlPath);
     } catch (error) {
-      if (!isWasmOom(error)) {
-        throw error;
-      }
-      console.warn('[mjswanRuntime] OOM — clearing cache and retrying...');
       this.loadingScene = null;
-      await this.sceneCacheManager.clear();
-      try {
-        await this.loadScene(scenePath);
-      } catch (retryError) {
-        this.loadingScene = null;
-        if (isWasmOom(retryError)) {
-          throw new WasmMemoryLimitError();
-        }
-        throw retryError;
+      if (isWasmOom(error)) {
+        throw new WasmMemoryLimitError();
       }
+      throw error;
     }
   }
 
@@ -503,7 +479,7 @@ export class mjswanRuntime {
     return this.loopPromise;
   }
 
-  async setSplat(config: SplatConfig | null): Promise<void> {
+  async setSplat(splat: ResolvedSplat | null): Promise<void> {
     if (this.splatMesh) {
       disposeSplat(this.splatMesh, this.scene);
       this.splatMesh = null;
@@ -512,21 +488,24 @@ export class mjswanRuntime {
       disposeCollider(this.colliderMesh, this.scene);
       this.colliderMesh = null;
     }
-    if (config) {
-      this.splatMesh = loadSplat(config, this.scene);
-      if (config.colliderUrl) {
-        this.colliderMesh = await loadCollider(
-          this.resolveAssetUrl(config.colliderUrl),
-          this.scene
-        );
-      }
+    if (splat) {
+      await this.applySplat(splat);
     }
   }
 
-  /** Update transform of the existing splat without disposing/reloading. */
-  calibrateSplat(config: SplatConfig): void {
+  private async applySplat(splat: ResolvedSplat): Promise<void> {
+    this.currentSplatTransform = splat.transform ?? {};
+    this.splatMesh = loadSplat(splat.data, this.currentSplatTransform, this.scene);
+    if (splat.collider) {
+      this.colliderMesh = await loadCollider(splat.collider, this.scene);
+    }
+  }
+
+  /** Update transform of the existing splat without disposing/reloading (dev calibration). */
+  calibrateSplat(transform: SplatTransform): void {
+    this.currentSplatTransform = transform;
     if (this.splatMesh) {
-      applySplatTransform(this.splatMesh, config);
+      applySplatTransform(this.splatMesh, transform);
     }
   }
 
@@ -534,6 +513,84 @@ export class mjswanRuntime {
     if (this.splatMesh) {
       this.splatMesh.visible = visible;
     }
+  }
+
+  // ── playback + commands (driven by the engine's verbs) ──────────────────
+  /** Instance-scoped command manager the engine reads/writes and subscribes to. */
+  get commands(): CommandManager {
+    return this.commandManager;
+  }
+
+  /** Resume the physics loop (rendering runs continuously regardless). */
+  play(): void {
+    this.running = true;
+    void this.startLoop();
+  }
+
+  /** Halt physics; rendering continues so a frozen frame can be orbited. */
+  pause(): void {
+    void this.stop();
+  }
+
+  get isRunning(): boolean {
+    return this.running;
+  }
+
+  // ── camera (spherical, MuJoCo coordinates) ──────────────────────────────
+  /** Read the current camera pose back in spherical MuJoCo coordinates. */
+  getCameraView(): CameraView {
+    const offsetThree = this.camera.position.clone().sub(this.controls.target);
+    const distance = offsetThree.length();
+    const offset = threeToMjcCoordinate(offsetThree);
+    const target = threeToMjcCoordinate(this.controls.target.clone());
+    const RAD2DEG = 180 / Math.PI;
+    const elevation = distance > 1e-9 ? Math.asin(-offset.z / distance) * RAD2DEG : 0;
+    const azimuth = Math.atan2(offset.y, offset.x) * RAD2DEG;
+    return {
+      lookat: [target.x, target.y, target.z],
+      distance,
+      azimuth,
+      elevation,
+      fovy: this.camera.fov,
+    };
+  }
+
+  /**
+   * Overwrite the camera pose. Body tracking (if any) keeps following after
+   * this — it applies a per-frame delta — and OrbitControls stay live.
+   */
+  setCameraView(view: Partial<CameraView>): void {
+    const cur = this.getCameraView();
+    const lookat = view.lookat ?? cur.lookat;
+    const distance = view.distance ?? cur.distance;
+    const elevation = view.elevation ?? cur.elevation;
+    const azimuth = view.azimuth ?? cur.azimuth;
+    this.camera.fov = view.fovy ?? cur.fovy;
+    this.camera.updateProjectionMatrix();
+    this.camera.position.copy(computeCameraPosition(lookat, distance, elevation, azimuth));
+    this.controls.target.copy(mjcToThreeCoordinate(lookat));
+    this.controls.update();
+  }
+
+  /** Re-fit the camera to the current scene bounds, keeping azimuth/elevation. */
+  frameCamera(): void {
+    if (!this.mujocoRoot) {
+      return;
+    }
+    const box = new THREE.Box3().setFromObject(this.mujocoRoot);
+    if (box.isEmpty()) {
+      return;
+    }
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3()).length();
+    const fov = (this.camera.fov * Math.PI) / 180;
+    const fitDistance = size / (2 * Math.tan(fov / 2));
+    const cur = this.getCameraView();
+    const lookat = threeToMjcCoordinate(center);
+    this.setCameraView({
+      lookat: [lookat.x, lookat.y, lookat.z],
+      distance: fitDistance > 0 ? fitDistance : cur.distance,
+    });
   }
 
   async stop(): Promise<void> {
@@ -577,8 +634,8 @@ export class mjswanRuntime {
         // Commands are updated after the physics step to match mjlab training-time semantics:
         // the policy sees command values from the previous step, consistent with how mjlab
         // computes observations before stepping the environment.
-        getCommandManager().update(target);
-        getCommandManager().updateDebugVisuals();
+        this.commandManager.update(target);
+        this.commandManager.updateDebugVisuals();
       }
 
       const elapsed = (performance.now() - loopStart) / 1000;
@@ -590,9 +647,8 @@ export class mjswanRuntime {
     this.loopPromise = null;
   }
 
-  private async loadPolicyConfig(policyConfigPath: string | null): Promise<void> {
-    const previousPolicyConfigPath = this.policyConfigPath;
-    this.policyConfigPath = policyConfigPath;
+  async loadPolicyConfig(policy: ResolvedPolicy | null): Promise<void> {
+    this.policyPlugins = policy?.plugins ?? {};
     this.policyRunner = null;
     this.policyStateBuilder = null;
     this.policyControl = null;
@@ -604,11 +660,9 @@ export class mjswanRuntime {
     // Note: eventManager and terrainData are scene-level state set in loadEnvironment; do not clear here.
 
     // Clear existing commands when switching policies
-    const commandManager = getCommandManager();
-    commandManager.clear();
-    commandManager.setResetCallback(() => this.resetSimulation());
+    this.commandManager.clear();
 
-    if (!policyConfigPath) {
+    if (!policy) {
       return;
     }
 
@@ -617,18 +671,17 @@ export class mjswanRuntime {
       return;
     }
 
-    if (policyConfigPath !== previousPolicyConfigPath) {
-      this.resetSimulationState();
-    }
+    this.resetSimulationState();
 
     try {
-      const { config } = await this.fetchPolicyConfig(policyConfigPath);
+      const config = policy.config;
+      // Motion metadata lives in policy.json; the app supplies the bytes as
+      // MotionInput[]. Merge the bytes onto each motion entry by name.
       if (Array.isArray(config.motions)) {
+        const dataByName = new Map(policy.motions.map((m) => [m.name, m.data]));
         config.motions = config.motions.map((motion) => ({
           ...motion,
-          path: this.resolveAssetUrl(
-            this.resolvePolicyAssetPath(policyConfigPath, motion.path)
-          ),
+          data: dataByName.get(motion.name),
         }));
       }
       if (config.commands?.motion && Array.isArray(config.motions)) {
@@ -654,8 +707,8 @@ export class mjswanRuntime {
           mujocoRoot: this.mujocoRoot,
           requestReset: () => this.resetSimulation(),
         });
-        getCommandManager().resetTerms();
-        const motionTerm = getCommandManager().getTerm('motion');
+        this.commandManager.resetTerms();
+        const motionTerm = this.commandManager.getTerm('motion');
         if (isMotionCommandTerm(motionTerm)) {
           await motionTerm.setSelectedMotion(
             config.motions?.find((motion) => motion.default)?.name
@@ -680,7 +733,10 @@ export class mjswanRuntime {
           tracking: TrackingPolicy,
           locomotion: LocomotionPolicy,
         },
-        observations: Observations,
+        observations: { ...Observations, ...this.policyPlugins.observations },
+        // Expose the app-supplied clips to custom terms (they read bytes via
+        // runner.getMotionData instead of fetching — ADR 0004 §4/§10).
+        motions: policy.motions,
       });
 
       await runner.init({
@@ -688,6 +744,7 @@ export class mjswanRuntime {
         mjModel: this.mjModel,
         mjData: this.mjData,
         scene: this.scene,
+        commandManager: this.commandManager,
       });
 
       // Await observation preloads so clip-based obs don't return zeros on the first step.
@@ -732,19 +789,18 @@ export class mjswanRuntime {
 
       // Initialize termination manager if termination config is present
       if (config.terminations && Object.keys(config.terminations).length > 0) {
-        this.terminationManager = new TerminationManager(config.terminations, Terminations, runner);
+        this.terminationManager = new TerminationManager(
+          config.terminations,
+          { ...Terminations, ...this.policyPlugins.terminations },
+          runner
+        );
         console.log(`[TerminationManager] ${this.terminationManager.size} termination term(s) loaded`);
       }
 
-      if (config.onnx?.path) {
-        const onnxPath = this.resolvePolicyAssetPath(policyConfigPath, config.onnx.path);
-        const onnxUrl = this.resolveAssetUrl(onnxPath);
-        const onnxConfig = { ...config.onnx, path: onnxUrl };
-        const module = new OnnxModule(onnxConfig);
-        await module.init();
-        this.onnxModule = module;
-        this.onnxInputDict = module.initInput();
-      }
+      const module = new OnnxModule(policy.onnx, config.onnx?.meta);
+      await module.init();
+      this.onnxModule = module;
+      this.onnxInputDict = module.initInput();
 
       console.log('[PolicyRunner] config loaded', {
         obsSize: runner.getObservationSize(),
@@ -754,37 +810,6 @@ export class mjswanRuntime {
     } catch (error) {
       console.warn('Failed to load policy config:', error);
     }
-  }
-
-  private async fetchPolicyConfig(
-    policyConfigPath: string
-  ): Promise<{ config: PolicyConfig; resolvedUrl: string }> {
-    const resolved = this.resolveAssetUrl(policyConfigPath);
-    const response = await fetch(resolved, { cache: 'no-store' });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch policy config: ${response.status}`);
-    }
-    const payload = await response.json();
-    return { config: payload as PolicyConfig, resolvedUrl: resolved };
-  }
-
-  private resolveAssetUrl(assetPath: string): string {
-    if (/^[a-z]+:\/\//i.test(assetPath)) {
-      return assetPath;
-    }
-    const base = (this.baseUrl || '/').replace(/\/+$/, '/');
-    const baseUrl = new URL(base, window.location.origin + '/').toString();
-    return new URL(assetPath.replace(/^\/+/, ''), baseUrl).toString();
-  }
-
-  private resolvePolicyAssetPath(configPath: string, assetPath: string): string {
-    const normalizedConfig = configPath.replace(/\\/g, '/');
-    const lastSlash = normalizedConfig.lastIndexOf('/');
-    if (lastSlash >= 0) {
-      const dir = normalizedConfig.slice(0, lastSlash + 1);
-      return `${dir}${assetPath}`.replace(/\/+/g, '/');
-    }
-    return assetPath;
   }
 
   private buildPolicyControl(
@@ -1069,7 +1094,7 @@ export class mjswanRuntime {
         terrainData: this.terrainData,
       });
     }
-    getCommandManager().resetTerms();
+    this.commandManager.resetTerms();
     if (this.onnxModule) {
       this.onnxInputDict = this.onnxModule.initInput();
     }
@@ -1370,7 +1395,7 @@ export class mjswanRuntime {
   }
 
   private render = (): void => {
-    getCommandManager().updateDebugVisuals();
+    this.commandManager.updateDebugVisuals();
 
     if (this.mjData) {
       updateCameraFromData(this.mjData, this.camera, this.controls, this.cameraState);
@@ -1456,7 +1481,6 @@ export class mjswanRuntime {
     await this.stop();
     this.policyRunner = null;
     this.policyStateBuilder = null;
-    this.policyConfigPath = null;
 
     // ONNX session, splat, and collider are not cache-managed; free them here
     // or they leak across navigations (a live splat worker freezes the tab).
@@ -1480,9 +1504,6 @@ export class mjswanRuntime {
       this.dragStateManager = null;
     }
 
-    // Cached scenes hold MjModel/MjData bound to this per-mount mujoco module; drop them and reset the singleton so the next mount rebuilds against its own module (else restoreFromCache hits a cross-module embind mismatch).
-    await this.sceneCacheManager.clear();
-    SceneCacheManager.resetInstance();
     this.mjData = null;
     this.mjModel = null;
 
@@ -1513,6 +1534,7 @@ export class mjswanRuntime {
     this.mujocoRoot = null;
     this.dynamicBodyIds = null;
     this.lastSimState.bodies.clear();
+    this.commandManager.dispose();
   }
 
   private disposeThreeJSResources(): void {
@@ -1576,110 +1598,5 @@ export class mjswanRuntime {
       width: Math.max(1, width),
       height: Math.max(1, height),
     };
-  }
-
-  /**
-   * Restore scene from cache
-   */
-  private async restoreFromCache(scenePath: string): Promise<void> {
-    const resources = this.sceneCacheManager.get(scenePath);
-    if (!resources) {
-      throw new Error(`Scene ${scenePath} not found in cache`);
-    }
-
-    // Remove existing root if present
-    const existingRoot = this.scene.getObjectByName('MuJoCo Root');
-    if (existingRoot) {
-      this.scene.remove(existingRoot);
-    }
-
-    // Restore MuJoCo objects
-    this.mjModel = resources.mjModel;
-    this.mjData = resources.mjData;
-
-    // Restore Three.js resources
-    this.bodies = resources.bodies;
-    this.lights = resources.lights;
-    this.mujocoRoot = resources.mujocoRoot;
-
-    // Re-add root to scene
-    this.scene.add(this.mujocoRoot);
-
-    // Restore skybox background
-    this.scene.background = resources.skybox;
-
-    // Run forward dynamics
-    this.mujoco.mj_forward(this.mjModel, this.mjData);
-    this.dynamicBodyIds = this.computeDynamicBodyIds(this.mjModel);
-    this.syncStaticBodiesFromData();
-
-    // Update runtime parameters
-    this.timestep = this.mjModel.opt.timestep || 0.001;
-    const ctrlDtForDec = this.policyCtrlDt ?? 0.02;
-    this.decimation = Math.max(1, Math.round(ctrlDtForDec / this.timestep));
-
-    // Clear and update cached state
-    this.lastSimState.bodies.clear();
-    this.updateCachedState();
-
-    // Initialize DragStateManager if needed
-    if (!this.dragStateManager) {
-      this.dragStateManager = new DragStateManager({
-        scene: this.scene,
-        renderer: this.renderer,
-        camera: this.camera,
-        container: this.container,
-        controls: this.controls,
-        draggableBodyIds: this.dynamicBodyIds,
-      });
-    } else {
-      this.dragStateManager.setDraggableBodyIds(this.dynamicBodyIds);
-    }
-  }
-
-  /**
-   * Capture resources and add to cache
-   */
-  private async captureAndCacheResources(scenePath: string): Promise<void> {
-    // Stop tracking and get FS files
-    const fsFiles = this.resourceTracker.stopTracking(this.mujoco);
-
-    if (!this.mjModel || !this.mjData || !this.bodies || !this.mujocoRoot) {
-      console.warn('[SceneCache] Cannot cache scene: missing resources');
-      return;
-    }
-
-    // Estimate memory usage
-    const estimatedMemoryBytes = this.resourceTracker.estimateSceneMemory({
-      mjModel: this.mjModel,
-      mjData: this.mjData,
-      bodies: this.bodies,
-      meshes: {}, // Meshes are part of the scene
-      mujocoRoot: this.mujocoRoot,
-    });
-
-    // Create cache entry
-    await this.sceneCacheManager.set(scenePath, {
-      scenePath,
-      lastAccessed: Date.now(),
-      loadedAt: Date.now(),
-      mjModel: this.mjModel,
-      mjData: this.mjData,
-      bodies: this.bodies,
-      lights: this.lights,
-      meshes: {},
-      mujocoRoot: this.mujocoRoot,
-      skybox: this.scene.background instanceof THREE.CubeTexture ? this.scene.background : null,
-      fsFiles,
-      estimatedMemoryBytes,
-    });
-
-    // Log the cache operation
-    const metrics = this.sceneCacheManager.getMetrics();
-    this.memoryMonitor.logCacheOperation('load', scenePath, {
-      memoryMB: estimatedMemoryBytes / 1048576,
-      totalScenes: metrics.totalScenes,
-      totalMemoryMB: metrics.totalMemoryBytes / 1048576,
-    });
   }
 }

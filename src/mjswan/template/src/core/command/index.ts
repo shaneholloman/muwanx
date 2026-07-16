@@ -1,8 +1,4 @@
-export {
-  CommandManager,
-  getCommandManager,
-  resetCommandManager,
-} from './CommandManager';
+export { CommandManager } from './CommandManager';
 export { getCommandInputId } from './types';
 export type {
   ButtonCommandConfig,

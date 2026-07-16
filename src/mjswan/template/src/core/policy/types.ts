@@ -2,12 +2,16 @@ import type { MainModule, MjData, MjModel } from 'mujoco';
 import type { Scene } from 'three';
 
 import type { CommandsConfig } from '../command';
+import type { CommandManager } from '../command/CommandManager';
+import type { Bytes } from '../utils/bytes';
 
 export type PolicyRunnerContext = {
   mujoco: MainModule;
   mjModel: MjModel | null;
   mjData: MjData | null;
   scene?: Scene | null;
+  /** Instance-scoped command manager; DSL command primitives read it via the runner. */
+  commandManager?: CommandManager;
 };
 
 export type PolicyState = {
@@ -69,7 +73,8 @@ export type PolicyConfig = {
   damping?: number[] | number;
   control_type?: string;
   onnx?: {
-    path: string;
+    // ONNX weights arrive as bytes via PolicyInput.onnx; only the io-key metadata
+    // is read from policy.json.
     meta?: {
       in_keys?: string[];
       out_keys?: (string | string[])[];
@@ -78,11 +83,13 @@ export type PolicyConfig = {
   commands?: CommandsConfig;
   motions?: Array<{
     name: string;
-    path: string;
+    /** Injected by the engine from PolicyInput.motions (matched by name). */
+    data?: Bytes;
     anchor_body_name: string;
     body_names: string[];
     dataset_joint_names?: string[];
     default?: boolean;
+    [key: string]: unknown;
   }>;
   observations?: Record<string, ObservationGroupConfig>;
   actions?: Record<string, ActionConfigEntry>;

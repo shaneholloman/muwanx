@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import mujoco
@@ -21,6 +22,7 @@ import pytest
 import mjswan
 from mjswan._build_client import ClientBuilder
 from mjswan.builder import Builder
+from mjswan.envs.mdp import events as evt_fns
 from mjswan.envs.mdp import observations as obs_fns
 from mjswan.envs.mdp import terminations as term_fns
 from mjswan.envs.mdp.actions import JointEffortActionCfg, JointPositionActionCfg
@@ -88,85 +90,146 @@ class TestBuilderGtmId:
         assert Builder(gtm_id="GTM-W79HQ38W")._gtm_id == "GTM-W79HQ38W"
 
 
-class TestClientBuilderCustomTerminations:
-    def test_preserves_template_imports_when_inlining_local_utils(
-        self, tmp_path, monkeypatch
-    ):
+class TestClientBuilderCustomTerms:
+    """Custom terms are runtime plugins now (ADR 0004 §10): the engine gets empty
+    Custom* stubs, and author TS is collected for esbuild into a standalone ESM."""
+
+    def test_generate_empty_custom_stubs_writes_empty_registries(self, tmp_path):
         project_dir = tmp_path / "template"
-        output_dir = project_dir / "src" / "core" / "termination"
-        output_dir.mkdir(parents=True)
-        source_dir = tmp_path / "custom"
-        source_dir.mkdir()
+        for sub in ("observation", "command", "termination", "event"):
+            (project_dir / "src" / "core" / sub).mkdir(parents=True)
 
-        (source_dir / "utils.ts").write_text(
-            "export function helper(): boolean {\n  return true;\n}\n"
-        )
-        custom_ts = source_dir / "FooTermination.ts"
-        custom_ts.write_text(
-            "import { TerminationBase, type TerminationConfig } from './TerminationBase';\n"
-            "import type { PolicyState } from '../policy/types';\n"
-            "import { helper } from './utils';\n"
-            "\n"
-            "export class FooTermination extends TerminationBase {\n"
-            "  constructor(config: TerminationConfig) {\n"
-            "    super(config);\n"
-            "  }\n"
-            "\n"
-            "  evaluate(_state: PolicyState): boolean {\n"
-            "    return helper();\n"
-            "  }\n"
-            "}\n"
-        )
+        ClientBuilder(project_dir).generate_empty_custom_stubs()
 
+        core = project_dir / "src" / "core"
+        obs = (core / "observation" / "custom_observations.ts").read_text()
+        evt = (core / "event" / "custom_events.ts").read_text()
+        assert "CustomObservations" in obs and "= {};" in obs
+        assert "CustomCommands" in (core / "command" / "custom_commands.ts").read_text()
+        assert (
+            "CustomTerminations"
+            in (core / "termination" / "custom_terminations.ts").read_text()
+        )
+        assert "CustomEvents" in evt and "= {};" in evt
+
+    def test_collect_custom_terms_gathers_ts_src_by_kind(self, tmp_path, monkeypatch):
+        src = tmp_path / "FooTerm.ts"
+        src.write_text("export class FooTerm {}\n")
         monkeypatch.setattr(
             term_fns,
             "_custom_registry",
-            {
-                "foo": term_fns.TerminationBinding(
-                    ts_name="FooTermination",
-                    ts_src=str(custom_ts),
-                )
-            },
+            {"foo": SimpleNamespace(ts_name="FooTerm", ts_src=str(src))},
         )
+        terms = ClientBuilder._collect_custom_terms()
+        assert terms["terminations"] == {"FooTerm": src.resolve()}
 
-        ClientBuilder(project_dir).generate_custom_terminations()
-
-        generated = (output_dir / "custom_terminations.ts").read_text()
-        assert (
-            "import { TerminationBase, type TerminationConfig }"
-            " from './TerminationBase';"
-        ) in generated
-        assert "import { helper } from './utils';" not in generated
-        assert "function helper(): boolean" in generated
-        assert "export function helper" not in generated
-        assert "export class FooTermination extends TerminationBase" in generated
-
-    def test_generate_custom_skips_dsl_callable_in_registry(
-        self, tmp_path, monkeypatch
-    ):
-        # A DSL term registered by mjlab-name (a task registering a DSL builder
-        # callable, e.g. defaults' "ee_to_object_distance") is a plain callable
-        # with no ts_src.  generate_custom_observations must skip it, not crash
-        # on `.ts_src`.
-        from mjswan.envs.mdp import observations as obs_mod
-
-        project_dir = tmp_path / "template"
-        output_dir = project_dir / "src" / "core" / "observation"
-        output_dir.mkdir(parents=True)
-
+    def test_collect_custom_terms_skips_declarative_callable(self, monkeypatch):
+        # A DSL term is a plain callable with no ts_src — must be skipped, not crash.
         monkeypatch.setattr(
-            obs_mod,
-            "_custom_registry",
-            {"base_lin_vel": obs_mod.base_lin_vel},
+            obs_fns, "_custom_registry", {"base_lin_vel": obs_fns.base_lin_vel}
         )
+        assert "observations" not in ClientBuilder._collect_custom_terms()
 
-        # Must not raise AttributeError on the callable.
-        ClientBuilder(project_dir).generate_custom_observations()
 
-        generated = (output_dir / "custom_observations.ts").read_text()
-        # No custom JS class is emitted for the callable (it's declarative).
-        assert "CustomObservations" in generated
-        assert "base_lin_vel" not in generated
+class TestFrontendBuildCache:
+    """The SPA is project-independent, so a matching dist/ is reused (no Node)."""
+
+    def test_cache_matches_only_on_identical_meta(self, tmp_path):
+        cb = ClientBuilder(tmp_path)
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<!doctype html>")
+        meta = cb._build_meta(base_path="/", gtm_id=None, mt=False, debug=False)
+        (dist / ".mjswan-build-meta.json").write_text(json.dumps(meta))
+
+        assert cb._cached_spa_matches(meta) is True
+        # A different base_path must invalidate the cache.
+        other = cb._build_meta(base_path="/sub/", gtm_id=None, mt=False, debug=False)
+        assert cb._cached_spa_matches(other) is False
+
+    def test_build_frontend_false_without_cache_raises(self, tmp_path):
+        with pytest.raises(RuntimeError, match="no matching prebuilt"):
+            ClientBuilder(tmp_path).build(build_frontend=False)
+
+    def test_source_change_invalidates_fingerprint(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        app = tmp_path / "src" / "App.tsx"
+        app.write_text("export default 1;\n")
+        cb = ClientBuilder(tmp_path)
+        before = cb._source_fingerprint()
+        app.write_text("export default 2;\n")
+        assert cb._source_fingerprint() != before
+
+    def test_version_bump_alone_does_not_churn_fingerprint(self, tmp_path):
+        pkg = tmp_path / "package.json"
+        pkg.write_text(
+            json.dumps({"name": "mjswan", "version": "0.7.0", "scripts": {}})
+        )
+        cb = ClientBuilder(tmp_path)
+        before = cb._source_fingerprint()
+        # Version is keyed separately and normalized out of the fingerprint.
+        pkg.write_text(
+            json.dumps({"name": "mjswan", "version": "0.8.0", "scripts": {}})
+        )
+        assert cb._source_fingerprint() == before
+
+
+@pytest.mark.slow
+class TestBuildPluginsModule:
+    """esbuild-bundles author terms into a standalone ESM (needs Node/esbuild)."""
+
+    def test_bundles_author_term_into_standalone_esm(self, tmp_path, monkeypatch):
+        template = Path(mjswan.__file__).parent / "template"
+        esbuild = template / "node_modules" / ".bin" / "esbuild"
+        if not esbuild.exists():
+            pytest.skip("esbuild not installed (run npm install in template)")
+
+        src = tmp_path / "MyEvent.ts"
+        src.write_text(
+            "import { EventBase, type EventContext } from 'mjswan/event';\n"
+            "export class MyEvent extends EventBase {\n"
+            "  onReset(_ctx: EventContext): void {}\n"
+            "}\n"
+        )
+        monkeypatch.setattr(
+            evt_fns,
+            "_custom_registry",
+            {"my_event": SimpleNamespace(ts_name="MyEvent", ts_src=str(src))},
+        )
+        out = tmp_path / "plugins.js"
+        assert ClientBuilder(template).build_plugins_module(out) is True
+        code = out.read_text()
+        assert (
+            "MyEvent" in code and "events" in code and "export {" in code
+        )  # grouped export
+        assert "EventBase" in code  # base class bundled (self-contained)
+        assert "mjswan/event" not in code  # no bare imports remain
+
+    def test_term_importing_three_reuses_engine_instance(self, tmp_path, monkeypatch):
+        # A term that imports `three` must resolve to the engine's single instance
+        # (global), not a bundled duplicate — else instanceof / raycasting break.
+        template = Path(mjswan.__file__).parent / "template"
+        if not (template / "node_modules" / ".bin" / "esbuild").exists():
+            pytest.skip("esbuild not installed (run npm install in template)")
+
+        src = tmp_path / "ThreeObs.ts"
+        src.write_text(
+            "import * as THREE from 'three';\n"
+            "import { EventBase, type EventContext } from 'mjswan/event';\n"
+            "export class ThreeObs extends EventBase {\n"
+            "  onReset(_ctx: EventContext): void { void new THREE.Vector3(); }\n"
+            "}\n"
+        )
+        monkeypatch.setattr(
+            evt_fns,
+            "_custom_registry",
+            {"three_obs": SimpleNamespace(ts_name="ThreeObs", ts_src=str(src))},
+        )
+        out = tmp_path / "plugins.js"
+        assert ClientBuilder(template).build_plugins_module(out) is True
+        code = out.read_text()
+        assert "__mjswanThree" in code  # `three` resolved to the shared-instance shim
+        assert "three" not in code.split("\n")[0]  # no bare `three` import survived
 
 
 # ===========================================================================
@@ -261,6 +324,30 @@ class TestSaveConfigJson:
         project = self._read_config(tmp_path)["projects"][0]
         assert project["name"] == "Main Demo"
         assert project["id"] is None
+
+    def test_config_omits_plugins_when_declarative(self, tmp_path, minimal_model):
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder._save_config_json(tmp_path)
+        config = self._read_config(tmp_path)
+        assert config["uses_custom_js"] is False
+        assert "plugins" not in config
+
+    def test_config_references_plugins_when_custom_js(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
+        # A registered ts_src term flips uses_custom_js and adds the plugin ref.
+        monkeypatch.setattr(
+            evt_fns,
+            "_custom_registry",
+            {"e": SimpleNamespace(ts_src="x.ts", ts_name="E")},
+        )
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder._save_config_json(tmp_path)
+        config = self._read_config(tmp_path)
+        assert config["uses_custom_js"] is True
+        assert config["plugins"] == "assets/plugins.js"
 
     def test_scene_path_uses_name2id_with_mjb_for_model(self, tmp_path, minimal_model):
         builder = Builder()
@@ -968,6 +1055,33 @@ class TestFullBuild:
         app = builder.build(tmp_path / "out")
         assert isinstance(app, mjswan.MjswanApp)
 
+    def test_build_output_excludes_dev_and_test_files(self, tmp_path, minimal_model):
+        builder = Builder()
+        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        out = tmp_path / "out"
+        builder.build(out)
+        # Dev/test scaffolding (harness, e2e, configs, type shims, fixtures) must
+        # not ship in the published SPA.
+        for leaked in (
+            "e2e",
+            "harness.html",
+            "fixtures",
+            "vite.config.ts",
+            "vite.lib.config.ts",
+            "vite.manifest.config.ts",
+            "vitest.config.ts",
+            "playwright.config.ts",
+            "lib.d.ts",
+            "manifest.d.ts",
+            "src",
+            "node_modules",
+            "package.json",
+        ):
+            assert not (out / leaked).exists(), f"dev file leaked into build: {leaked}"
+        assert (out / "index.html").exists() and (
+            out / "assets" / "config.json"
+        ).exists()
+
 
 # ===========================================================================
 # L1 — mt parameter: _save_mt_headers / no-headers when mt=False
@@ -1027,19 +1141,71 @@ class TestMtHeaders:
     def test_save_web_excludes_mt_template_dir(
         self, tmp_path, minimal_model, monkeypatch
     ):
-        """_save_web must not copy the template-only _mt directory into output."""
+        """_save_web must not copy the template-only _mt directory into output.
+
+        The output is assembled allowlist-style from the built dist/ (+ LICENSE),
+        so template-root scaffolding like _mt is excluded by construction.
+        """
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
-        copytree = MagicMock()
-        monkeypatch.setattr("mjswan.builder.shutil.copytree", copytree)
+        monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
 
         builder = Builder(mt=False)
         builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         out = tmp_path / "out"
         builder._save_web(out)
 
-        ignore = copytree.call_args.kwargs["ignore"]
-        ignored = set(ignore("", ["_mt", "src", "README.md", "__pycache__"]))
-        assert "_mt" in ignored
+        assert not (out / "_mt").exists()
+
+
+# ===========================================================================
+# L3 slow — Phase 4: cache reuse + custom-JS runtime plugin module
+# Run with: pytest -m slow
+# ===========================================================================
+@pytest.mark.slow
+class TestFullBuildPhase4:
+    def test_second_build_reuses_cached_frontend(self, tmp_path, minimal_model, capsys):
+        builder = Builder()
+        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.build(tmp_path / "out1")  # warms the cache
+        capsys.readouterr()
+        builder2 = Builder()
+        builder2.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder2.build(tmp_path / "out2")  # identical inputs → no frontend rebuild
+        assert "Reusing cached frontend build" in capsys.readouterr().out
+        assert (tmp_path / "out2" / "assets" / "config.json").exists()
+
+    def test_custom_js_build_emits_plugins_module(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
+        from mjswan.envs.mdp import events as evt_mod
+
+        template = Path(mjswan.__file__).parent / "template"
+        if not (template / "node_modules" / ".bin" / "esbuild").exists():
+            pytest.skip("esbuild not installed (run npm install in template)")
+
+        term = tmp_path / "MyEvent.ts"
+        term.write_text(
+            "import { EventBase, type EventContext } from 'mjswan/event';\n"
+            "export class MyEvent extends EventBase {\n"
+            "  onReset(_ctx: EventContext): void {}\n"
+            "}\n"
+        )
+        monkeypatch.setattr(
+            evt_mod,
+            "_custom_registry",
+            {"my_event": SimpleNamespace(ts_name="MyEvent", ts_src=str(term))},
+        )
+        out = tmp_path / "out"
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.build(out)
+
+        config = json.loads((out / "assets" / "config.json").read_text())
+        assert config["uses_custom_js"] is True
+        assert config["plugins"] == "assets/plugins.js"
+        plugins = (out / "assets" / "plugins.js").read_text()
+        assert "MyEvent" in plugins and "events" in plugins
+        assert "mjswan/event" not in plugins  # standalone (base class bundled)
 
 
 # ===========================================================================

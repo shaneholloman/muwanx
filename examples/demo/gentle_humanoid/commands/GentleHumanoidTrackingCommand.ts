@@ -2,10 +2,13 @@ import * as THREE from 'three';
 
 import { getPosition, getQuaternion } from 'mjswan/scene';
 import { type NpzEntry, loadNpz } from 'mjswan/npz';
+import { type Bytes, resolveBytes } from 'mjswan/bytes';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from 'mjswan/command';
 type GentleHumanoidMotionConfig = {
   name: string;
-  path: string;
+  // Raw .npz bytes (or a lazy loader) the app feeds via the 'motion' command's
+  // motions[] — no fetch (ADR 0004 §4). Was a fetched `path` before the refactor.
+  data: Bytes;
   fps?: number;
   dataset_joint_names?: string[];
   default?: boolean;
@@ -403,7 +406,7 @@ export class GentleHumanoidTrackingCommand implements CommandTerm {
   }
 
   private async loadMotion(config: GentleHumanoidMotionConfig): Promise<MotionFrames> {
-    const npz = await loadNpz(config.path);
+    const npz = await loadNpz(await resolveBytes(config.data));
     const dofPos = npz.dof_pos;
     const rootPos = npz.root_pos;
     const rootRot = npz.root_rot;

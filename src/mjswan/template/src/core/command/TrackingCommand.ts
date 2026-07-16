@@ -2,11 +2,13 @@ import * as THREE from 'three';
 
 import { getPosition, getQuaternion } from '../scene/scene';
 import { type NpzEntry, loadNpz } from '../scene/npz';
+import { type Bytes, resolveBytes } from '../utils/bytes';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
 
 export type TrackingMotionConfig = {
   name: string;
-  path: string;
+  /** Raw `.npz` bytes (or a lazy loader) supplied by the app. */
+  data: Bytes;
   fps: number;
   anchor_body_name: string;
   body_names: string[];
@@ -371,10 +373,6 @@ export class TrackingCommand implements CommandTerm {
     return this.selectedMotionName;
   }
 
-  getClipUrl(): string | null {
-    return this.selectedMotion?.path ?? this.motions[0]?.path ?? null;
-  }
-
   getAnchorBodyName(): string | null {
     return this.selectedMotion?.anchor_body_name
       ?? this.motions.find((motion) => motion.name === this.selectedMotionName)?.anchor_body_name
@@ -479,7 +477,7 @@ export class TrackingCommand implements CommandTerm {
 
   private async loadMotion(config: TrackingMotionConfig): Promise<LoadedTrackingMotion> {
     this.sampleHz = config.fps;
-    const npz = await loadNpz(config.path);
+    const npz = await loadNpz(await resolveBytes(config.data));
     const empty: Float32Array[] = [];
 
     if (config.clip_format === 'qpos') {

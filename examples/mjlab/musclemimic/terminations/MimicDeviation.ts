@@ -1,10 +1,9 @@
 import { TerminationBase, type TerminationConfig } from 'mjswan/termination';
-import type { PolicyState } from 'mjswan/types';
-import { getCommandManager } from 'mjswan/command';
+import type { PolicyState, PolicyRunner } from 'mjswan/types';
 import { loadNpz } from 'mjswan/npz';
 
 // ---------------------------------------------------------------------------
-// Clip cache (minimal: only site_xpos + site_names needed)
+// Clip (minimal: only site_xpos + site_names needed)
 // ---------------------------------------------------------------------------
 
 type MimicClipBrief = {
@@ -13,36 +12,6 @@ type MimicClipBrief = {
   nFrames: number;
   nClipSites: number;
 };
-
-const _clipCache = new Map<string, Promise<MimicClipBrief | null>>();
-
-function _loadClip(url: string): Promise<MimicClipBrief | null> {
-  if (!_clipCache.has(url)) {
-    _clipCache.set(url, _fetchClip(url));
-  }
-  return _clipCache.get(url)!;
-}
-
-async function _fetchClip(url: string): Promise<MimicClipBrief | null> {
-  try {
-    const npz = await loadNpz(url);
-    const siteEntry = npz['site_xpos'];
-    const siteNamesEntry = npz['site_names'];
-    if (!siteEntry) {
-      console.warn('[MimicDeviation] NPZ missing site_xpos');
-      return null;
-    }
-    return {
-      siteXpos: siteEntry.data,
-      clipSiteNames: siteNamesEntry?.strings ?? [],
-      nFrames: siteEntry.shape[0] ?? 0,
-      nClipSites: siteEntry.shape[1] ?? 0,
-    };
-  } catch (e) {
-    console.warn('[MimicDeviation] Failed to load clip:', e);
-    return null;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // MimicDeviation termination
@@ -62,8 +31,8 @@ export class MimicDeviation extends TerminationBase {
   private readonly siteErrThreshold: number;
   private readonly rootErrThreshold: number;
 
-  constructor(config: TerminationConfig) {
-    super(config);
+  constructor(runner: PolicyRunner, config: TerminationConfig) {
+    super(runner, config);
     const p = config.params ?? {};
     this.siteNames = (p.site_names as string[] | undefined) ?? [];
     this.bodyNames = (p.body_names as string[] | undefined) ?? [];
@@ -71,18 +40,30 @@ export class MimicDeviation extends TerminationBase {
     this.siteErrThreshold = (p.site_err_threshold as number | undefined) ?? 1.0;
     this.rootErrThreshold = (p.root_err_threshold as number | undefined) ?? 0.3;
 
-    // Prefer the resolved motions[] URL exposed by the 'motion' command term so
-    // that loadNpz() works regardless of the server's base path. The built-in
-    // TrackingCommand exposes getClipUrl() returning selectedMotion.path, which
-    // is already fully resolved by the runtime. Fall back to the raw clip_url
-    // param for standalone/test contexts where the command term isn't available.
-    const motionTerm = getCommandManager().getTerm('motion') as
-      | { getClipUrl?(): string | null }
-      | null;
-    const clipUrl =
-      motionTerm?.getClipUrl?.() ?? (p.clip_url as string | undefined) ?? null;
-    if (clipUrl) {
-      _loadClip(clipUrl).then((data) => { this.clip = data; }).catch(() => {});
+    // The app feeds the clip bytes as the 'mimic_clip' motion; read that slot
+    // via the runner (no fetch — the engine no longer serves paths). ADR 0004 §10.
+    void this.loadClip();
+  }
+
+  private async loadClip(): Promise<void> {
+    try {
+      const bytes = await this.runner.getMotionData('mimic_clip');
+      if (!bytes) return;
+      const npz = await loadNpz(bytes);
+      const siteEntry = npz['site_xpos'];
+      const siteNamesEntry = npz['site_names'];
+      if (!siteEntry) {
+        console.warn('[MimicDeviation] NPZ missing site_xpos');
+        return;
+      }
+      this.clip = {
+        siteXpos: siteEntry.data,
+        clipSiteNames: siteNamesEntry?.strings ?? [],
+        nFrames: siteEntry.shape[0] ?? 0,
+        nClipSites: siteEntry.shape[1] ?? 0,
+      };
+    } catch (e) {
+      console.warn('[MimicDeviation] Failed to load clip:', e);
     }
   }
 
@@ -92,7 +73,7 @@ export class MimicDeviation extends TerminationBase {
 
   private resolveBodyIds(): number[] {
     if (this.bodyIds !== null) return this.bodyIds;
-    const ctx = getCommandManager().getContext();
+    const ctx = this.runner.getContext();
     if (!ctx?.mjModel) return this.bodyNames.map(() => -1);
     const bodyObjType = (ctx.mujoco.mjtObj?.mjOBJ_BODY?.value) ?? 1;
     this.bodyIds = this.bodyNames.map(
@@ -110,7 +91,7 @@ export class MimicDeviation extends TerminationBase {
 
   evaluate(_state: PolicyState): boolean {
     if (!this.clip || this.clip.nFrames === 0) return false;
-    const ctx = getCommandManager().getContext();
+    const ctx = this.runner.getContext();
     if (!ctx?.mjData) return false;
     const { mjData } = ctx;
 

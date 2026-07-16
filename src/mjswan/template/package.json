@@ -1,7 +1,7 @@
 {
   "name": "mjswan",
   "type": "module",
-  "version": "0.8.0",
+  "version": "0.8.1-beta.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/ttktjmt/mjswan.git"
@@ -9,7 +9,10 @@
   "files": [
     "dist",
     "src/core",
+    "src/engine",
+    "src/manifest",
     "lib.d.ts",
+    "manifest.d.ts",
     "index.html",
     "README.md",
     "LICENSE"
@@ -23,25 +26,34 @@
       "import": "./dist/mjswan.js",
       "default": "./dist/mjswan.js"
     },
+    "./manifest": {
+      "types": "./manifest.d.ts",
+      "import": "./dist/manifest.js",
+      "default": "./dist/manifest.js"
+    },
     "./observation": "./src/core/observation/index.ts",
     "./command": "./src/core/command/index.ts",
     "./math": "./src/core/observation/math.ts",
     "./types": "./src/core/types.ts",
     "./scene": "./src/core/scene/scene.ts",
     "./npz": "./src/core/scene/npz.ts",
+    "./bytes": "./src/core/utils/bytes.ts",
     "./event": "./src/core/event/EventBase.ts",
     "./termination": "./src/core/termination/TerminationBase.ts",
     "./coordinate": "./src/core/scene/coordinate.ts"
   },
   "scripts": {
     "dev": "vite --host",
-    "build": "tsc && vite build && vite build --config vite.lib.config.ts",
+    "build": "tsc && vite build && vite build --config vite.lib.config.ts && vite build --config vite.manifest.config.ts",
     "build:spa": "tsc && vite build",
     "build:lib": "vite build --config vite.lib.config.ts",
+    "build:manifest": "vite build --config vite.manifest.config.ts",
     "preview": "vite preview",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@mantine/core": "^8.3.0",
@@ -60,6 +72,7 @@
     "minimatch": ">=10.2.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^25.0.3",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",

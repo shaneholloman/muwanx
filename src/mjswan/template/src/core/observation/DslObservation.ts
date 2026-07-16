@@ -40,30 +40,46 @@ export class DslObservation extends ObservationBase {
   }
 
   compute(state: PolicyState): Float32Array {
+    const raw = this.evaluate(state);
+    // Fix the observation width at the first evaluation (the policy network's
+    // expected input size) and conform every later output to it. Some graphs
+    // legitimately vary length between frames — e.g. a tracking command whose
+    // vector empties (length 0) while its motion is deselected and grows back
+    // on re-select. Without a fixed width, the group buffer is sized from the
+    // previous frame and `set()` overflows (RangeError) when the vector grows.
+    if (this.cachedSize === null) {
+      this.cachedSize = raw.length;
+      return raw;
+    }
+    if (raw.length === this.cachedSize) {
+      return raw;
+    }
+    const out = new Float32Array(this.cachedSize);
+    out.set(raw.subarray(0, Math.min(raw.length, this.cachedSize)));
+    return out;
+  }
+
+  /** Evaluate the graph and coerce its result to a Float32Array. */
+  private evaluate(state: PolicyState): Float32Array {
     const result = evaluateGraph(
       this.graph,
       { runner: this.runner, state, params: this.params },
       this.store,
     );
     if (result instanceof Float32Array) {
-      this.cachedSize = result.length;
       return result;
     }
     if (typeof result === 'number') {
-      this.cachedSize = 1;
       return new Float32Array([result]);
     }
     if (typeof result === 'boolean') {
-      this.cachedSize = 1;
       return new Float32Array([result ? 1 : 0]);
     }
     if (result instanceof Uint8Array) {
-      this.cachedSize = result.length;
       const out = new Float32Array(result.length);
       for (let i = 0; i < result.length; i++) out[i] = result[i];
       return out;
     }
-    this.cachedSize = 0;
     return new Float32Array(0);
   }
 

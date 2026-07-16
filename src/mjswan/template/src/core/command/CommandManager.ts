@@ -2,7 +2,6 @@ import { CustomCommands } from './custom_commands';
 import { TrackingCommand } from './TrackingCommand';
 import {
   getCommandInputId,
-  type ButtonCommandConfig,
   type CheckboxCommandConfig,
   type CommandConfigEntry,
   type CommandDefinition,
@@ -95,19 +94,19 @@ export class CommandManager {
   private commandGroups: Map<string, string[]> = new Map();
   private values: Map<string, number> = new Map();
   private listeners: Set<CommandEventListener> = new Set();
-  private resetCallback: (() => void) | null = null;
   private context: CommandTermContext | null = null;
 
-  constructor() {
-    this.registerSystemReset();
-  }
-
-  initialize(commandsConfig: CommandsConfig, context: CommandTermContext): void {
+  initialize(
+    commandsConfig: CommandsConfig,
+    context: CommandTermContext,
+    pluginCommands?: Record<string, CommandTermConstructor>
+  ): void {
     this.clear();
     this.context = context;
     const registry: Record<string, CommandTermConstructor> = {
       ...BuiltinCommandTerms,
       ...CustomCommands,
+      ...pluginCommands,
     };
 
     for (const [groupName, entry] of Object.entries(commandsConfig)) {
@@ -142,7 +141,7 @@ export class CommandManager {
   }
 
   getCommandGroups(): string[] {
-    return Array.from(this.commandGroups.keys()).filter(name => name !== '_system');
+    return Array.from(this.commandGroups.keys());
   }
 
   getCommandsInGroup(groupName: string): CommandDefinition[] {
@@ -151,15 +150,7 @@ export class CommandManager {
   }
 
   getCommands(): CommandDefinition[] {
-    return Array.from(this.commands.values()).filter(cmd => cmd.groupName !== '_system');
-  }
-
-  getAllCommands(): CommandDefinition[] {
     return Array.from(this.commands.values());
-  }
-
-  getResetCommand(): CommandDefinition | undefined {
-    return this.commands.get('_system:reset');
   }
 
   getCommandById(id: string): CommandDefinition | undefined {
@@ -225,12 +216,8 @@ export class CommandManager {
       return;
     }
 
-    if (id === '_system:reset' && this.resetCallback) {
-      this.resetCallback();
-    } else {
-      const term = this.terms.get(command.groupName);
-      term?.triggerButton?.(command.config.name);
-    }
+    const term = this.terms.get(command.groupName);
+    term?.triggerButton?.(command.config.name);
 
     this.emit({
       type: 'button',
@@ -241,10 +228,6 @@ export class CommandManager {
 
   resetToDefaults(): void {
     this.resetTerms();
-  }
-
-  setResetCallback(callback: () => void): void {
-    this.resetCallback = callback;
   }
 
   addEventListener(listener: CommandEventListener): void {
@@ -264,12 +247,11 @@ export class CommandManager {
     this.commandGroups.clear();
     this.values.clear();
     this.context = null;
-    this.registerSystemReset();
     this.emit({ type: 'clear', commandId: '' });
   }
 
   hasCommands(): boolean {
-    return this.commands.size > 1;
+    return this.commands.size > 0;
   }
 
   dispose(): void {
@@ -281,22 +263,7 @@ export class CommandManager {
     this.commandGroups.clear();
     this.values.clear();
     this.listeners.clear();
-    this.resetCallback = null;
     this.context = null;
-  }
-
-  private registerSystemReset(): void {
-    const id = getCommandInputId('_system', 'reset');
-    this.commands.set(id, {
-      id,
-      groupName: '_system',
-      config: {
-        type: 'button',
-        name: 'reset',
-        label: 'Reset Simulation',
-      } satisfies ButtonCommandConfig,
-    });
-    this.commandGroups.set('_system', [id]);
   }
 
   private registerUi(groupName: string, term: CommandTerm): void {
@@ -355,21 +322,5 @@ export class CommandManager {
         console.warn('[CommandManager] Listener error:', error);
       }
     }
-  }
-}
-
-let globalCommandManager: CommandManager | null = null;
-
-export function getCommandManager(): CommandManager {
-  if (!globalCommandManager) {
-    globalCommandManager = new CommandManager();
-  }
-  return globalCommandManager;
-}
-
-export function resetCommandManager(): void {
-  if (globalCommandManager) {
-    globalCommandManager.dispose();
-    globalCommandManager = null;
   }
 }

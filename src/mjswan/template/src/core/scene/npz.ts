@@ -223,13 +223,8 @@ function swapEndianBI64(
   return out;
 }
 
-/** Fetch an NPZ file and parse all contained .npy arrays into Float32Arrays. */
-export async function loadNpz(url: string): Promise<NpzData> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch NPZ: ${response.status} ${url}`);
-  }
-  const arrayBuffer = await response.arrayBuffer();
+/** Parse an NPZ archive (raw bytes) into Float32Arrays for each contained .npy. */
+export async function loadNpz(arrayBuffer: ArrayBuffer): Promise<NpzData> {
   const bytes = new Uint8Array(arrayBuffer);
 
   const result: NpzData = {};

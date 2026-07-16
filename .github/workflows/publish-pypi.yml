@@ -7,6 +7,10 @@ on:
         description: "Git ref to checkout (tag or SHA)"
         required: true
         type: string
+      version:
+        description: "Version to publish (X.Y.Z or X.Y.Z-beta.N)"
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -20,6 +24,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
+
+      # Set from the input so a prerelease publishes its version even though the
+      # tagged commit may not carry the bump (see release.yml). PyPI accepts
+      # prerelease versions; pip installs them only with --pre.
+      - name: Set version
+        run: |
+          sed -i "s/^__version__ = \".*\"/__version__ = \"${{ inputs.version }}\"/" src/mjswan/__init__.py
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7

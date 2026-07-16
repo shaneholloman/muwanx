@@ -7,6 +7,15 @@ on:
         description: "Git ref to checkout (tag or SHA)"
         required: true
         type: string
+      version:
+        description: "Version to publish (X.Y.Z or X.Y.Z-beta.N)"
+        required: true
+        type: string
+      tag:
+        description: "npm dist-tag (latest for stable, beta for prereleases)"
+        required: false
+        type: string
+        default: latest
 
 jobs:
   publish:
@@ -21,11 +30,20 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      # Set from the input so a prerelease publishes its version even though the
+      # tagged commit may not carry the bump (see release.yml).
+      - name: Set version
+        run: |
+          sed -i "s/^__version__ = \".*\"/__version__ = \"${{ inputs.version }}\"/" src/mjswan/__init__.py
+          cd src/mjswan/template
+          jq --arg v "${{ inputs.version }}" '.version = $v' package.json > package.json.tmp
+          mv package.json.tmp package.json
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
       - name: Run pytest
-        run: uv run --extra dev --python 3.12 pytest # This will sync the version with python package
+        run: uv run --extra dev --python 3.12 pytest
 
       - name: Setup Node.js for template build
         uses: actions/setup-node@v5
@@ -44,4 +62,4 @@ jobs:
 
       - name: Publish to npm
         working-directory: src/mjswan/template
-        run: npm publish --access public # Auth via OIDC trusted publishing
+        run: npm publish --access public --tag "${{ inputs.tag }}" # Auth via OIDC trusted publishing

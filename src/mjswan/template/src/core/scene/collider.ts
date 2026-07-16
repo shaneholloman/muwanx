@@ -4,11 +4,11 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 type ColliderMesh = THREE.Group;
 
 export async function loadCollider(
-  url: string,
+  data: ArrayBuffer,
   scene: THREE.Scene
 ): Promise<ColliderMesh> {
   const loader = new GLTFLoader();
-  const gltf = await loader.loadAsync(url);
+  const gltf = await loader.parseAsync(data, '');
   const root = gltf.scene;
 
   root.traverse((obj: THREE.Object3D) => {
