@@ -24,6 +24,7 @@ SPLAT_URLs = [
     "https://cdn.marble.worldlabs.ai/be100eec-f02e-491d-899e-d702652d424d/cb27e09c-e2ca-46c7-8abf-bcd24d2bf9ed_ceramic_500k.spz",
     "https://cdn.marble.worldlabs.ai/09eaec3b-9114-455a-b7f1-da4d037cc511/660e6ce6-959c-42fb-8a9d-66178cb84f4d_ceramic.spz",
 ]
+SPLAT_NAMEs = ["Traffic Road", "Cafe"]
 
 # fmt: off
 _G1_SCALE = {
@@ -224,9 +225,9 @@ def setup_builder() -> mjswan.Builder:
         },
     )
 
-    for i, splat_url in enumerate(SPLAT_URLs):
+    for name, splat_url in zip(SPLAT_NAMEs, SPLAT_URLs):
         scene.add_splat(
-            name=f"Splat {i + 1}",
+            name=name,
             url=splat_url,
             scale=3.275,
             z_offset=0.708,

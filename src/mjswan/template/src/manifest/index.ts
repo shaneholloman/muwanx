@@ -4,8 +4,8 @@
  * shared by the in-repo React app and mjswan Cloud. The engine itself knows
  * nothing about config.json — the app owns the catalog and calls engine verbs.
  *
- * Multi-project is dropped: a build is a single-project catalog (the first, or
- * the `id: null` "main" project).
+ * A build may hold multiple projects; the catalog exposes all of them and the
+ * app picks which one is active (the `id: null` "main" project is the default).
  */
 import type { Bytes } from '../core/utils/bytes';
 import type { ViewerConfig } from '../core/engine/viewer_config';
@@ -71,9 +71,14 @@ export interface SceneEntry {
   /** Assemble a full SceneInput for a chosen policy/splat (names; defaults if omitted). */
   buildScene(opts?: { policy?: string | null; splat?: string | null }): Promise<SceneInput>;
 }
-export interface Catalog {
+export interface ProjectCatalog {
   name: string;
+  id: string | null;
   scenes: SceneEntry[];
+}
+export interface Catalog {
+  /** All projects in the build; the app chooses the active one. First is default. */
+  projects: ProjectCatalog[];
   /**
    * Build-relative path to the author custom-MDP plugin ESM, when present. The
    * app (trusted contexts only) dynamically imports it and passes the exports
@@ -220,13 +225,17 @@ function toSceneEntry(project: ConfigProject, scene: ConfigScene, source: ByteSo
 /** Parse a Builder `config.json` (object or JSON string) into a {@link Catalog}. */
 export function parseManifest(config: AppConfig | string, source: ByteSource): Catalog {
   const parsed: AppConfig = typeof config === 'string' ? JSON.parse(config) : config;
-  const project = parsed.projects.find((p) => p.id === null) ?? parsed.projects[0];
-  if (!project) {
+  if (!parsed.projects?.length) {
     throw new Error('mjswan/manifest: config.json has no projects.');
   }
+  // "main" (id: null) first so it stays the default active project.
+  const ordered = [...parsed.projects.filter((p) => p.id === null), ...parsed.projects.filter((p) => p.id !== null)];
   return {
-    name: project.name,
-    scenes: project.scenes.map((scene) => toSceneEntry(project, scene, source)),
+    projects: ordered.map((project) => ({
+      name: project.name,
+      id: project.id,
+      scenes: project.scenes.map((scene) => toSceneEntry(project, scene, source)),
+    })),
     pluginsPath: parsed.plugins,
   };
 }

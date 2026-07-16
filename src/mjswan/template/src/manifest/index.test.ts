@@ -46,9 +46,9 @@ describe('parseManifest', () => {
   it('builds a single-project catalog with scene/policy/splat entries', () => {
     const { source } = fakeSource(POLICY_JSON);
     const catalog = parseManifest(CONFIG, source);
-    expect(catalog.name).toBe('Demo');
-    expect(catalog.scenes.map((s) => s.name)).toEqual(['Humanoid']);
-    const scene = catalog.scenes[0];
+    expect(catalog.projects.map((p) => p.name)).toEqual(['Demo']);
+    expect(catalog.projects[0].scenes.map((s) => s.name)).toEqual(['Humanoid']);
+    const scene = catalog.projects[0].scenes[0];
     expect(scene.splatSection).toBe(true);
     expect(scene.policies.map((p) => p.name)).toEqual(['walk', 'run']);
     expect(scene.policies[0].default).toBe(true);
@@ -59,7 +59,7 @@ describe('parseManifest', () => {
   it('resolves asset paths under main/assets and relative to policy.json', async () => {
     const { source, requested } = fakeSource(POLICY_JSON);
     const catalog = parseManifest(CONFIG, source);
-    const input = await catalog.scenes[0].buildScene({ policy: 'walk', splat: 'Room' });
+    const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk', splat: 'Room' });
     expect(requested).toContain('main/assets/humanoid/scene.mjz'); // model
     expect(requested).toContain('main/assets/humanoid/walk.json'); // policy.json
     expect(requested).toContain('main/assets/humanoid/walk.onnx'); // onnx (rel to policy dir)
@@ -72,12 +72,21 @@ describe('parseManifest', () => {
   it('defaults the policy and omits the splat, and accepts a JSON string', async () => {
     const { source } = fakeSource(POLICY_JSON);
     const catalog = parseManifest(JSON.stringify(CONFIG), source);
-    const input = await catalog.scenes[0].buildScene();
+    const input = await catalog.projects[0].scenes[0].buildScene();
     expect(input.policy).not.toBeNull(); // default policy 'walk'
     expect(input.splat).toBeNull(); // no splat requested
   });
 
-  it('prefers the id:null project and throws on an empty catalog', () => {
+  it('exposes all projects, ordering id:null first, and throws on an empty catalog', () => {
+    const multi: AppConfig = {
+      version: '0',
+      projects: [
+        { name: 'Extra', id: 'extra', scenes: [] },
+        { name: 'Main', id: null, scenes: [] },
+      ],
+    };
+    const catalog = parseManifest(multi, fakeSource({}).source);
+    expect(catalog.projects.map((p) => p.name)).toEqual(['Main', 'Extra']);
     expect(() => parseManifest({ version: '0', projects: [] }, fakeSource({}).source)).toThrow();
   });
 

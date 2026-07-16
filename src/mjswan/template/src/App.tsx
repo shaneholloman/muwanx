@@ -7,7 +7,7 @@ import { Loader } from './components/Loader';
 import { signalReady, signalError } from './core/utils/readySignal';
 import { createEngine } from './engine';
 import type { EnginePlugins, MjswanEngine, MjswanEngineState, SceneInput } from './engine';
-import { parseManifest, sanitizeName, type Catalog, type ByteSource } from './manifest';
+import { parseManifest, sanitizeName, type Catalog, type ProjectCatalog, type ByteSource } from './manifest';
 import './App.css';
 
 const PANEL_QUERY_PARAM = 'panel';
@@ -59,6 +59,7 @@ function pickByName<T extends { name: string }>(
 function AppContent() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState<string | null>(null);
   const [sceneName, setSceneName] = useState<string | null>(null);
   const [policyName, setPolicyName] = useState<string | null>(null);
   const [motionName, setMotionName] = useState<string | null>(null);
@@ -96,12 +97,14 @@ function AppContent() {
           pluginsRef.current = (await import(/* @vite-ignore */ url)) as EnginePlugins;
         }
         const params = new URLSearchParams(window.location.search);
-        const scene = pickByName(cat.scenes, params.get('scene'), cat.scenes[0]);
+        const project = pickByName(cat.projects, params.get('project'), cat.projects[0]);
+        const scene = pickByName(project?.scenes ?? [], params.get('scene'), project?.scenes[0]);
         const policy = scene
           ? pickByName(scene.policies, params.get('policy'), scene.policies.find((p) => p.default) ?? scene.policies[0])
           : undefined;
         const motion = policy?.motions.find((m) => m.default) ?? policy?.motions[0];
         setCatalog(cat);
+        setProjectName(project?.name ?? null);
         setSceneName(scene?.name ?? null);
         setPolicyName(policy?.name ?? null);
         setMotionName(motion?.name ?? null);
@@ -114,9 +117,14 @@ function AppContent() {
       });
   }, []);
 
+  const project = useMemo(
+    () => catalog?.projects.find((p) => p.name === projectName) ?? catalog?.projects[0] ?? null,
+    [catalog, projectName],
+  );
+
   const sceneEntry = useMemo(
-    () => catalog?.scenes.find((s) => s.name === sceneName) ?? null,
-    [catalog, sceneName],
+    () => project?.scenes.find((s) => s.name === sceneName) ?? null,
+    [project, sceneName],
   );
 
   // ── create the engine once, load the initial scene, subscribe to state ────
@@ -173,10 +181,13 @@ function AppContent() {
   }, [engineState, showLoading, hideLoading]);
 
   const syncUrl = useCallback(
-    (next: { scene?: string | null; policy?: string | null; panel?: boolean; ref?: boolean }) => {
+    (next: { project?: string | null; scene?: string | null; policy?: string | null; panel?: boolean; ref?: boolean }) => {
       const params = new URLSearchParams(window.location.search);
       const setOrDelete = (key: string, value: string | null | undefined, keep: boolean) =>
         value != null && keep ? params.set(key, value) : params.delete(key);
+      // Only pin ?project once more than one exists (single-project builds stay clean).
+      const proj = next.project ?? projectName;
+      setOrDelete('project', proj, (catalog?.projects.length ?? 0) > 1);
       setOrDelete('scene', next.scene ?? sceneName, true);
       setOrDelete('policy', next.policy ?? policyName, true);
       params.delete(PANEL_QUERY_PARAM);
@@ -186,13 +197,12 @@ function AppContent() {
       const search = params.toString();
       window.history.replaceState({}, '', `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`);
     },
-    [sceneName, policyName, panelVisible, showReference],
+    [projectName, sceneName, policyName, panelVisible, showReference, catalog],
   );
 
-  const handleSceneChange = useCallback(async (value: string | null) => {
+  const loadScene = useCallback(async (scene: ProjectCatalog['scenes'][number]) => {
     const engine = engineRef.current;
-    const scene = catalog?.scenes.find((s) => s.name === value);
-    if (!engine || !scene) return;
+    if (!engine) return;
     const policy = scene.policies.find((p) => p.default) ?? scene.policies[0];
     const motion = policy?.motions.find((m) => m.default) ?? policy?.motions[0];
     const splat = scene.splats[0]?.name ?? null;
@@ -211,7 +221,20 @@ function AppContent() {
     } finally {
       hideLoading();
     }
-  }, [catalog, showReference, syncUrl, showLoading, hideLoading]);
+  }, [showReference, syncUrl, showLoading, hideLoading, withPlugins]);
+
+  const handleSceneChange = useCallback(async (value: string | null) => {
+    const scene = project?.scenes.find((s) => s.name === value);
+    if (scene) await loadScene(scene);
+  }, [project, loadScene]);
+
+  const handleProjectChange = useCallback(async (value: string | null) => {
+    const next = catalog?.projects.find((p) => p.name === value);
+    if (!next) return;
+    setProjectName(next.name);
+    syncUrl({ project: next.name });
+    if (next.scenes[0]) await loadScene(next.scenes[0]);
+  }, [catalog, syncUrl, loadScene]);
 
   const handlePolicyChange = useCallback(async (value: string | null) => {
     const engine = engineRef.current;
@@ -303,11 +326,11 @@ function AppContent() {
           <ControlPanel
             visible={panelVisible}
             onVisibleChange={handlePanelVisibleChange}
-            projects={[{ value: catalog.name, label: catalog.name }]}
-            projectValue={catalog.name}
-            projectLabel={catalog.name}
-            onProjectChange={() => {}}
-            scenes={options(catalog.scenes)}
+            projects={options(catalog.projects)}
+            projectValue={project?.name ?? null}
+            projectLabel={project?.name ?? ''}
+            onProjectChange={handleProjectChange}
+            scenes={options(project?.scenes ?? [])}
             sceneValue={sceneName}
             onSceneChange={handleSceneChange}
             splats={options(sceneEntry.splats)}
