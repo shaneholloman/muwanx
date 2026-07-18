@@ -31,13 +31,77 @@ class TestSymbolicEnv:
         with pytest.raises(AttributeError, match="Unknown entity data slot"):
             _ = env.entity("robot").data.nonexistent_field
 
-    def test_command_field_access(self):
+    def test_mjlab_root_link_ang_vel_spelling_maps_to_root_ang_vel(self):
+        # Both mjlab spellings resolve to the single engine RootAngVelB op.
         from mjswan.dsl import SymbolicEnv
 
         env = SymbolicEnv()
-        ref = env.command("motion").anchor_pos
-        assert ref.node.op == "CommandField"
-        assert ref.node.attrs == {"command": "motion", "field": "anchor_pos"}
+        assert env.entity("robot").data.root_link_ang_vel_b.node.op == "RootAngVelB"
+        assert env.entity("robot").data.root_ang_vel_b.node.op == "RootAngVelB"
+
+
+class TestControlFlowGuards:
+    """Symbolic values reject truth-testing and iteration (ADR 0003) instead of
+    silently mistracing."""
+
+    def test_bool_over_symbolic_raises(self):
+        from mjswan.dsl import SymbolicEnv
+
+        x = SymbolicEnv().entity("robot").data.root_ang_vel_b
+        with pytest.raises(TypeError, match="truth of a symbolic"):
+            bool(x)  # covers `if x`, `while x`, `x and y`, `not x`
+
+    def test_iter_over_symbolic_raises(self):
+        from mjswan.dsl import SymbolicEnv
+
+        x = SymbolicEnv().entity("robot").data.root_ang_vel_b
+        with pytest.raises(TypeError, match="iterate a symbolic"):
+            for _ in x:  # would otherwise infinite-loop via __getitem__
+                break
+
+
+class TestRegistrySync:
+    """Every primitive op the Python DSL can emit must exist in the engine's
+    TypeScript primitive registry, or a passing build throws at runtime."""
+
+    def _engine_ops(self) -> set[str]:
+        import re
+        from pathlib import Path
+
+        ts = (
+            Path(__file__).resolve().parents[1]
+            / "src/mjswan/template/src/core/dsl/primitives.ts"
+        ).read_text()
+        block = ts[ts.index("export const Primitives") :]
+        block = block[: block.index("\n};")]
+        # Registry entries are `  Name:` at exactly 2-space indent.
+        return set(re.findall(r"^ {2}(\w+):", block, re.MULTILINE))
+
+    def _python_ops(self) -> set[str]:
+        import re
+        from pathlib import Path
+
+        from mjswan.dsl.env import _ENTITY_DATA_SLOTS
+
+        ops = set(_ENTITY_DATA_SLOTS.values())
+        dsl_dir = Path(__file__).resolve().parents[1] / "src/mjswan/dsl"
+        for path in dsl_dir.glob("*.py"):
+            text = path.read_text()
+            ops.update(re.findall(r'Node\(\s*op=["\'](\w+)["\']', text))
+            ops.update(re.findall(r'_binary\(\s*["\'](\w+)["\']', text))
+        return ops
+
+    def test_engine_registry_parse_sane(self):
+        engine = self._engine_ops()
+        assert {"Add", "Concat", "RootAngVelB"} <= engine
+
+    def test_all_python_ops_are_in_engine_registry(self):
+        missing = self._python_ops() - self._engine_ops()
+        assert not missing, (
+            "DSL emits ops absent from primitives.ts "
+            f"({sorted(missing)}). Add them to the engine registry or remove "
+            "them from the Python DSL."
+        )
 
 
 class TestArithmeticTracing:
