@@ -17,6 +17,13 @@ import mjswan
 from mjswan.envs.mdp.actions import JointPositionActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 
+from .dsl_terms import (
+    gentle_humanoid_target_joint_pos,
+    gentle_humanoid_target_projected_gravity,
+    gentle_humanoid_target_root_z,
+    gentle_humanoid_tracking,
+)
+
 HERE = Path(__file__).resolve().parent
 GENTLE_HUMANOID_REPO_URL = os.getenv(
     "MJSWAN_GENTLE_HUMANOID_REPO_URL",
@@ -126,13 +133,11 @@ def _register_gentle_humanoid_extensions() -> dict[str, mjswan.ObservationBindin
         ),
     )
 
+    # The four motion-command-coupled obs are now declarative DSL builders
+    # (see dsl_terms.py, issue #79); only the remaining terms stay ts_src.
     obs_names = {
         "boot": "GentleHumanoidBootIndicator",
-        "tracking": "GentleHumanoidTrackingCommandObsRaw",
         "compliance": "GentleHumanoidComplianceFlagObs",
-        "target_joint_pos": "GentleHumanoidTargetJointPosObs",
-        "target_root_z": "GentleHumanoidTargetRootZObs",
-        "target_projected_gravity": "GentleHumanoidTargetProjectedGravityBObs",
         "root_ang_vel": "GentleHumanoidRootAngVelBHistory",
         "projected_gravity": "GentleHumanoidProjectedGravityBHistory",
         "joint_pos": "GentleHumanoidJointPosHistory",
@@ -253,7 +258,7 @@ def setup_builder() -> mjswan.Builder:
                 terms={
                     "boot": ObservationTermCfg(func=obs_funcs["boot"]),
                     "tracking": ObservationTermCfg(
-                        func=obs_funcs["tracking"],
+                        func=gentle_humanoid_tracking,
                         params={"future_steps": list(tracking_cfg["future_steps"])},
                     ),
                     "compliance": ObservationTermCfg(
@@ -267,18 +272,18 @@ def setup_builder() -> mjswan.Builder:
                         },
                     ),
                     "target_joint_pos": ObservationTermCfg(
-                        func=obs_funcs["target_joint_pos"],
+                        func=gentle_humanoid_target_joint_pos,
                         params={
                             "future_steps": list(tracking_cfg["future_steps"]),
                             "num_joints": len(action_joint_names),
                         },
                     ),
                     "target_root_z": ObservationTermCfg(
-                        func=obs_funcs["target_root_z"],
+                        func=gentle_humanoid_target_root_z,
                         params={"future_steps": list(tracking_cfg["future_steps"])},
                     ),
                     "target_projected_gravity": ObservationTermCfg(
-                        func=obs_funcs["target_projected_gravity"],
+                        func=gentle_humanoid_target_projected_gravity,
                         params={"future_steps": list(tracking_cfg["future_steps"])},
                     ),
                     "root_ang_vel": ObservationTermCfg(

@@ -123,6 +123,32 @@ def tracking_ref_body_pos(body_name: str) -> NodeRef:
     return NodeRef(Node(op="TrackingRefBodyPos", attrs={"body": body_name}))
 
 
+def _tracking_ref_field(field: str, step: int) -> NodeRef:
+    return NodeRef(
+        Node(op="TrackingRefField", attrs={"field": field, "step": int(step)})
+    )
+
+
+def tracking_ref_root_pos(step: int = 0) -> NodeRef:
+    """Reference root position at ``refIdx + step`` (clamped to the clip)."""
+    return _tracking_ref_field("root_pos", step)
+
+
+def tracking_ref_root_quat(step: int = 0) -> NodeRef:
+    """Reference root orientation at ``refIdx + step`` (clamped to the clip)."""
+    return _tracking_ref_field("root_quat", step)
+
+
+def tracking_ref_joint_pos(step: int = 0) -> NodeRef:
+    """Reference joint targets at ``refIdx + step`` (clamped to the clip)."""
+    return _tracking_ref_field("joint_pos", step)
+
+
+def tracking_is_ready() -> NodeRef:
+    """``1.0`` when a motion reference is loaded and ready, else ``0.0``."""
+    return NodeRef(Node(op="TrackingIsReady"))
+
+
 # ---------------------------------------------------------------------------
 # Joint / sensor / command / pose sources
 # ---------------------------------------------------------------------------
@@ -227,5 +253,19 @@ def quat_inv(q: NodeRef) -> NodeRef:
 
 
 def quat_to_rot6d(q: NodeRef) -> NodeRef:
-    """6D rotation representation (first two rotation-matrix columns)."""
+    """6D rotation representation (first two rotation-matrix columns, row-major)."""
     return NodeRef(Node(op="QuatToRot6d", inputs=[_as_node(q)]))
+
+
+def quat_to_rot6d_columns(q: NodeRef) -> NodeRef:
+    """6D rotation, column-major ``[r00, r10, r20, r01, r11, r21]``.
+
+    Same six numbers as :func:`quat_to_rot6d` but ordered column-by-column;
+    used by policies trained against that convention.
+    """
+    return NodeRef(Node(op="QuatToRot6dColumns", inputs=[_as_node(q)]))
+
+
+def normalize(v: NodeRef) -> NodeRef:
+    """L2-normalize a vector; a zero vector maps to itself (norm floored to 1)."""
+    return NodeRef(Node(op="Normalize", inputs=[_as_node(v)]))

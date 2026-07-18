@@ -12,7 +12,13 @@ import type { PolicyState } from '../policy/types';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 import type { DslPrimitiveValue } from './types';
 import { isTrackingSource } from '../command';
-import { quatApplyInv, quatInverse, quatMultiply, quatToRot6d } from '../observation/math';
+import {
+  quatApplyInv,
+  quatInverse,
+  quatMultiply,
+  quatToRot6d,
+  quatToRot6dColumns,
+} from '../observation/math';
 
 export type EvalContext = {
   runner: PolicyRunner;
@@ -69,6 +75,45 @@ type TrackingSource = {
 function trackingTerm(ctx: EvalContext): TrackingSource | null {
   const term = ctx.runner.getContext()?.commandManager?.getTerm('motion');
   return isTrackingSource(term) && term.isReady() ? (term as TrackingSource) : null;
+}
+
+/**
+ * A motion command exposing reference-trajectory buffers (root pose + per-joint
+ * targets) at a play cursor.  This is a distinct capability from the anchor-
+ * based {@link TrackingSource}; both the built-in `TrackingCommand` and bespoke
+ * motion players satisfy it by declaring these public fields.
+ */
+type MotionRefSource = {
+  isReady(): boolean;
+  refRootPos: Float32Array[];
+  refRootQuat: Float32Array[];
+  refJointPos: Float32Array[];
+  refIdx: number;
+  refLen: number;
+};
+
+/** The active motion command carrying reference buffers, or null. */
+function motionRefTerm(ctx: EvalContext): MotionRefSource | null {
+  const term = ctx.runner.getContext()?.commandManager?.getTerm('motion');
+  if (
+    typeof term === 'object' &&
+    term !== null &&
+    'refRootPos' in term &&
+    'refRootQuat' in term &&
+    'refJointPos' in term &&
+    typeof (term as { isReady?: unknown }).isReady === 'function'
+  ) {
+    return term as unknown as MotionRefSource;
+  }
+  return null;
+}
+
+/** Add `step` to `base`, clamped to `[0, len-1]` (matches clampFutureIndices). */
+function clampRefIdx(base: number, step: number, len: number): number {
+  const i = base + step;
+  if (i < 0) return 0;
+  if (i >= len) return Math.max(0, len - 1);
+  return i;
 }
 
 // --- Model name-table decoders + address resolution --------------------------
@@ -435,6 +480,53 @@ export const Primitives: Record<string, Primitive> = {
     const xquat = ctx.runner.getContext()?.mjData?.xquat;
     if (id < 0 || xquat === undefined) return new Float32Array([1, 0, 0, 0]);
     return new Float32Array(xquat.slice(id * 4, id * 4 + 4));
+  },
+
+  // -- Motion reference trajectory, sampled at a lookahead offset ----------
+  // `field`: 'root_pos' (3) | 'root_quat' (4) | 'joint_pos' (nJoints).
+  // `step`: offset added to the current refIdx, clamped to [0, refLen-1].
+  // When no motion is ready, returns a finite fallback (identity quat / zeros)
+  // so downstream quaternion math stays defined; wrap the term with
+  // `Mul(..., TrackingIsReady)` to zero it out (matches the bespoke
+  // `if (!ready) return zeros`).
+  TrackingRefField: (_in, attrs, ctx) => {
+    const field = String(attrs.field ?? '');
+    const fallback = () =>
+      field === 'root_quat'
+        ? new Float32Array([1, 0, 0, 0])
+        : field === 'root_pos'
+          ? new Float32Array(3)
+          : new Float32Array(ctx.runner.getNumActions());
+    const term = motionRefTerm(ctx);
+    if (!term || !term.isReady()) return fallback();
+    const buf =
+      field === 'root_pos'
+        ? term.refRootPos
+        : field === 'root_quat'
+          ? term.refRootQuat
+          : term.refJointPos;
+    const frame = buf[clampRefIdx(term.refIdx, Number(attrs.step ?? 0), term.refLen)];
+    return frame ? new Float32Array(frame) : fallback();
+  },
+
+  // 1.0 when a motion reference is loaded and ready, else 0.0.
+  TrackingIsReady: (_in, _attrs, ctx) => {
+    const term = motionRefTerm(ctx);
+    return term && term.isReady() ? 1.0 : 0.0;
+  },
+
+  // Column-major rot6d (first two rotation columns; see quatToRot6dColumns).
+  QuatToRot6dColumns: (inputs) =>
+    Float32Array.from(quatToRot6dColumns(asVec(inputs[0]))),
+
+  // L2-normalize; a zero vector maps to itself (norm floored to 1), matching
+  // the bespoke `Math.hypot(...) || 1.0`.
+  Normalize: (inputs) => {
+    const v = asVec(inputs[0]);
+    const n = Math.hypot(...v) || 1.0;
+    const out = new Float32Array(v.length);
+    for (let i = 0; i < v.length; i++) out[i] = v[i] / n;
+    return out;
   },
 
   // -- Tracking reference, per body (world frame) --------------------------

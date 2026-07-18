@@ -140,6 +140,7 @@ override-dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "slow: triggers frontend build — exclude from pre-commit with -m 'not slow'",
 ]
