@@ -19,13 +19,22 @@ import { describe, expect, it } from 'vitest';
 import { evaluateGraph, NodeStateStore } from '../interpreter';
 import type { EvalContext } from '../interpreter';
 import { Primitives } from '../primitives';
-import {
-  quatApplyInv,
-  quatInverse,
-  quatMultiply,
-  quatToRot6dColumns,
-} from '../../observation/math';
+import { normalizeQuat, quatApplyInv, quatInverse, quatMultiply } from '../../observation/math';
 import fixture from './gentleHumanoidObsGraphs.json';
+
+// Column-major rot6d reference, transcribed from the original
+// GentleHumanoidObservations.ts (the engine no longer ships this as an op —
+// it is composed from row-major QuatToRot6d + reindex).
+function quatToRot6dColumns(q: ArrayLike<number>): number[] {
+  const [w, x, y, z] = normalizeQuat(q);
+  const r00 = 1.0 - 2.0 * (y * y + z * z);
+  const r01 = 2.0 * (x * y - w * z);
+  const r10 = 2.0 * (x * y + w * z);
+  const r11 = 1.0 - 2.0 * (x * x + z * z);
+  const r20 = 2.0 * (x * z - w * y);
+  const r21 = 2.0 * (y * z + w * x);
+  return [r00, r10, r20, r01, r11, r21];
+}
 
 const STEPS: number[] = fixture.future_steps;
 const GRAPHS = fixture.graphs as Record<string, { nodes: unknown[]; output: string }>;
@@ -187,17 +196,23 @@ describe('Gentle Humanoid tracking obs: declarative graph == bespoke class', () 
 describe('new DSL primitives', () => {
   const ctxWith = (term: MockTerm | null) => makeCtx(term, { rootQuat: new Float32Array([1, 0, 0, 0]), jointPos: new Float32Array(3) }, 3);
 
-  it('QuatToRot6dColumns matches the math helper', () => {
-    const q = new Float32Array([0.9239, 0, 0.3827, 0]);
-    const got = Primitives.QuatToRot6dColumns([q], {}, ctxWith(null), {}) as Float32Array;
-    expectClose(got, Float32Array.from(quatToRot6dColumns(q)), 1e-6);
+  it('Div broadcasts a scalar divisor over a vector', () => {
+    const got = Primitives.Div([new Float32Array([3, 0, 4]), 2], {}, ctxWith(null), {}) as Float32Array;
+    expectClose(got, new Float32Array([1.5, 0, 2]), 1e-6);
   });
 
-  it('Normalize is unit-length; zero vector maps to zeros', () => {
-    const n = Primitives.Normalize([new Float32Array([3, 0, 4])], {}, ctxWith(null), {}) as Float32Array;
-    expectClose(n, new Float32Array([0.6, 0, 0.8]), 1e-6);
-    const z = Primitives.Normalize([new Float32Array([0, 0, 0])], {}, ctxWith(null), {}) as Float32Array;
-    expect(z.every((v) => v === 0)).toBe(true);
+  it('Sqrt is elementwise; Sum reduces to a scalar', () => {
+    const s = Primitives.Sqrt([new Float32Array([9, 16])], {}, ctxWith(null), {}) as Float32Array;
+    expectClose(s, new Float32Array([3, 4]), 1e-6);
+    expect(Primitives.Sum([new Float32Array([3, 0, 4])], {}, ctxWith(null), {})).toBe(7);
+  });
+
+  it('Div/Sqrt/Sum compose to L2-normalize (3-4-5 → 0.6/0/0.8)', () => {
+    const v = new Float32Array([3, 0, 4]);
+    const sumSq = Primitives.Sum([Primitives.Mul([v, v], {}, ctxWith(null), {})], {}, ctxWith(null), {});
+    const norm = Primitives.Sqrt([sumSq], {}, ctxWith(null), {});
+    const got = Primitives.Div([v, norm], {}, ctxWith(null), {}) as Float32Array;
+    expectClose(got, new Float32Array([0.6, 0, 0.8]), 1e-6);
   });
 
   it('TrackingRefField reads the clamped frame and falls back safely', () => {

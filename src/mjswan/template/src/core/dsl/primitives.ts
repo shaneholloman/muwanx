@@ -12,13 +12,7 @@ import type { PolicyState } from '../policy/types';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 import type { DslPrimitiveValue } from './types';
 import { isTrackingSource } from '../command';
-import {
-  quatApplyInv,
-  quatInverse,
-  quatMultiply,
-  quatToRot6d,
-  quatToRot6dColumns,
-} from '../observation/math';
+import { quatApplyInv, quatInverse, quatMultiply, quatToRot6d } from '../observation/math';
 
 export type EvalContext = {
   runner: PolicyRunner;
@@ -242,9 +236,19 @@ export const Primitives: Record<string, Primitive> = {
   Add: (inputs) => elementwise(inputs[0], inputs[1], (a, b) => a + b),
   Sub: (inputs) => elementwise(inputs[0], inputs[1], (a, b) => a - b),
   Mul: (inputs) => elementwise(inputs[0], inputs[1], (a, b) => a * b),
+  Div: (inputs) => elementwise(inputs[0], inputs[1], (a, b) => a / b),
   Neg: (inputs) => unary(inputs[0], (a) => -a),
   Abs: (inputs) => unary(inputs[0], Math.abs),
+  Sqrt: (inputs) => unary(inputs[0], Math.sqrt),
   Acos: (inputs) => unary(inputs[0], (a) => Math.acos(Math.max(-1, Math.min(1, a)))),
+
+  // Reduce a vector to the scalar sum of its elements.
+  Sum: (inputs) => {
+    const v = asVec(inputs[0]);
+    let s = 0;
+    for (let i = 0; i < v.length; i++) s += v[i];
+    return s;
+  },
 
   // -- Indexing ------------------------------------------------------------
   Index: (inputs, attrs) => {
@@ -513,20 +517,6 @@ export const Primitives: Record<string, Primitive> = {
   TrackingIsReady: (_in, _attrs, ctx) => {
     const term = motionRefTerm(ctx);
     return term && term.isReady() ? 1.0 : 0.0;
-  },
-
-  // Column-major rot6d (first two rotation columns; see quatToRot6dColumns).
-  QuatToRot6dColumns: (inputs) =>
-    Float32Array.from(quatToRot6dColumns(asVec(inputs[0]))),
-
-  // L2-normalize; a zero vector maps to itself (norm floored to 1), matching
-  // the bespoke `Math.hypot(...) || 1.0`.
-  Normalize: (inputs) => {
-    const v = asVec(inputs[0]);
-    const n = Math.hypot(...v) || 1.0;
-    const out = new Float32Array(v.length);
-    for (let i = 0; i < v.length; i++) out[i] = v[i] / n;
-    return out;
   },
 
   // -- Tracking reference, per body (world frame) --------------------------

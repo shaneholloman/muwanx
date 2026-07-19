@@ -45,6 +45,21 @@ def mul(x: NodeRef, y: NodeRef | float) -> NodeRef:
     return NodeRef(Node(op="Mul", inputs=[_as_node(x), _as_node(y)]))
 
 
+def div(x: NodeRef, y: NodeRef | float) -> NodeRef:
+    """Elementwise division (a scalar divisor broadcasts over a vector)."""
+    return NodeRef(Node(op="Div", inputs=[_as_node(x), _as_node(y)]))
+
+
+def sqrt(x: NodeRef) -> NodeRef:
+    """Elementwise square root."""
+    return NodeRef(Node(op="Sqrt", inputs=[_as_node(x)]))
+
+
+def sum_(x: NodeRef) -> NodeRef:
+    """Reduce a vector to the scalar sum of its elements."""
+    return NodeRef(Node(op="Sum", inputs=[_as_node(x)]))
+
+
 def acos(x: NodeRef) -> NodeRef:
     """Elementwise arccosine; clamps its argument to ``[-1, 1]`` (matching
     ``torch.acos`` numerical behaviour for slightly-out-of-range inputs)."""
@@ -260,12 +275,19 @@ def quat_to_rot6d(q: NodeRef) -> NodeRef:
 def quat_to_rot6d_columns(q: NodeRef) -> NodeRef:
     """6D rotation, column-major ``[r00, r10, r20, r01, r11, r21]``.
 
-    Same six numbers as :func:`quat_to_rot6d` but ordered column-by-column;
-    used by policies trained against that convention.
+    Same six numbers as :func:`quat_to_rot6d` but ordered column-by-column,
+    for policies trained against that convention.  A reindex composition of
+    :func:`quat_to_rot6d` — not a dedicated engine op.
     """
-    return NodeRef(Node(op="QuatToRot6dColumns", inputs=[_as_node(q)]))
+    r = quat_to_rot6d(q)
+    return concat([r[0], r[2], r[4], r[1], r[3], r[5]])
 
 
 def normalize(v: NodeRef) -> NodeRef:
-    """L2-normalize a vector; a zero vector maps to itself (norm floored to 1)."""
-    return NodeRef(Node(op="Normalize", inputs=[_as_node(v)]))
+    """L2-normalize a vector: ``v / sqrt(sum(v * v))``.
+
+    A composition of :func:`sqrt` / :func:`sum_` / division — not a dedicated
+    engine op.  No zero-guard; callers ensure a non-zero input (the
+    projected-gravity use rotates a unit vector, so the norm is always ~1).
+    """
+    return v / sqrt(sum_(v * v))

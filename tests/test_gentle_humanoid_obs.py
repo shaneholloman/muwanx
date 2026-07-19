@@ -50,7 +50,10 @@ def test_expected_op_structure_and_sizes():
         return Counter(node["op"] for node in g["nodes"])
 
     tracking = ops("gentle_humanoid_tracking")
-    assert tracking["QuatToRot6dColumns"] == n  # rot6d per step
+    # Column-major rot6d is composed from row-major QuatToRot6d + a 6-way
+    # reindex, not a dedicated op.
+    assert "QuatToRot6dColumns" not in tracking
+    assert tracking["QuatToRot6d"] == n and tracking["Index"] == 6 * n
     assert tracking["QuatApplyInv"] == n - 1  # pos deltas skip the base frame
     assert tracking["TrackingIsReady"] == 1 and tracking["Mul"] == 1
 
@@ -62,7 +65,10 @@ def test_expected_op_structure_and_sizes():
     assert root_z["Index"] == n and root_z["TrackingRefField"] == n
 
     grav = ops("gentle_humanoid_target_projected_gravity")
-    assert grav["Normalize"] == n and grav["QuatApplyInv"] == n
+    # normalize is composed from Sum/Sqrt/Div, not a dedicated op.
+    assert "Normalize" not in grav
+    assert grav["Sum"] == n and grav["Sqrt"] == n and grav["Div"] == n
+    assert grav["QuatApplyInv"] == n
 
 
 def test_terms_carry_no_custom_js():

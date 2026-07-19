@@ -303,15 +303,87 @@
           ]
         },
         {
-          "op": "QuatToRot6dColumns",
+          "op": "QuatToRot6d",
           "out": "n36",
           "in": [
             "n35"
           ]
         },
         {
-          "op": "TrackingRefField",
+          "op": "Index",
           "out": "n37",
+          "in": [
+            "n36"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n38",
+          "in": [
+            "n36"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n39",
+          "in": [
+            "n36"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n40",
+          "in": [
+            "n36"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n41",
+          "in": [
+            "n36"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n42",
+          "in": [
+            "n36"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n43",
+          "in": [
+            "n37",
+            "n38",
+            "n39",
+            "n40",
+            "n41",
+            "n42"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n44",
           "attrs": {
             "field": "root_quat",
             "step": 1
@@ -319,22 +391,94 @@
         },
         {
           "op": "QuatMul",
-          "out": "n38",
+          "out": "n45",
           "in": [
             "n33",
-            "n37"
+            "n44"
           ]
         },
         {
-          "op": "QuatToRot6dColumns",
-          "out": "n39",
+          "op": "QuatToRot6d",
+          "out": "n46",
           "in": [
-            "n38"
+            "n45"
+          ]
+        },
+        {
+          "op": "Index",
+          "out": "n47",
+          "in": [
+            "n46"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n48",
+          "in": [
+            "n46"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n49",
+          "in": [
+            "n46"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n50",
+          "in": [
+            "n46"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n51",
+          "in": [
+            "n46"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n52",
+          "in": [
+            "n46"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n53",
+          "in": [
+            "n47",
+            "n48",
+            "n49",
+            "n50",
+            "n51",
+            "n52"
           ]
         },
         {
           "op": "TrackingRefField",
-          "out": "n40",
+          "out": "n54",
           "attrs": {
             "field": "root_quat",
             "step": 2
@@ -342,177 +486,88 @@
         },
         {
           "op": "QuatMul",
-          "out": "n41",
-          "in": [
-            "n33",
-            "n40"
-          ]
-        },
-        {
-          "op": "QuatToRot6dColumns",
-          "out": "n42",
-          "in": [
-            "n41"
-          ]
-        },
-        {
-          "op": "TrackingRefField",
-          "out": "n43",
-          "attrs": {
-            "field": "root_quat",
-            "step": 3
-          }
-        },
-        {
-          "op": "QuatMul",
-          "out": "n44",
-          "in": [
-            "n33",
-            "n43"
-          ]
-        },
-        {
-          "op": "QuatToRot6dColumns",
-          "out": "n45",
-          "in": [
-            "n44"
-          ]
-        },
-        {
-          "op": "TrackingRefField",
-          "out": "n46",
-          "attrs": {
-            "field": "root_quat",
-            "step": 4
-          }
-        },
-        {
-          "op": "QuatMul",
-          "out": "n47",
-          "in": [
-            "n33",
-            "n46"
-          ]
-        },
-        {
-          "op": "QuatToRot6dColumns",
-          "out": "n48",
-          "in": [
-            "n47"
-          ]
-        },
-        {
-          "op": "TrackingRefField",
-          "out": "n49",
-          "attrs": {
-            "field": "root_quat",
-            "step": -1
-          }
-        },
-        {
-          "op": "QuatMul",
-          "out": "n50",
-          "in": [
-            "n33",
-            "n49"
-          ]
-        },
-        {
-          "op": "QuatToRot6dColumns",
-          "out": "n51",
-          "in": [
-            "n50"
-          ]
-        },
-        {
-          "op": "TrackingRefField",
-          "out": "n52",
-          "attrs": {
-            "field": "root_quat",
-            "step": -2
-          }
-        },
-        {
-          "op": "QuatMul",
-          "out": "n53",
-          "in": [
-            "n33",
-            "n52"
-          ]
-        },
-        {
-          "op": "QuatToRot6dColumns",
-          "out": "n54",
-          "in": [
-            "n53"
-          ]
-        },
-        {
-          "op": "TrackingRefField",
           "out": "n55",
-          "attrs": {
-            "field": "root_quat",
-            "step": -4
-          }
+          "in": [
+            "n33",
+            "n54"
+          ]
         },
         {
-          "op": "QuatMul",
+          "op": "QuatToRot6d",
           "out": "n56",
           "in": [
-            "n33",
             "n55"
           ]
         },
         {
-          "op": "QuatToRot6dColumns",
+          "op": "Index",
           "out": "n57",
           "in": [
             "n56"
-          ]
-        },
-        {
-          "op": "TrackingRefField",
-          "out": "n58",
+          ],
           "attrs": {
-            "field": "root_quat",
-            "step": -8
+            "i": 0
           }
         },
         {
-          "op": "QuatMul",
+          "op": "Index",
+          "out": "n58",
+          "in": [
+            "n56"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
           "out": "n59",
           "in": [
-            "n33",
-            "n58"
-          ]
-        },
-        {
-          "op": "QuatToRot6dColumns",
-          "out": "n60",
-          "in": [
-            "n59"
-          ]
-        },
-        {
-          "op": "TrackingRefField",
-          "out": "n61",
+            "n56"
+          ],
           "attrs": {
-            "field": "root_quat",
-            "step": -12
+            "i": 4
           }
         },
         {
-          "op": "QuatMul",
-          "out": "n62",
+          "op": "Index",
+          "out": "n60",
           "in": [
-            "n33",
-            "n61"
-          ]
+            "n56"
+          ],
+          "attrs": {
+            "i": 1
+          }
         },
         {
-          "op": "QuatToRot6dColumns",
+          "op": "Index",
+          "out": "n61",
+          "in": [
+            "n56"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n62",
+          "in": [
+            "n56"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
           "out": "n63",
           "in": [
+            "n57",
+            "n58",
+            "n59",
+            "n60",
+            "n61",
             "n62"
           ]
         },
@@ -521,7 +576,7 @@
           "out": "n64",
           "attrs": {
             "field": "root_quat",
-            "step": -16
+            "step": 3
           }
         },
         {
@@ -533,15 +588,752 @@
           ]
         },
         {
-          "op": "QuatToRot6dColumns",
+          "op": "QuatToRot6d",
           "out": "n66",
           "in": [
             "n65"
           ]
         },
         {
-          "op": "Concat",
+          "op": "Index",
           "out": "n67",
+          "in": [
+            "n66"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n68",
+          "in": [
+            "n66"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n69",
+          "in": [
+            "n66"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n70",
+          "in": [
+            "n66"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n71",
+          "in": [
+            "n66"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n72",
+          "in": [
+            "n66"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n73",
+          "in": [
+            "n67",
+            "n68",
+            "n69",
+            "n70",
+            "n71",
+            "n72"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n74",
+          "attrs": {
+            "field": "root_quat",
+            "step": 4
+          }
+        },
+        {
+          "op": "QuatMul",
+          "out": "n75",
+          "in": [
+            "n33",
+            "n74"
+          ]
+        },
+        {
+          "op": "QuatToRot6d",
+          "out": "n76",
+          "in": [
+            "n75"
+          ]
+        },
+        {
+          "op": "Index",
+          "out": "n77",
+          "in": [
+            "n76"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n78",
+          "in": [
+            "n76"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n79",
+          "in": [
+            "n76"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n80",
+          "in": [
+            "n76"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n81",
+          "in": [
+            "n76"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n82",
+          "in": [
+            "n76"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n83",
+          "in": [
+            "n77",
+            "n78",
+            "n79",
+            "n80",
+            "n81",
+            "n82"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n84",
+          "attrs": {
+            "field": "root_quat",
+            "step": -1
+          }
+        },
+        {
+          "op": "QuatMul",
+          "out": "n85",
+          "in": [
+            "n33",
+            "n84"
+          ]
+        },
+        {
+          "op": "QuatToRot6d",
+          "out": "n86",
+          "in": [
+            "n85"
+          ]
+        },
+        {
+          "op": "Index",
+          "out": "n87",
+          "in": [
+            "n86"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n88",
+          "in": [
+            "n86"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n89",
+          "in": [
+            "n86"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n90",
+          "in": [
+            "n86"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n91",
+          "in": [
+            "n86"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n92",
+          "in": [
+            "n86"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n93",
+          "in": [
+            "n87",
+            "n88",
+            "n89",
+            "n90",
+            "n91",
+            "n92"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n94",
+          "attrs": {
+            "field": "root_quat",
+            "step": -2
+          }
+        },
+        {
+          "op": "QuatMul",
+          "out": "n95",
+          "in": [
+            "n33",
+            "n94"
+          ]
+        },
+        {
+          "op": "QuatToRot6d",
+          "out": "n96",
+          "in": [
+            "n95"
+          ]
+        },
+        {
+          "op": "Index",
+          "out": "n97",
+          "in": [
+            "n96"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n98",
+          "in": [
+            "n96"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n99",
+          "in": [
+            "n96"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n100",
+          "in": [
+            "n96"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n101",
+          "in": [
+            "n96"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n102",
+          "in": [
+            "n96"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n103",
+          "in": [
+            "n97",
+            "n98",
+            "n99",
+            "n100",
+            "n101",
+            "n102"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n104",
+          "attrs": {
+            "field": "root_quat",
+            "step": -4
+          }
+        },
+        {
+          "op": "QuatMul",
+          "out": "n105",
+          "in": [
+            "n33",
+            "n104"
+          ]
+        },
+        {
+          "op": "QuatToRot6d",
+          "out": "n106",
+          "in": [
+            "n105"
+          ]
+        },
+        {
+          "op": "Index",
+          "out": "n107",
+          "in": [
+            "n106"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n108",
+          "in": [
+            "n106"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n109",
+          "in": [
+            "n106"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n110",
+          "in": [
+            "n106"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n111",
+          "in": [
+            "n106"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n112",
+          "in": [
+            "n106"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n113",
+          "in": [
+            "n107",
+            "n108",
+            "n109",
+            "n110",
+            "n111",
+            "n112"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n114",
+          "attrs": {
+            "field": "root_quat",
+            "step": -8
+          }
+        },
+        {
+          "op": "QuatMul",
+          "out": "n115",
+          "in": [
+            "n33",
+            "n114"
+          ]
+        },
+        {
+          "op": "QuatToRot6d",
+          "out": "n116",
+          "in": [
+            "n115"
+          ]
+        },
+        {
+          "op": "Index",
+          "out": "n117",
+          "in": [
+            "n116"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n118",
+          "in": [
+            "n116"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n119",
+          "in": [
+            "n116"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n120",
+          "in": [
+            "n116"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n121",
+          "in": [
+            "n116"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n122",
+          "in": [
+            "n116"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n123",
+          "in": [
+            "n117",
+            "n118",
+            "n119",
+            "n120",
+            "n121",
+            "n122"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n124",
+          "attrs": {
+            "field": "root_quat",
+            "step": -12
+          }
+        },
+        {
+          "op": "QuatMul",
+          "out": "n125",
+          "in": [
+            "n33",
+            "n124"
+          ]
+        },
+        {
+          "op": "QuatToRot6d",
+          "out": "n126",
+          "in": [
+            "n125"
+          ]
+        },
+        {
+          "op": "Index",
+          "out": "n127",
+          "in": [
+            "n126"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n128",
+          "in": [
+            "n126"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n129",
+          "in": [
+            "n126"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n130",
+          "in": [
+            "n126"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n131",
+          "in": [
+            "n126"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n132",
+          "in": [
+            "n126"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n133",
+          "in": [
+            "n127",
+            "n128",
+            "n129",
+            "n130",
+            "n131",
+            "n132"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n134",
+          "attrs": {
+            "field": "root_quat",
+            "step": -16
+          }
+        },
+        {
+          "op": "QuatMul",
+          "out": "n135",
+          "in": [
+            "n33",
+            "n134"
+          ]
+        },
+        {
+          "op": "QuatToRot6d",
+          "out": "n136",
+          "in": [
+            "n135"
+          ]
+        },
+        {
+          "op": "Index",
+          "out": "n137",
+          "in": [
+            "n136"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n138",
+          "in": [
+            "n136"
+          ],
+          "attrs": {
+            "i": 2
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n139",
+          "in": [
+            "n136"
+          ],
+          "attrs": {
+            "i": 4
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n140",
+          "in": [
+            "n136"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n141",
+          "in": [
+            "n136"
+          ],
+          "attrs": {
+            "i": 3
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n142",
+          "in": [
+            "n136"
+          ],
+          "attrs": {
+            "i": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n143",
+          "in": [
+            "n137",
+            "n138",
+            "n139",
+            "n140",
+            "n141",
+            "n142"
+          ]
+        },
+        {
+          "op": "Concat",
+          "out": "n144",
           "in": [
             "n4",
             "n7",
@@ -553,33 +1345,33 @@
             "n25",
             "n28",
             "n31",
-            "n36",
-            "n39",
-            "n42",
-            "n45",
-            "n48",
-            "n51",
-            "n54",
-            "n57",
-            "n60",
+            "n43",
+            "n53",
             "n63",
-            "n66"
+            "n73",
+            "n83",
+            "n93",
+            "n103",
+            "n113",
+            "n123",
+            "n133",
+            "n143"
           ]
         },
         {
           "op": "TrackingIsReady",
-          "out": "n68"
+          "out": "n145"
         },
         {
           "op": "Mul",
-          "out": "n69",
+          "out": "n146",
           "in": [
-            "n67",
-            "n68"
+            "n144",
+            "n145"
           ]
         }
       ],
-      "output": "n69"
+      "output": "n146"
     },
     "gentle_humanoid_target_joint_pos": {
       "kind": "observation",
@@ -1162,32 +1954,32 @@
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Mul",
           "out": "n3",
           "in": [
+            "n2",
             "n2"
           ]
         },
         {
-          "op": "TrackingRefField",
+          "op": "Sum",
           "out": "n4",
-          "attrs": {
-            "field": "root_quat",
-            "step": 1
-          }
-        },
-        {
-          "op": "QuatApplyInv",
-          "out": "n5",
           "in": [
-            "n4",
-            "n1"
+            "n3"
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Sqrt",
+          "out": "n5",
+          "in": [
+            "n4"
+          ]
+        },
+        {
+          "op": "Div",
           "out": "n6",
           "in": [
+            "n2",
             "n5"
           ]
         },
@@ -1196,7 +1988,7 @@
           "out": "n7",
           "attrs": {
             "field": "root_quat",
-            "step": 2
+            "step": 1
           }
         },
         {
@@ -1208,32 +2000,32 @@
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Mul",
           "out": "n9",
           "in": [
+            "n8",
             "n8"
           ]
         },
         {
-          "op": "TrackingRefField",
+          "op": "Sum",
           "out": "n10",
-          "attrs": {
-            "field": "root_quat",
-            "step": 3
-          }
-        },
-        {
-          "op": "QuatApplyInv",
-          "out": "n11",
           "in": [
-            "n10",
-            "n1"
+            "n9"
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Sqrt",
+          "out": "n11",
+          "in": [
+            "n10"
+          ]
+        },
+        {
+          "op": "Div",
           "out": "n12",
           "in": [
+            "n8",
             "n11"
           ]
         },
@@ -1242,7 +2034,7 @@
           "out": "n13",
           "attrs": {
             "field": "root_quat",
-            "step": 4
+            "step": 2
           }
         },
         {
@@ -1254,32 +2046,32 @@
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Mul",
           "out": "n15",
           "in": [
+            "n14",
             "n14"
           ]
         },
         {
-          "op": "TrackingRefField",
+          "op": "Sum",
           "out": "n16",
-          "attrs": {
-            "field": "root_quat",
-            "step": -1
-          }
-        },
-        {
-          "op": "QuatApplyInv",
-          "out": "n17",
           "in": [
-            "n16",
-            "n1"
+            "n15"
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Sqrt",
+          "out": "n17",
+          "in": [
+            "n16"
+          ]
+        },
+        {
+          "op": "Div",
           "out": "n18",
           "in": [
+            "n14",
             "n17"
           ]
         },
@@ -1288,7 +2080,7 @@
           "out": "n19",
           "attrs": {
             "field": "root_quat",
-            "step": -2
+            "step": 3
           }
         },
         {
@@ -1300,32 +2092,32 @@
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Mul",
           "out": "n21",
           "in": [
+            "n20",
             "n20"
           ]
         },
         {
-          "op": "TrackingRefField",
+          "op": "Sum",
           "out": "n22",
-          "attrs": {
-            "field": "root_quat",
-            "step": -4
-          }
-        },
-        {
-          "op": "QuatApplyInv",
-          "out": "n23",
           "in": [
-            "n22",
-            "n1"
+            "n21"
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Sqrt",
+          "out": "n23",
+          "in": [
+            "n22"
+          ]
+        },
+        {
+          "op": "Div",
           "out": "n24",
           "in": [
+            "n20",
             "n23"
           ]
         },
@@ -1334,7 +2126,7 @@
           "out": "n25",
           "attrs": {
             "field": "root_quat",
-            "step": -8
+            "step": 4
           }
         },
         {
@@ -1346,32 +2138,32 @@
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Mul",
           "out": "n27",
           "in": [
+            "n26",
             "n26"
           ]
         },
         {
-          "op": "TrackingRefField",
+          "op": "Sum",
           "out": "n28",
-          "attrs": {
-            "field": "root_quat",
-            "step": -12
-          }
-        },
-        {
-          "op": "QuatApplyInv",
-          "out": "n29",
           "in": [
-            "n28",
-            "n1"
+            "n27"
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Sqrt",
+          "out": "n29",
+          "in": [
+            "n28"
+          ]
+        },
+        {
+          "op": "Div",
           "out": "n30",
           "in": [
+            "n26",
             "n29"
           ]
         },
@@ -1380,7 +2172,7 @@
           "out": "n31",
           "attrs": {
             "field": "root_quat",
-            "step": -16
+            "step": -1
           }
         },
         {
@@ -1392,43 +2184,296 @@
           ]
         },
         {
-          "op": "Normalize",
+          "op": "Mul",
           "out": "n33",
           "in": [
+            "n32",
             "n32"
           ]
         },
         {
-          "op": "Concat",
+          "op": "Sum",
           "out": "n34",
           "in": [
-            "n3",
-            "n6",
-            "n9",
-            "n12",
-            "n15",
-            "n18",
-            "n21",
-            "n24",
-            "n27",
-            "n30",
             "n33"
           ]
         },
         {
-          "op": "TrackingIsReady",
-          "out": "n35"
+          "op": "Sqrt",
+          "out": "n35",
+          "in": [
+            "n34"
+          ]
+        },
+        {
+          "op": "Div",
+          "out": "n36",
+          "in": [
+            "n32",
+            "n35"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n37",
+          "attrs": {
+            "field": "root_quat",
+            "step": -2
+          }
+        },
+        {
+          "op": "QuatApplyInv",
+          "out": "n38",
+          "in": [
+            "n37",
+            "n1"
+          ]
         },
         {
           "op": "Mul",
-          "out": "n36",
+          "out": "n39",
           "in": [
-            "n34",
-            "n35"
+            "n38",
+            "n38"
+          ]
+        },
+        {
+          "op": "Sum",
+          "out": "n40",
+          "in": [
+            "n39"
+          ]
+        },
+        {
+          "op": "Sqrt",
+          "out": "n41",
+          "in": [
+            "n40"
+          ]
+        },
+        {
+          "op": "Div",
+          "out": "n42",
+          "in": [
+            "n38",
+            "n41"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n43",
+          "attrs": {
+            "field": "root_quat",
+            "step": -4
+          }
+        },
+        {
+          "op": "QuatApplyInv",
+          "out": "n44",
+          "in": [
+            "n43",
+            "n1"
+          ]
+        },
+        {
+          "op": "Mul",
+          "out": "n45",
+          "in": [
+            "n44",
+            "n44"
+          ]
+        },
+        {
+          "op": "Sum",
+          "out": "n46",
+          "in": [
+            "n45"
+          ]
+        },
+        {
+          "op": "Sqrt",
+          "out": "n47",
+          "in": [
+            "n46"
+          ]
+        },
+        {
+          "op": "Div",
+          "out": "n48",
+          "in": [
+            "n44",
+            "n47"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n49",
+          "attrs": {
+            "field": "root_quat",
+            "step": -8
+          }
+        },
+        {
+          "op": "QuatApplyInv",
+          "out": "n50",
+          "in": [
+            "n49",
+            "n1"
+          ]
+        },
+        {
+          "op": "Mul",
+          "out": "n51",
+          "in": [
+            "n50",
+            "n50"
+          ]
+        },
+        {
+          "op": "Sum",
+          "out": "n52",
+          "in": [
+            "n51"
+          ]
+        },
+        {
+          "op": "Sqrt",
+          "out": "n53",
+          "in": [
+            "n52"
+          ]
+        },
+        {
+          "op": "Div",
+          "out": "n54",
+          "in": [
+            "n50",
+            "n53"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n55",
+          "attrs": {
+            "field": "root_quat",
+            "step": -12
+          }
+        },
+        {
+          "op": "QuatApplyInv",
+          "out": "n56",
+          "in": [
+            "n55",
+            "n1"
+          ]
+        },
+        {
+          "op": "Mul",
+          "out": "n57",
+          "in": [
+            "n56",
+            "n56"
+          ]
+        },
+        {
+          "op": "Sum",
+          "out": "n58",
+          "in": [
+            "n57"
+          ]
+        },
+        {
+          "op": "Sqrt",
+          "out": "n59",
+          "in": [
+            "n58"
+          ]
+        },
+        {
+          "op": "Div",
+          "out": "n60",
+          "in": [
+            "n56",
+            "n59"
+          ]
+        },
+        {
+          "op": "TrackingRefField",
+          "out": "n61",
+          "attrs": {
+            "field": "root_quat",
+            "step": -16
+          }
+        },
+        {
+          "op": "QuatApplyInv",
+          "out": "n62",
+          "in": [
+            "n61",
+            "n1"
+          ]
+        },
+        {
+          "op": "Mul",
+          "out": "n63",
+          "in": [
+            "n62",
+            "n62"
+          ]
+        },
+        {
+          "op": "Sum",
+          "out": "n64",
+          "in": [
+            "n63"
+          ]
+        },
+        {
+          "op": "Sqrt",
+          "out": "n65",
+          "in": [
+            "n64"
+          ]
+        },
+        {
+          "op": "Div",
+          "out": "n66",
+          "in": [
+            "n62",
+            "n65"
+          ]
+        },
+        {
+          "op": "Concat",
+          "out": "n67",
+          "in": [
+            "n6",
+            "n12",
+            "n18",
+            "n24",
+            "n30",
+            "n36",
+            "n42",
+            "n48",
+            "n54",
+            "n60",
+            "n66"
+          ]
+        },
+        {
+          "op": "TrackingIsReady",
+          "out": "n68"
+        },
+        {
+          "op": "Mul",
+          "out": "n69",
+          "in": [
+            "n67",
+            "n68"
           ]
         }
       ],
-      "output": "n36"
+      "output": "n69"
     }
   }
 }

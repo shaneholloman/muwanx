@@ -67,6 +67,12 @@ class NodeRef:
     def __rmul__(self, other: NodeRef | float) -> NodeRef:
         return _binary("Mul", other, self)
 
+    def __truediv__(self, other: NodeRef | float) -> NodeRef:
+        return _binary("Div", self, other)
+
+    def __rtruediv__(self, other: NodeRef | float) -> NodeRef:
+        return _binary("Div", other, self)
+
     def __neg__(self) -> NodeRef:
         return NodeRef(Node(op="Neg", inputs=[self._node]))
 

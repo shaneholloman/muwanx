@@ -82,33 +82,6 @@ export function quatToRot6d(quat: ArrayLike<number>): number[] {
   return [r00, r01, r10, r11, r20, r21];
 }
 
-/**
- * Column-major rot6d: the first two rotation-matrix columns flattened
- * column-by-column, `[r00, r10, r20, r01, r11, r21]`.  This is the ordering
- * some policies (e.g. the Gentle Humanoid tracking obs) were trained against,
- * distinct from {@link quatToRot6d}'s row-major flattening — same six numbers,
- * different order.
- */
-export function quatToRot6dColumns(quat: ArrayLike<number>): number[] {
-  const [w, x, y, z] = normalizeQuat(quat);
-  const xx = x * x;
-  const yy = y * y;
-  const zz = z * z;
-  const xy = x * y;
-  const xz = x * z;
-  const yz = y * z;
-  const wx = w * x;
-  const wy = w * y;
-  const wz = w * z;
-  const r00 = 1.0 - 2.0 * (yy + zz);
-  const r01 = 2.0 * (xy - wz);
-  const r10 = 2.0 * (xy + wz);
-  const r11 = 1.0 - 2.0 * (xx + zz);
-  const r20 = 2.0 * (xz - wy);
-  const r21 = 2.0 * (yz + wx);
-  return [r00, r10, r20, r01, r11, r21];
-}
-
 export function clampFutureIndices(
   base: number,
   steps: number[],
