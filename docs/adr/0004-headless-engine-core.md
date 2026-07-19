@@ -375,6 +375,8 @@ to the engine; once merged and released, upload against that supported engine ve
 Cloud stays **declarative-only** — but "declarative" is made expressive enough (option B
 below) that the restriction is rarely felt.
 
+> **Re-examined and reaffirmed (0.8.x).** This trusted-only / declarative-only policy was re-tested against a "sandbox arbitrary TS in Cloud, like CodePen" alternative. Because `ts_src` runs client-side (in a *viewer's* browser, this realm), the real threat is XSS-class, not server RCE — so the CodePen analogy applies, but adopting it means inheriting CodePen's *permanent* isolation burden (separate origin + iframe sandbox + CSP + resource limits), which the effect-free/declarative path avoids by construction. See [ADR 0003 Addendum](0003-declarative-mdp-terms-alongside-custom-js.md#addendum-08x--security-rationale-re-examined-primitives-extended-commands-stay-class-based) for the full analysis, the primitive additions that widened the declarative surface, and the decision not to add a `DslCommand`.
+
 **Future menu (recorded, not built now) — if Cloud should accept more without a PR:**
 
 - **A — ocap execution of effect-free code.** Compile the author term to a **no-import
