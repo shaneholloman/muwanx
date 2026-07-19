@@ -175,18 +175,24 @@ describe('Gentle Humanoid tracking obs: declarative graph == bespoke class', () 
     });
   }
 
+  const TRACKING_OBS = [
+    'gentle_humanoid_tracking',
+    'gentle_humanoid_target_joint_pos',
+    'gentle_humanoid_target_root_z',
+    'gentle_humanoid_target_projected_gravity',
+  ];
+
   it('not-ready term → exact zeros (matches bespoke short-circuit)', () => {
     const t = makeTerm(10, refLen, nJoints, false);
     const ctx = makeCtx(t, state, nJoints);
-    for (const name of Object.keys(GRAPHS)) {
-      const out = evalObs(name, ctx);
-      expect(out.every((v) => v === 0)).toBe(true);
+    for (const name of TRACKING_OBS) {
+      expect(evalObs(name, ctx).every((v) => v === 0)).toBe(true);
     }
   });
 
   it('no motion command → exact zeros', () => {
     const ctx = makeCtx(null, state, nJoints);
-    for (const name of Object.keys(GRAPHS)) {
+    for (const name of TRACKING_OBS) {
       expect(evalObs(name, ctx).every((v) => v === 0)).toBe(true);
     }
   });
@@ -215,6 +221,12 @@ describe('new DSL primitives', () => {
     expectClose(got, new Float32Array([0.6, 0, 0.8]), 1e-6);
   });
 
+  it('Slice extracts a contiguous sub-range', () => {
+    const v = new Float32Array([10, 11, 12, 13, 14, 15]);
+    const got = Primitives.Slice([v], { start: 2, len: 3 }, ctxWith(null), {}) as Float32Array;
+    expectClose(got, new Float32Array([12, 13, 14]), 1e-6);
+  });
+
   it('TrackingRefField reads the clamped frame and falls back safely', () => {
     const t = makeTerm(0, 4, 3);
     const ctx = ctxWith(t);
@@ -231,5 +243,105 @@ describe('new DSL primitives', () => {
     expect(Primitives.TrackingIsReady([], {}, ctxWith(makeTerm(0, 4, 3, true)), {})).toBe(1);
     expect(Primitives.TrackingIsReady([], {}, ctxWith(makeTerm(0, 4, 3, false)), {})).toBe(0);
     expect(Primitives.TrackingIsReady([], {}, ctxWith(null), {})).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('Gentle Humanoid proprioceptive obs (Slice C): declarative == bespoke', () => {
+  const HISTORY_STEPS: number[] = fixture.history_steps;
+  const NUM_JOINTS: number = fixture.num_joints;
+  const PREV_STEPS: number = fixture.prev_action_steps;
+
+  interface FullState {
+    rootAngVel: Float32Array;
+    rootQuat: Float32Array;
+    jointPos: Float32Array;
+    jointVel: Float32Array;
+    lastActions: Float32Array;
+  }
+
+  function stateAt(t: number): FullState {
+    const r = lcg(1000 + t);
+    const vec = (n: number) => new Float32Array(Array.from({ length: n }, () => r() * 2 - 1));
+    return {
+      rootAngVel: vec(3),
+      rootQuat: vec(4),
+      jointPos: vec(NUM_JOINTS),
+      jointVel: vec(NUM_JOINTS),
+      lastActions: vec(NUM_JOINTS),
+    };
+  }
+
+  function ctxOf(s: FullState): EvalContext {
+    const runner = {
+      getContext: () => ({ commandManager: { getTerm: () => null, getCommand: () => null } }),
+      getNumActions: () => NUM_JOINTS,
+      getLastActions: () => s.lastActions,
+    };
+    return { runner, state: s, params: {} } as unknown as EvalContext;
+  }
+
+  // Feed a state sequence through one graph, accumulating stateful History.
+  function evalSequence(name: string, seq: FullState[]): Float32Array {
+    const store = new NodeStateStore();
+    let out: unknown = new Float32Array(0);
+    for (const s of seq) out = evaluateGraph(GRAPHS[name] as never, ctxOf(s), store);
+    return out as Float32Array;
+  }
+
+  // Bespoke HistoryObservation: reset fills with seq[0], then one update/step.
+  function refHistory(current: (s: FullState) => Float32Array, offsets: number[], seq: FullState[]): Float32Array {
+    const maxStep = Math.max(...offsets);
+    const buf: Float32Array[] = Array.from({ length: maxStep + 1 }, () => current(seq[0]));
+    for (let t = 1; t < seq.length; t++) {
+      for (let i = buf.length - 1; i > 0; i--) buf[i] = buf[i - 1];
+      buf[0] = current(seq[t]);
+    }
+    const out: number[] = [];
+    for (const o of offsets) out.push(...buf[Math.min(o, buf.length - 1)]);
+    return Float32Array.from(out);
+  }
+
+  const seq = Array.from({ length: 25 }, (_v, t) => stateAt(t));
+
+  it('boot → [0]', () => {
+    expect(Array.from(evalSequence('gentle_humanoid_boot', seq.slice(0, 1)))).toEqual([0]);
+  });
+
+  it('compliance = [enabled, enabled*force, enabled*force/0.05]', () => {
+    for (const cmd of [new Float32Array([1, 15]), new Float32Array([0, 12]), new Float32Array([1, 20])]) {
+      const runner = {
+        getContext: () => ({
+          commandManager: { getTerm: () => null, getCommand: (n: string) => (n === 'compliance' ? cmd : null) },
+        }),
+        getNumActions: () => NUM_JOINTS,
+        getLastActions: () => new Float32Array(NUM_JOINTS),
+      };
+      const ctx = { runner, state: {}, params: {} } as unknown as EvalContext;
+      const got = evaluateGraph(GRAPHS['gentle_humanoid_compliance'] as never, ctx, new NodeStateStore()) as Float32Array;
+      const enabled = cmd[0] >= 0.5 ? 1 : 0;
+      expectClose(got, new Float32Array([enabled, enabled * cmd[1], (enabled * cmd[1]) / 0.05]));
+    }
+  });
+
+  it('root_ang_vel sparse history', () => {
+    expectClose(evalSequence('gentle_humanoid_root_ang_vel', seq), refHistory((s) => s.rootAngVel, HISTORY_STEPS, seq));
+  });
+
+  it('projected_gravity sparse history (normalized)', () => {
+    expectClose(
+      evalSequence('gentle_humanoid_projected_gravity', seq),
+      refHistory((s) => Float32Array.from(normalizeGravity(s.rootQuat)), HISTORY_STEPS, seq),
+    );
+  });
+
+  it('joint_pos / joint_vel sparse history', () => {
+    expectClose(evalSequence('gentle_humanoid_joint_pos', seq), refHistory((s) => s.jointPos, HISTORY_STEPS, seq));
+    expectClose(evalSequence('gentle_humanoid_joint_vel', seq), refHistory((s) => s.jointVel, HISTORY_STEPS, seq));
+  });
+
+  it('prev_actions contiguous history', () => {
+    const offsets = Array.from({ length: PREV_STEPS }, (_v, i) => i);
+    expectClose(evalSequence('gentle_humanoid_prev_actions', seq), refHistory((s) => s.lastActions, offsets, seq));
   });
 });

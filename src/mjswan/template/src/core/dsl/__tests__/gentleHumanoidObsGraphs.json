@@ -12,6 +12,19 @@
     -12,
     -16
   ],
+  "history_steps": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    8,
+    12,
+    16,
+    20
+  ],
+  "num_joints": 5,
+  "prev_action_steps": 8,
   "graphs": {
     "gentle_humanoid_tracking": {
       "kind": "observation",
@@ -2474,6 +2487,733 @@
         }
       ],
       "output": "n69"
+    },
+    "gentle_humanoid_boot": {
+      "kind": "observation",
+      "nodes": [
+        {
+          "op": "ConstVec",
+          "out": "n0",
+          "attrs": {
+            "values": [
+              0.0
+            ]
+          }
+        }
+      ],
+      "output": "n0"
+    },
+    "gentle_humanoid_compliance": {
+      "kind": "observation",
+      "nodes": [
+        {
+          "op": "CommandValue",
+          "out": "n0",
+          "attrs": {
+            "command": "compliance"
+          }
+        },
+        {
+          "op": "Index",
+          "out": "n1",
+          "in": [
+            "n0"
+          ],
+          "attrs": {
+            "i": 0
+          }
+        },
+        {
+          "op": "Const",
+          "out": "n2",
+          "attrs": {
+            "value": 0.5
+          }
+        },
+        {
+          "op": "Ge",
+          "out": "n3",
+          "in": [
+            "n1",
+            "n2"
+          ]
+        },
+        {
+          "op": "Const",
+          "out": "n4",
+          "attrs": {
+            "value": 1.0
+          }
+        },
+        {
+          "op": "Mul",
+          "out": "n5",
+          "in": [
+            "n3",
+            "n4"
+          ]
+        },
+        {
+          "op": "Index",
+          "out": "n6",
+          "in": [
+            "n0"
+          ],
+          "attrs": {
+            "i": 1
+          }
+        },
+        {
+          "op": "Mul",
+          "out": "n7",
+          "in": [
+            "n5",
+            "n6"
+          ]
+        },
+        {
+          "op": "Const",
+          "out": "n8",
+          "attrs": {
+            "value": 0.05
+          }
+        },
+        {
+          "op": "Div",
+          "out": "n9",
+          "in": [
+            "n7",
+            "n8"
+          ]
+        },
+        {
+          "op": "Concat",
+          "out": "n10",
+          "in": [
+            "n5",
+            "n7",
+            "n9"
+          ]
+        }
+      ],
+      "output": "n10"
+    },
+    "gentle_humanoid_root_ang_vel": {
+      "kind": "observation",
+      "nodes": [
+        {
+          "op": "RootAngVelB",
+          "out": "n0",
+          "attrs": {
+            "entity": "robot"
+          }
+        },
+        {
+          "op": "History",
+          "out": "n1",
+          "in": [
+            "n0"
+          ],
+          "attrs": {
+            "steps": 21
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n2",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 0,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n3",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 3,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n4",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 6,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n5",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 9,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n6",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 12,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n7",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 24,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n8",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 36,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n9",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 48,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n10",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 60,
+            "len": 3
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n11",
+          "in": [
+            "n2",
+            "n3",
+            "n4",
+            "n5",
+            "n6",
+            "n7",
+            "n8",
+            "n9",
+            "n10"
+          ]
+        }
+      ],
+      "output": "n11"
+    },
+    "gentle_humanoid_projected_gravity": {
+      "kind": "observation",
+      "nodes": [
+        {
+          "op": "RootLinkQuatW",
+          "out": "n0",
+          "attrs": {
+            "entity": "robot"
+          }
+        },
+        {
+          "op": "ConstVec",
+          "out": "n1",
+          "attrs": {
+            "values": [
+              0.0,
+              0.0,
+              -1.0
+            ]
+          }
+        },
+        {
+          "op": "QuatApplyInv",
+          "out": "n2",
+          "in": [
+            "n0",
+            "n1"
+          ]
+        },
+        {
+          "op": "Mul",
+          "out": "n3",
+          "in": [
+            "n2",
+            "n2"
+          ]
+        },
+        {
+          "op": "Sum",
+          "out": "n4",
+          "in": [
+            "n3"
+          ]
+        },
+        {
+          "op": "Sqrt",
+          "out": "n5",
+          "in": [
+            "n4"
+          ]
+        },
+        {
+          "op": "Div",
+          "out": "n6",
+          "in": [
+            "n2",
+            "n5"
+          ]
+        },
+        {
+          "op": "History",
+          "out": "n7",
+          "in": [
+            "n6"
+          ],
+          "attrs": {
+            "steps": 21
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n8",
+          "in": [
+            "n7"
+          ],
+          "attrs": {
+            "start": 0,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n9",
+          "in": [
+            "n7"
+          ],
+          "attrs": {
+            "start": 3,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n10",
+          "in": [
+            "n7"
+          ],
+          "attrs": {
+            "start": 6,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n11",
+          "in": [
+            "n7"
+          ],
+          "attrs": {
+            "start": 9,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n12",
+          "in": [
+            "n7"
+          ],
+          "attrs": {
+            "start": 12,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n13",
+          "in": [
+            "n7"
+          ],
+          "attrs": {
+            "start": 24,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n14",
+          "in": [
+            "n7"
+          ],
+          "attrs": {
+            "start": 36,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n15",
+          "in": [
+            "n7"
+          ],
+          "attrs": {
+            "start": 48,
+            "len": 3
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n16",
+          "in": [
+            "n7"
+          ],
+          "attrs": {
+            "start": 60,
+            "len": 3
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n17",
+          "in": [
+            "n8",
+            "n9",
+            "n10",
+            "n11",
+            "n12",
+            "n13",
+            "n14",
+            "n15",
+            "n16"
+          ]
+        }
+      ],
+      "output": "n17"
+    },
+    "gentle_humanoid_joint_pos": {
+      "kind": "observation",
+      "nodes": [
+        {
+          "op": "JointPos",
+          "out": "n0",
+          "attrs": {
+            "entity": "robot"
+          }
+        },
+        {
+          "op": "History",
+          "out": "n1",
+          "in": [
+            "n0"
+          ],
+          "attrs": {
+            "steps": 21
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n2",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 0,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n3",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 5,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n4",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 10,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n5",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 15,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n6",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 20,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n7",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 40,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n8",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 60,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n9",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 80,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n10",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 100,
+            "len": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n11",
+          "in": [
+            "n2",
+            "n3",
+            "n4",
+            "n5",
+            "n6",
+            "n7",
+            "n8",
+            "n9",
+            "n10"
+          ]
+        }
+      ],
+      "output": "n11"
+    },
+    "gentle_humanoid_joint_vel": {
+      "kind": "observation",
+      "nodes": [
+        {
+          "op": "JointVel",
+          "out": "n0",
+          "attrs": {
+            "entity": "robot"
+          }
+        },
+        {
+          "op": "History",
+          "out": "n1",
+          "in": [
+            "n0"
+          ],
+          "attrs": {
+            "steps": 21
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n2",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 0,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n3",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 5,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n4",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 10,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n5",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 15,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n6",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 20,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n7",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 40,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n8",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 60,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n9",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 80,
+            "len": 5
+          }
+        },
+        {
+          "op": "Slice",
+          "out": "n10",
+          "in": [
+            "n1"
+          ],
+          "attrs": {
+            "start": 100,
+            "len": 5
+          }
+        },
+        {
+          "op": "Concat",
+          "out": "n11",
+          "in": [
+            "n2",
+            "n3",
+            "n4",
+            "n5",
+            "n6",
+            "n7",
+            "n8",
+            "n9",
+            "n10"
+          ]
+        }
+      ],
+      "output": "n11"
+    },
+    "gentle_humanoid_prev_actions": {
+      "kind": "observation",
+      "nodes": [
+        {
+          "op": "PrevAction",
+          "out": "n0"
+        },
+        {
+          "op": "History",
+          "out": "n1",
+          "in": [
+            "n0"
+          ],
+          "attrs": {
+            "steps": 8
+          }
+        }
+      ],
+      "output": "n1"
     }
   }
 }

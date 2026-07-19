@@ -1,16 +1,12 @@
-"""The Gentle Humanoid tracking observations trace to declarative graphs (#79).
+"""The Gentle Humanoid observations trace to declarative graphs (#79).
 
-These four terms previously required custom TypeScript because they read the
-motion command's private reference buffers.  They are now composition graphs
-over the `TrackingRefField` source; this test pins their traced structure and
-keeps the shared golden fixture (consumed by the TS equivalence test) current.
+All eleven obs are now composition graphs (Slice B: the four command-coupled
+terms; Slice C: boot / compliance / the four proprioceptive histories /
+prev_actions).  This pins their traced structure and keeps the shared golden
+fixture (consumed by the TS byte-equivalence test) current.
 
 Regenerate the fixture after an intentional builder change:
-    uv run python -c "import json; from mjswan.dsl import trace_observation; \
-from examples.demo.gentle_humanoid.dsl_terms import BUILDERS; \
-s=[0,1,2,3,4,-1,-2,-4,-8,-12,-16]; \
-json.dump({'future_steps': s, 'graphs': {n: trace_observation(f, {'future_steps': s}) \
-for n,f in BUILDERS.items()}}, open('src/mjswan/template/src/core/dsl/__tests__/gentleHumanoidObsGraphs.json','w'), indent=2)"
+    uv run python -m tests.test_gentle_humanoid_obs
 """
 
 from __future__ import annotations
@@ -27,53 +23,97 @@ _GOLDEN = (
     / "src/mjswan/template/src/core/dsl/__tests__/gentleHumanoidObsGraphs.json"
 )
 
+FUTURE_STEPS = [0, 1, 2, 3, 4, -1, -2, -4, -8, -12, -16]
+HISTORY_STEPS = [0, 1, 2, 3, 4, 8, 12, 16, 20]
+NUM_JOINTS = 5
+
+# Trace-time params per obs (a small NUM_JOINTS keeps the fixture readable).
+PARAMS: dict[str, dict] = {
+    "gentle_humanoid_tracking": {"future_steps": FUTURE_STEPS},
+    "gentle_humanoid_target_joint_pos": {
+        "future_steps": FUTURE_STEPS,
+        "num_joints": NUM_JOINTS,
+    },
+    "gentle_humanoid_target_root_z": {"future_steps": FUTURE_STEPS},
+    "gentle_humanoid_target_projected_gravity": {"future_steps": FUTURE_STEPS},
+    "gentle_humanoid_boot": {},
+    "gentle_humanoid_compliance": {"command_name": "compliance"},
+    "gentle_humanoid_root_ang_vel": {"history_steps": HISTORY_STEPS},
+    "gentle_humanoid_projected_gravity": {"history_steps": HISTORY_STEPS},
+    "gentle_humanoid_joint_pos": {
+        "history_steps": HISTORY_STEPS,
+        "num_joints": NUM_JOINTS,
+    },
+    "gentle_humanoid_joint_vel": {
+        "history_steps": HISTORY_STEPS,
+        "num_joints": NUM_JOINTS,
+    },
+    "gentle_humanoid_prev_actions": {"history_steps": 8},
+}
+
+
+def _build_graphs() -> dict:
+    graphs = {
+        name: trace_observation(BUILDERS[name], PARAMS[name]) for name in BUILDERS
+    }
+    return {
+        "future_steps": FUTURE_STEPS,
+        "history_steps": HISTORY_STEPS,
+        "num_joints": NUM_JOINTS,
+        "prev_action_steps": PARAMS["gentle_humanoid_prev_actions"]["history_steps"],
+        "graphs": graphs,
+    }
+
 
 def _golden() -> dict:
     return json.loads(_GOLDEN.read_text())
 
 
+def test_all_eleven_obs_have_params():
+    assert set(BUILDERS) == set(PARAMS)
+
+
 def test_builders_trace_to_golden_graphs():
     """Traced graphs match the committed fixture the TS test evaluates."""
-    golden = _golden()
-    steps = golden["future_steps"]
-    for name, fn in BUILDERS.items():
-        assert trace_observation(fn, {"future_steps": steps}) == golden["graphs"][name]
+    assert _build_graphs()["graphs"] == _golden()["graphs"]
 
 
-def test_expected_op_structure_and_sizes():
-    """Each term composes the expected ops (and total output width)."""
-    steps = [0, 1, 2, 3, 4, -1, -2, -4, -8, -12, -16]
-    n = len(steps)
-
+def test_slice_c_op_structure():
     def ops(name):
-        g = trace_observation(BUILDERS[name], {"future_steps": steps})
-        return Counter(node["op"] for node in g["nodes"])
+        return Counter(
+            n["op"] for n in trace_observation(BUILDERS[name], PARAMS[name])["nodes"]
+        )
 
-    tracking = ops("gentle_humanoid_tracking")
-    # Column-major rot6d is composed from row-major QuatToRot6d + a 6-way
-    # reindex, not a dedicated op.
-    assert "QuatToRot6dColumns" not in tracking
-    assert tracking["QuatToRot6d"] == n and tracking["Index"] == 6 * n
-    assert tracking["QuatApplyInv"] == n - 1  # pos deltas skip the base frame
-    assert tracking["TrackingIsReady"] == 1 and tracking["Mul"] == 1
+    assert ops("gentle_humanoid_boot") == Counter({"ConstVec": 1})
 
-    joint = ops("gentle_humanoid_target_joint_pos")
-    assert joint["TrackingRefField"] == 2 * n  # targets + diffs
-    assert joint["Sub"] == n and joint["JointPos"] == 1
+    compliance = ops("gentle_humanoid_compliance")
+    assert (
+        compliance["CommandValue"] == 1
+        and compliance["Ge"] == 1
+        and compliance["Div"] == 1
+    )
 
-    root_z = ops("gentle_humanoid_target_root_z")
-    assert root_z["Index"] == n and root_z["TrackingRefField"] == n
+    n = len(HISTORY_STEPS)
+    for name in ("root_ang_vel", "projected_gravity", "joint_pos", "joint_vel"):
+        o = ops(f"gentle_humanoid_{name}")
+        # sparse selection: one History stack, one Slice per look-back offset.
+        assert o["History"] == 1 and o["Slice"] == n and o["Concat"] == 1
 
-    grav = ops("gentle_humanoid_target_projected_gravity")
-    # normalize is composed from Sum/Sqrt/Div, not a dedicated op.
-    assert "Normalize" not in grav
-    assert grav["Sum"] == n and grav["Sqrt"] == n and grav["Div"] == n
-    assert grav["QuatApplyInv"] == n
+    prev = ops("gentle_humanoid_prev_actions")
+    assert prev["PrevAction"] == 1 and prev["History"] == 1 and "Slice" not in prev
 
 
 def test_terms_carry_no_custom_js():
-    """The whole point: these are declarative, not ts_src."""
-    for fn in BUILDERS.values():
-        graph = trace_observation(fn, {"future_steps": [0, 1, -1]})
-        assert graph["kind"] == "observation"
-        assert "name" not in graph  # a ts_src term would serialize {"name": ...}
+    """All eleven are declarative, not ts_src."""
+    for name, params in PARAMS.items():
+        graph = trace_observation(BUILDERS[name], params)
+        assert graph["kind"] == "observation" and "name" not in graph
+
+
+def _regenerate() -> None:
+    _GOLDEN.write_text(json.dumps(_build_graphs(), indent=2) + "\n")
+    print(f"wrote {_GOLDEN}")
+
+
+if __name__ == "__main__":
+    _regenerate()

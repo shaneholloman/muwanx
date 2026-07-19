@@ -257,6 +257,16 @@ export const Primitives: Record<string, Primitive> = {
     return vec[idx] ?? 0;
   },
 
+  // Extract the contiguous sub-range [start, start+len) of a vector.
+  Slice: (inputs, attrs) => {
+    const vec = asVec(inputs[0]);
+    const start = Number(attrs.start ?? 0);
+    const len = Number(attrs.len ?? 0);
+    const out = new Float32Array(len);
+    for (let i = 0; i < len; i++) out[i] = vec[start + i] ?? 0;
+    return out;
+  },
+
   // -- Comparisons (produce Uint8Array for vectors, boolean for scalars) --
   Gt: (inputs) => compare(inputs[0], inputs[1], (a, b) => a > b),
   Lt: (inputs) => compare(inputs[0], inputs[1], (a, b) => a < b),

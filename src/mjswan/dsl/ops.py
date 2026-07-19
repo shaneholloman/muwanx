@@ -247,6 +247,29 @@ def concat(parts: list[NodeRef]) -> NodeRef:
     return NodeRef(Node(op="Concat", inputs=[_as_node(p) for p in parts]))
 
 
+def slice_(v: NodeRef, start: int, length: int) -> NodeRef:
+    """Extract the contiguous sub-range ``[start, start + length)`` of a vector."""
+    return NodeRef(
+        Node(
+            op="Slice",
+            inputs=[_as_node(v)],
+            attrs={"start": int(start), "len": int(length)},
+        )
+    )
+
+
+def history(x: NodeRef, steps: int, *, interleaved: bool = False) -> NodeRef:
+    """Stack the most recent ``steps`` frames of ``x`` (step-major by default).
+
+    A stateful primitive: the interpreter holds the ring buffer per node and
+    clears it on episode reset.  ``interleaved`` lays the stack out joint-major.
+    """
+    attrs: dict[str, object] = {"steps": int(steps)}
+    if interleaved:
+        attrs["interleaved"] = True
+    return NodeRef(Node(op="History", inputs=[_as_node(x)], attrs=attrs))
+
+
 def cos(x: NodeRef) -> NodeRef:
     """Elementwise cosine."""
     return NodeRef(Node(op="Cos", inputs=[_as_node(x)]))

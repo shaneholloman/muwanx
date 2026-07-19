@@ -17,12 +17,7 @@ import mjswan
 from mjswan.envs.mdp.actions import JointPositionActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 
-from .dsl_terms import (
-    gentle_humanoid_target_joint_pos,
-    gentle_humanoid_target_projected_gravity,
-    gentle_humanoid_target_root_z,
-    gentle_humanoid_tracking,
-)
+from .dsl_terms import BUILDERS
 
 HERE = Path(__file__).resolve().parent
 GENTLE_HUMANOID_REPO_URL = os.getenv(
@@ -36,7 +31,6 @@ GENTLE_HUMANOID_REPO_COMMIT = os.getenv(
 GENTLE_HUMANOID_DEP_REPO = HERE / ".dep" / "motion_tracking"
 
 COMMAND_TS = HERE / "commands" / "GentleHumanoidTrackingCommand.ts"
-OBS_TS = HERE / "observations" / "GentleHumanoidObservations.ts"
 
 
 def _run_git(args: list[str], cwd: Path) -> None:
@@ -123,7 +117,9 @@ def _ensure_default_motion_file(tracking_cfg: dict[str, Any]) -> Path:
     return path
 
 
-def _register_gentle_humanoid_extensions() -> dict[str, mjswan.ObservationBinding]:
+def _register_gentle_humanoid_extensions() -> None:
+    # All eleven observations are declarative DSL builders (dsl_terms.py, #79);
+    # only the motion command still needs custom TypeScript.
     mjswan.register_command(
         "GentleHumanoidTrackingCommandCfg",
         mjswan.CommandBinding(
@@ -132,25 +128,6 @@ def _register_gentle_humanoid_extensions() -> dict[str, mjswan.ObservationBindin
             ts_src=str(COMMAND_TS),
         ),
     )
-
-    # The four motion-command-coupled obs are now declarative DSL builders
-    # (see dsl_terms.py, issue #79); only the remaining terms stay ts_src.
-    obs_names = {
-        "boot": "GentleHumanoidBootIndicator",
-        "compliance": "GentleHumanoidComplianceFlagObs",
-        "root_ang_vel": "GentleHumanoidRootAngVelBHistory",
-        "projected_gravity": "GentleHumanoidProjectedGravityBHistory",
-        "joint_pos": "GentleHumanoidJointPosHistory",
-        "joint_vel": "GentleHumanoidJointVelHistory",
-        "prev_actions": "GentleHumanoidPrevActions",
-    }
-    obs_funcs = {
-        key: mjswan.ObservationBinding(ts_name=ts_name, ts_src=str(OBS_TS))
-        for key, ts_name in obs_names.items()
-    }
-    for key, obs_func in obs_funcs.items():
-        mjswan.register_observation(f"gentle_humanoid_{key}", obs_func)
-    return obs_funcs
 
 
 def setup_builder() -> mjswan.Builder:
@@ -164,7 +141,7 @@ def setup_builder() -> mjswan.Builder:
 
     tracking_cfg = _load_yaml(gentle_humanoid_root / "config" / "tracking.yaml")
     controller_cfg = _load_yaml(gentle_humanoid_root / "config" / "controller.yaml")
-    obs_funcs = _register_gentle_humanoid_extensions()
+    _register_gentle_humanoid_extensions()
 
     action_joint_names = list(tracking_cfg["action_joint_names"])
     dataset_joint_names = list(tracking_cfg["dataset_joint_names"])
@@ -256,38 +233,32 @@ def setup_builder() -> mjswan.Builder:
         observations={
             "policy": ObservationGroupCfg(
                 terms={
-                    "boot": ObservationTermCfg(func=obs_funcs["boot"]),
+                    "boot": ObservationTermCfg(func=BUILDERS["gentle_humanoid_boot"]),
                     "tracking": ObservationTermCfg(
-                        func=gentle_humanoid_tracking,
+                        func=BUILDERS["gentle_humanoid_tracking"],
                         params={"future_steps": list(tracking_cfg["future_steps"])},
                     ),
                     "compliance": ObservationTermCfg(
-                        func=obs_funcs["compliance"],
-                        params={
-                            "command_name": "compliance",
-                            "default_enabled": float(
-                                tracking_cfg.get("compliance_flag_value", 1.0)
-                            ),
-                            "default_force": float(default_compliance_force),
-                        },
+                        func=BUILDERS["gentle_humanoid_compliance"],
+                        params={"command_name": "compliance"},
                     ),
                     "target_joint_pos": ObservationTermCfg(
-                        func=gentle_humanoid_target_joint_pos,
+                        func=BUILDERS["gentle_humanoid_target_joint_pos"],
                         params={
                             "future_steps": list(tracking_cfg["future_steps"]),
                             "num_joints": len(action_joint_names),
                         },
                     ),
                     "target_root_z": ObservationTermCfg(
-                        func=gentle_humanoid_target_root_z,
+                        func=BUILDERS["gentle_humanoid_target_root_z"],
                         params={"future_steps": list(tracking_cfg["future_steps"])},
                     ),
                     "target_projected_gravity": ObservationTermCfg(
-                        func=gentle_humanoid_target_projected_gravity,
+                        func=BUILDERS["gentle_humanoid_target_projected_gravity"],
                         params={"future_steps": list(tracking_cfg["future_steps"])},
                     ),
                     "root_ang_vel": ObservationTermCfg(
-                        func=obs_funcs["root_ang_vel"],
+                        func=BUILDERS["gentle_humanoid_root_ang_vel"],
                         params={
                             "history_steps": list(
                                 tracking_cfg["root_angvel_history_steps"]
@@ -295,7 +266,7 @@ def setup_builder() -> mjswan.Builder:
                         },
                     ),
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_funcs["projected_gravity"],
+                        func=BUILDERS["gentle_humanoid_projected_gravity"],
                         params={
                             "history_steps": list(
                                 tracking_cfg["projected_gravity_history_steps"]
@@ -303,7 +274,7 @@ def setup_builder() -> mjswan.Builder:
                         },
                     ),
                     "joint_pos": ObservationTermCfg(
-                        func=obs_funcs["joint_pos"],
+                        func=BUILDERS["gentle_humanoid_joint_pos"],
                         params={
                             "history_steps": list(
                                 tracking_cfg["joint_pos_history_steps"]
@@ -312,7 +283,7 @@ def setup_builder() -> mjswan.Builder:
                         },
                     ),
                     "joint_vel": ObservationTermCfg(
-                        func=obs_funcs["joint_vel"],
+                        func=BUILDERS["gentle_humanoid_joint_vel"],
                         params={
                             "history_steps": list(
                                 tracking_cfg["joint_vel_history_steps"]
@@ -321,7 +292,7 @@ def setup_builder() -> mjswan.Builder:
                         },
                     ),
                     "prev_actions": ObservationTermCfg(
-                        func=obs_funcs["prev_actions"],
+                        func=BUILDERS["gentle_humanoid_prev_actions"],
                         params={
                             "history_steps": int(tracking_cfg["prev_action_steps"])
                         },
