@@ -69,7 +69,7 @@ def gentle_humanoid_target_joint_pos(
     """Reference joint targets over the window, then those minus the current pose."""
     del env
     steps = _steps(future_steps)
-    current = joint_pos(entity=entity_name)  # None -> policy joint vector
+    current = joint_pos(entity=entity_name)
     targets = [tracking_ref_joint_pos(s) for s in steps]
     diffs = [tracking_ref_joint_pos(s) - current for s in steps]
     return concat(targets + diffs) * tracking_is_ready()
