@@ -498,3 +498,81 @@ class TestMigratedEvents:
         ).to_dict()
         assert legacy["name"] == "TaskTsSrcEvent"
         assert "kind" not in legacy
+
+
+class TestAddedOps:
+    """Direct tests for the DSL ops added for composition-graph terms (#79),
+    each exercised on its own rather than through a task's observation."""
+
+    def _root(self):
+        from mjswan.dsl import SymbolicEnv
+
+        return SymbolicEnv().entity("robot").data.root_ang_vel_b
+
+    def test_arithmetic_ops_emit_nodes(self):
+        from mjswan.dsl import div, sqrt, sum_
+
+        v = self._root()
+        assert div(v, 2.0).node.op == "Div"
+        assert sqrt(v).node.op == "Sqrt"
+        assert sum_(v).node.op == "Sum"
+
+    def test_truediv_operator_emits_div(self):
+        v = self._root()
+        assert (v / 2.0).node.op == "Div"
+        assert (2.0 / v).node.op == "Div"
+
+    def test_slice_emits_start_and_len(self):
+        from mjswan.dsl import slice_
+
+        n = slice_(self._root(), 3, 4).node
+        assert n.op == "Slice"
+        assert n.attrs == {"start": 3, "len": 4}
+
+    def test_history_emits_steps(self):
+        from mjswan.dsl import history, prev_action
+
+        assert history(prev_action(), 8).node.attrs == {"steps": 8}
+        assert history(prev_action(), 4, interleaved=True).node.attrs == {
+            "steps": 4,
+            "interleaved": True,
+        }
+
+    def test_tracking_ref_sources(self):
+        from mjswan.dsl import (
+            tracking_is_ready,
+            tracking_ref_joint_pos,
+            tracking_ref_root_pos,
+            tracking_ref_root_quat,
+        )
+
+        assert tracking_ref_root_pos(2).node.attrs == {"field": "root_pos", "step": 2}
+        assert tracking_ref_root_quat(-1).node.attrs == {
+            "field": "root_quat",
+            "step": -1,
+        }
+        assert tracking_ref_joint_pos(0).node.attrs == {"field": "joint_pos", "step": 0}
+        assert tracking_ref_root_pos().node.op == "TrackingRefField"
+        assert tracking_is_ready().node.op == "TrackingIsReady"
+
+    def test_normalize_composes_from_fundamentals(self):
+        # normalize is v / sqrt(sum(v * v)) — a composition, not a dedicated op.
+        from mjswan.dsl import normalize
+
+        def obs(env):
+            return normalize(env.entity("robot").data.root_link_lin_vel_b)
+
+        ops = [n["op"] for n in trace_observation(obs, {})["nodes"]]
+        assert {"Mul", "Sum", "Sqrt", "Div"} <= set(ops)
+        assert "Normalize" not in ops
+
+    def test_quat_to_rot6d_columns_composes_reindex(self):
+        # column-major rot6d = row-major QuatToRot6d reindexed [0,2,4,1,3,5].
+        from mjswan.dsl import quat_to_rot6d_columns
+
+        def obs(env):
+            return quat_to_rot6d_columns(env.entity("robot").data.root_link_quat_w)
+
+        ops = [n["op"] for n in trace_observation(obs, {})["nodes"]]
+        assert "QuatToRot6d" in ops and ops.count("Index") == 6 and "Concat" in ops
+        assert "QuatToRot6dColumns" not in ops
