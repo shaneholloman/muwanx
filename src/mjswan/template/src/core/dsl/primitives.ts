@@ -71,12 +71,8 @@ function trackingTerm(ctx: EvalContext): TrackingSource | null {
   return isTrackingSource(term) && term.isReady() ? (term as TrackingSource) : null;
 }
 
-/**
- * A motion command exposing reference-trajectory buffers (root pose + per-joint
- * targets) at a play cursor.  This is a distinct capability from the anchor-
- * based {@link TrackingSource}; both the built-in `TrackingCommand` and bespoke
- * motion players satisfy it by declaring these public fields.
- */
+/** A motion command exposing reference-trajectory buffers — distinct from the
+ * anchor-based {@link TrackingSource}; built-in and bespoke players declare them. */
 type MotionRefSource = {
   isReady(): boolean;
   refRootPos: Float32Array[];
@@ -498,11 +494,9 @@ export const Primitives: Record<string, Primitive> = {
 
   // -- Motion reference trajectory, sampled at a lookahead offset ----------
   // `field`: 'root_pos' (3) | 'root_quat' (4) | 'joint_pos' (nJoints).
-  // `step`: offset added to the current refIdx, clamped to [0, refLen-1].
-  // When no motion is ready, returns a finite fallback (identity quat / zeros)
-  // so downstream quaternion math stays defined; wrap the term with
-  // `Mul(..., TrackingIsReady)` to zero it out (matches the bespoke
-  // `if (!ready) return zeros`).
+  // `step`: offset added to refIdx, clamped to [0, refLen-1].
+  // Not ready → finite fallback (identity quat / zeros); pair with
+  // `TrackingIsReady` to zero the term out.
   TrackingRefField: (_in, attrs, ctx) => {
     const field = String(attrs.field ?? '');
     const fallback = () =>

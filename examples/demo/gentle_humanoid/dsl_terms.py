@@ -1,14 +1,8 @@
-"""Declarative DSL builders for the Gentle Humanoid tracking observations.
+"""Declarative DSL builders for the Gentle Humanoid observations.
 
-These reproduce the four motion-command-coupled observations that previously
-required custom TypeScript (`GentleHumanoidObservations.ts`).  Each reads the
-active motion command's reference trajectory through the engine's
-`TrackingRefField` source primitive at an 11-point look-ahead window, so the
-term is a pure composition graph (Cloud-safe) rather than author code.
-
-Every term multiplies its result by ``tracking_is_ready()`` to reproduce the
-bespoke ``if (!ready) return zeros`` short-circuit exactly.  See ADR 0003 and
-issue #79.
+Replace the custom ``GentleHumanoidObservations.ts``.  The motion-coupled terms
+read the reference trajectory via ``TrackingRefField`` and are gated by
+``tracking_is_ready()`` to match the bespoke not-ready→zeros short-circuit.
 """
 
 from __future__ import annotations

@@ -89,10 +89,8 @@ def _body_world_npz(
     target_joint_names: list[str],
     fps: float = 50.0,
 ) -> bytes:
-    """Convert a root+dof reference clip to the engine's ``body_world`` motion
-    format (the built-in ``TrackingCommand`` reads this — see ADR 0003/0004,
-    #79).  Joints are reordered source→target (policy) order; the pelvis is the
-    single tracked body; velocities are zeroed (the demo never tracked them).
+    """Convert a root+dof clip to the engine's ``body_world`` format (#79):
+    reorder joints source→policy order, pelvis as the single body, zero velocities.
     """
     n = root_pos.shape[0]
     src_idx = {name: i for i, name in enumerate(source_joint_names)}
