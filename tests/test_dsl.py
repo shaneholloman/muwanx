@@ -31,13 +31,77 @@ class TestSymbolicEnv:
         with pytest.raises(AttributeError, match="Unknown entity data slot"):
             _ = env.entity("robot").data.nonexistent_field
 
-    def test_command_field_access(self):
+    def test_mjlab_root_link_ang_vel_spelling_maps_to_root_ang_vel(self):
+        # Both mjlab spellings resolve to the single engine RootAngVelB op.
         from mjswan.dsl import SymbolicEnv
 
         env = SymbolicEnv()
-        ref = env.command("motion").anchor_pos
-        assert ref.node.op == "CommandField"
-        assert ref.node.attrs == {"command": "motion", "field": "anchor_pos"}
+        assert env.entity("robot").data.root_link_ang_vel_b.node.op == "RootAngVelB"
+        assert env.entity("robot").data.root_ang_vel_b.node.op == "RootAngVelB"
+
+
+class TestControlFlowGuards:
+    """Symbolic values reject truth-testing and iteration (ADR 0003) instead of
+    silently mistracing."""
+
+    def test_bool_over_symbolic_raises(self):
+        from mjswan.dsl import SymbolicEnv
+
+        x = SymbolicEnv().entity("robot").data.root_ang_vel_b
+        with pytest.raises(TypeError, match="truth of a symbolic"):
+            bool(x)  # covers `if x`, `while x`, `x and y`, `not x`
+
+    def test_iter_over_symbolic_raises(self):
+        from mjswan.dsl import SymbolicEnv
+
+        x = SymbolicEnv().entity("robot").data.root_ang_vel_b
+        with pytest.raises(TypeError, match="iterate a symbolic"):
+            for _ in x:  # would otherwise infinite-loop via __getitem__
+                break
+
+
+class TestRegistrySync:
+    """Every primitive op the Python DSL can emit must exist in the engine's
+    TypeScript primitive registry, or a passing build throws at runtime."""
+
+    def _engine_ops(self) -> set[str]:
+        import re
+        from pathlib import Path
+
+        ts = (
+            Path(__file__).resolve().parents[1]
+            / "src/mjswan/template/src/core/dsl/primitives.ts"
+        ).read_text()
+        block = ts[ts.index("export const Primitives") :]
+        block = block[: block.index("\n};")]
+        # Registry entries are `  Name:` at exactly 2-space indent.
+        return set(re.findall(r"^ {2}(\w+):", block, re.MULTILINE))
+
+    def _python_ops(self) -> set[str]:
+        import re
+        from pathlib import Path
+
+        from mjswan.dsl.env import _ENTITY_DATA_SLOTS
+
+        ops = set(_ENTITY_DATA_SLOTS.values())
+        dsl_dir = Path(__file__).resolve().parents[1] / "src/mjswan/dsl"
+        for path in dsl_dir.glob("*.py"):
+            text = path.read_text()
+            ops.update(re.findall(r'Node\(\s*op=["\'](\w+)["\']', text))
+            ops.update(re.findall(r'_binary\(\s*["\'](\w+)["\']', text))
+        return ops
+
+    def test_engine_registry_parse_sane(self):
+        engine = self._engine_ops()
+        assert {"Add", "Concat", "RootAngVelB"} <= engine
+
+    def test_all_python_ops_are_in_engine_registry(self):
+        missing = self._python_ops() - self._engine_ops()
+        assert not missing, (
+            "DSL emits ops absent from primitives.ts "
+            f"({sorted(missing)}). Add them to the engine registry or remove "
+            "them from the Python DSL."
+        )
 
 
 class TestArithmeticTracing:
@@ -434,3 +498,81 @@ class TestMigratedEvents:
         ).to_dict()
         assert legacy["name"] == "TaskTsSrcEvent"
         assert "kind" not in legacy
+
+
+class TestAddedOps:
+    """Direct tests for the DSL ops added for composition-graph terms (#79),
+    each exercised on its own rather than through a task's observation."""
+
+    def _root(self):
+        from mjswan.dsl import SymbolicEnv
+
+        return SymbolicEnv().entity("robot").data.root_ang_vel_b
+
+    def test_arithmetic_ops_emit_nodes(self):
+        from mjswan.dsl import div, sqrt, sum_
+
+        v = self._root()
+        assert div(v, 2.0).node.op == "Div"
+        assert sqrt(v).node.op == "Sqrt"
+        assert sum_(v).node.op == "Sum"
+
+    def test_truediv_operator_emits_div(self):
+        v = self._root()
+        assert (v / 2.0).node.op == "Div"
+        assert (2.0 / v).node.op == "Div"
+
+    def test_slice_emits_start_and_len(self):
+        from mjswan.dsl import slice_
+
+        n = slice_(self._root(), 3, 4).node
+        assert n.op == "Slice"
+        assert n.attrs == {"start": 3, "len": 4}
+
+    def test_history_emits_steps(self):
+        from mjswan.dsl import history, prev_action
+
+        assert history(prev_action(), 8).node.attrs == {"steps": 8}
+        assert history(prev_action(), 4, interleaved=True).node.attrs == {
+            "steps": 4,
+            "interleaved": True,
+        }
+
+    def test_tracking_ref_sources(self):
+        from mjswan.dsl import (
+            tracking_is_ready,
+            tracking_ref_joint_pos,
+            tracking_ref_root_pos,
+            tracking_ref_root_quat,
+        )
+
+        assert tracking_ref_root_pos(2).node.attrs == {"field": "root_pos", "step": 2}
+        assert tracking_ref_root_quat(-1).node.attrs == {
+            "field": "root_quat",
+            "step": -1,
+        }
+        assert tracking_ref_joint_pos(0).node.attrs == {"field": "joint_pos", "step": 0}
+        assert tracking_ref_root_pos().node.op == "TrackingRefField"
+        assert tracking_is_ready().node.op == "TrackingIsReady"
+
+    def test_normalize_composes_from_fundamentals(self):
+        # normalize is v / sqrt(sum(v * v)) — a composition, not a dedicated op.
+        from mjswan.dsl import normalize
+
+        def obs(env):
+            return normalize(env.entity("robot").data.root_link_lin_vel_b)
+
+        ops = [n["op"] for n in trace_observation(obs, {})["nodes"]]
+        assert {"Mul", "Sum", "Sqrt", "Div"} <= set(ops)
+        assert "Normalize" not in ops
+
+    def test_quat_to_rot6d_columns_composes_reindex(self):
+        # column-major rot6d = row-major QuatToRot6d reindexed [0,2,4,1,3,5].
+        from mjswan.dsl import quat_to_rot6d_columns
+
+        def obs(env):
+            return quat_to_rot6d_columns(env.entity("robot").data.root_link_quat_w)
+
+        ops = [n["op"] for n in trace_observation(obs, {})["nodes"]]
+        assert "QuatToRot6d" in ops and ops.count("Index") == 6 and "Concat" in ops
+        assert "QuatToRot6dColumns" not in ops

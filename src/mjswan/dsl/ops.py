@@ -45,6 +45,21 @@ def mul(x: NodeRef, y: NodeRef | float) -> NodeRef:
     return NodeRef(Node(op="Mul", inputs=[_as_node(x), _as_node(y)]))
 
 
+def div(x: NodeRef, y: NodeRef | float) -> NodeRef:
+    """Elementwise division (a scalar divisor broadcasts over a vector)."""
+    return NodeRef(Node(op="Div", inputs=[_as_node(x), _as_node(y)]))
+
+
+def sqrt(x: NodeRef) -> NodeRef:
+    """Elementwise square root."""
+    return NodeRef(Node(op="Sqrt", inputs=[_as_node(x)]))
+
+
+def sum_(x: NodeRef) -> NodeRef:
+    """Reduce a vector to the scalar sum of its elements."""
+    return NodeRef(Node(op="Sum", inputs=[_as_node(x)]))
+
+
 def acos(x: NodeRef) -> NodeRef:
     """Elementwise arccosine; clamps its argument to ``[-1, 1]`` (matching
     ``torch.acos`` numerical behaviour for slightly-out-of-range inputs)."""
@@ -121,6 +136,32 @@ def tracking_body_pos_z_deviation_max(body_names: list[str] | None = None) -> No
 def tracking_ref_body_pos(body_name: str) -> NodeRef:
     """Reference position of a single tracked body (world frame)."""
     return NodeRef(Node(op="TrackingRefBodyPos", attrs={"body": body_name}))
+
+
+def _tracking_ref_field(field: str, step: int) -> NodeRef:
+    return NodeRef(
+        Node(op="TrackingRefField", attrs={"field": field, "step": int(step)})
+    )
+
+
+def tracking_ref_root_pos(step: int = 0) -> NodeRef:
+    """Reference root position at ``refIdx + step`` (clamped to the clip)."""
+    return _tracking_ref_field("root_pos", step)
+
+
+def tracking_ref_root_quat(step: int = 0) -> NodeRef:
+    """Reference root orientation at ``refIdx + step`` (clamped to the clip)."""
+    return _tracking_ref_field("root_quat", step)
+
+
+def tracking_ref_joint_pos(step: int = 0) -> NodeRef:
+    """Reference joint targets at ``refIdx + step`` (clamped to the clip)."""
+    return _tracking_ref_field("joint_pos", step)
+
+
+def tracking_is_ready() -> NodeRef:
+    """``1.0`` when a motion reference is loaded and ready, else ``0.0``."""
+    return NodeRef(Node(op="TrackingIsReady"))
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +247,29 @@ def concat(parts: list[NodeRef]) -> NodeRef:
     return NodeRef(Node(op="Concat", inputs=[_as_node(p) for p in parts]))
 
 
+def slice_(v: NodeRef, start: int, length: int) -> NodeRef:
+    """Extract the contiguous sub-range ``[start, start + length)`` of a vector."""
+    return NodeRef(
+        Node(
+            op="Slice",
+            inputs=[_as_node(v)],
+            attrs={"start": int(start), "len": int(length)},
+        )
+    )
+
+
+def history(x: NodeRef, steps: int, *, interleaved: bool = False) -> NodeRef:
+    """Stack the most recent ``steps`` frames of ``x`` (step-major by default).
+
+    A stateful primitive: the interpreter holds the ring buffer per node and
+    clears it on episode reset.  ``interleaved`` lays the stack out joint-major.
+    """
+    attrs: dict[str, object] = {"steps": int(steps)}
+    if interleaved:
+        attrs["interleaved"] = True
+    return NodeRef(Node(op="History", inputs=[_as_node(x)], attrs=attrs))
+
+
 def cos(x: NodeRef) -> NodeRef:
     """Elementwise cosine."""
     return NodeRef(Node(op="Cos", inputs=[_as_node(x)]))
@@ -227,5 +291,26 @@ def quat_inv(q: NodeRef) -> NodeRef:
 
 
 def quat_to_rot6d(q: NodeRef) -> NodeRef:
-    """6D rotation representation (first two rotation-matrix columns)."""
+    """6D rotation representation (first two rotation-matrix columns, row-major)."""
     return NodeRef(Node(op="QuatToRot6d", inputs=[_as_node(q)]))
+
+
+def quat_to_rot6d_columns(q: NodeRef) -> NodeRef:
+    """6D rotation, column-major ``[r00, r10, r20, r01, r11, r21]``.
+
+    Same six numbers as :func:`quat_to_rot6d` but ordered column-by-column,
+    for policies trained against that convention.  A reindex composition of
+    :func:`quat_to_rot6d` — not a dedicated engine op.
+    """
+    r = quat_to_rot6d(q)
+    return concat([r[0], r[2], r[4], r[1], r[3], r[5]])
+
+
+def normalize(v: NodeRef) -> NodeRef:
+    """L2-normalize a vector: ``v / sqrt(sum(v * v))``.
+
+    A composition of :func:`sqrt` / :func:`sum_` / division — not a dedicated
+    engine op.  No zero-guard; callers ensure a non-zero input (the
+    projected-gravity use rotates a unit vector, so the norm is always ~1).
+    """
+    return v / sqrt(sum_(v * v))

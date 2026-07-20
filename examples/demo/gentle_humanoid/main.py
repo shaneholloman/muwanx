@@ -17,6 +17,8 @@ import mjswan
 from mjswan.envs.mdp.actions import JointPositionActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 
+from .dsl_terms import BUILDERS
+
 HERE = Path(__file__).resolve().parent
 GENTLE_HUMANOID_REPO_URL = os.getenv(
     "MJSWAN_GENTLE_HUMANOID_REPO_URL",
@@ -27,9 +29,6 @@ GENTLE_HUMANOID_REPO_COMMIT = os.getenv(
     "5684a5e192cf5fe803bc83fc863e75e45e026a40",
 )
 GENTLE_HUMANOID_DEP_REPO = HERE / ".dep" / "motion_tracking"
-
-COMMAND_TS = HERE / "commands" / "GentleHumanoidTrackingCommand.ts"
-OBS_TS = HERE / "observations" / "GentleHumanoidObservations.ts"
 
 
 def _run_git(args: list[str], cwd: Path) -> None:
@@ -82,70 +81,87 @@ def _map_by_name(
     return [by_name.get(name, default) for name in target_names]
 
 
-def _default_motion_npz(tracking_cfg: dict[str, Any]) -> bytes:
-    clips = tracking_cfg.get("motion_clips", [])
-    if not isinstance(clips, list):
-        raise ValueError("tracking.yaml motion_clips must be a list")
-    default_clip = next((clip for clip in clips if clip.get("name") == "default"), None)
-    if default_clip is None:
-        raise ValueError("tracking.yaml motion_clips must include a default clip")
+def _body_world_npz(
+    root_pos: np.ndarray,  # (N, 3)
+    root_quat_wxyz: np.ndarray,  # (N, 4), wxyz
+    dof_pos: np.ndarray,  # (N, n_source), source joint order
+    source_joint_names: list[str],
+    target_joint_names: list[str],
+    fps: float = 50.0,
+) -> bytes:
+    """Convert a root+dof clip to the engine's ``body_world`` format (#79):
+    reorder joints source→policy order, pelvis as the single body, zero velocities.
+    """
+    n = root_pos.shape[0]
+    src_idx = {name: i for i, name in enumerate(source_joint_names)}
+    joint_pos = np.zeros((n, len(target_joint_names)), dtype=np.float32)
+    for j, name in enumerate(target_joint_names):
+        i = src_idx.get(name)
+        if i is not None:
+            joint_pos[:, j] = dof_pos[:, i]
 
-    root_quat_wxyz = np.asarray(default_clip["root_quat"], dtype=np.float32)
-    root_rot_xyzw = np.asarray(
-        [root_quat_wxyz[1], root_quat_wxyz[2], root_quat_wxyz[3], root_quat_wxyz[0]],
-        dtype=np.float32,
-    ).reshape(1, 4)
+    def _c(a: np.ndarray) -> np.ndarray:
+        return np.ascontiguousarray(a, dtype=np.float32)
+
     payload = io.BytesIO()
     np.savez(
         payload,
-        fps=np.asarray(50.0, dtype=np.float32),
-        root_pos=np.asarray(default_clip["root_pos"], dtype=np.float32).reshape(1, 3),
-        root_rot=root_rot_xyzw,
-        dof_pos=np.asarray(default_clip["joint_pos"], dtype=np.float32).reshape(1, -1),
-        joint_names=np.asarray(tracking_cfg["dataset_joint_names"], dtype="S"),
+        fps=np.asarray(float(fps), dtype=np.float32),
+        joint_pos=_c(joint_pos),
+        joint_vel=_c(np.zeros_like(joint_pos)),
+        body_pos_w=_c(root_pos.reshape(n, 1, 3)),
+        body_quat_w=_c(root_quat_wxyz.reshape(n, 1, 4)),
+        body_lin_vel_w=_c(np.zeros((n, 1, 3))),
+        body_ang_vel_w=_c(np.zeros((n, 1, 3))),
     )
     return payload.getvalue()
 
 
-def _ensure_default_motion_file(tracking_cfg: dict[str, Any]) -> Path:
-    path = HERE / ".dep" / "generated" / "gentle_humanoid_default_motion.npz"
-    payload = _default_motion_npz(tracking_cfg)
+def _default_clip_bytes(tracking_cfg: dict[str, Any]) -> bytes:
+    clips = tracking_cfg.get("motion_clips", [])
+    if not isinstance(clips, list):
+        raise ValueError("tracking.yaml motion_clips must be a list")
+    clip = next((c for c in clips if c.get("name") == "default"), None)
+    if clip is None:
+        raise ValueError("tracking.yaml motion_clips must include a default clip")
+    return _body_world_npz(
+        root_pos=np.asarray(clip["root_pos"], dtype=np.float32).reshape(1, 3),
+        root_quat_wxyz=np.asarray(clip["root_quat"], dtype=np.float32).reshape(1, 4),
+        dof_pos=np.asarray(clip["joint_pos"], dtype=np.float32).reshape(1, -1),
+        source_joint_names=list(tracking_cfg["dataset_joint_names"]),
+        target_joint_names=list(tracking_cfg["action_joint_names"]),
+    )
+
+
+def _clip_file_bytes(
+    path: Path, start: int, end: int, target_joint_names: list[str]
+) -> bytes:
+    """Load a dataset clip (``root_pos``/``root_rot`` xyzw/``dof_pos``) and window
+    ``[start:end]``, converting to the engine's ``body_world`` format."""
+    with np.load(path) as npz:
+        root_pos = np.asarray(npz["root_pos"], dtype=np.float32)
+        root_rot_xyzw = np.asarray(npz["root_rot"], dtype=np.float32)
+        dof_pos = np.asarray(npz["dof_pos"], dtype=np.float32)
+        source_joint_names = [
+            s.decode() if isinstance(s, bytes) else str(s) for s in npz["joint_names"]
+        ]
+    hi = end if end >= 0 else root_pos.shape[0]
+    root_quat_wxyz = root_rot_xyzw[start:hi][:, [3, 0, 1, 2]]  # xyzw -> wxyz
+    return _body_world_npz(
+        root_pos[start:hi],
+        root_quat_wxyz,
+        dof_pos[start:hi],
+        source_joint_names,
+        target_joint_names,
+    )
+
+
+def _write_generated(name: str, payload: bytes) -> Path:
+    path = HERE / ".dep" / "generated" / f"gentle_humanoid_{name}.npz"
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() or path.read_bytes() != payload:
         path.write_bytes(payload)
     return path
-
-
-def _register_gentle_humanoid_extensions() -> dict[str, mjswan.ObservationBinding]:
-    mjswan.register_command(
-        "GentleHumanoidTrackingCommandCfg",
-        mjswan.CommandBinding(
-            ts_name="GentleHumanoidTrackingCommand",
-            serializer=lambda _cfg: {},
-            ts_src=str(COMMAND_TS),
-        ),
-    )
-
-    obs_names = {
-        "boot": "GentleHumanoidBootIndicator",
-        "tracking": "GentleHumanoidTrackingCommandObsRaw",
-        "compliance": "GentleHumanoidComplianceFlagObs",
-        "target_joint_pos": "GentleHumanoidTargetJointPosObs",
-        "target_root_z": "GentleHumanoidTargetRootZObs",
-        "target_projected_gravity": "GentleHumanoidTargetProjectedGravityBObs",
-        "root_ang_vel": "GentleHumanoidRootAngVelBHistory",
-        "projected_gravity": "GentleHumanoidProjectedGravityBHistory",
-        "joint_pos": "GentleHumanoidJointPosHistory",
-        "joint_vel": "GentleHumanoidJointVelHistory",
-        "prev_actions": "GentleHumanoidPrevActions",
-    }
-    obs_funcs = {
-        key: mjswan.ObservationBinding(ts_name=ts_name, ts_src=str(OBS_TS))
-        for key, ts_name in obs_names.items()
-    }
-    for key, obs_func in obs_funcs.items():
-        mjswan.register_observation(f"gentle_humanoid_{key}", obs_func)
-    return obs_funcs
 
 
 def setup_builder() -> mjswan.Builder:
@@ -159,10 +175,8 @@ def setup_builder() -> mjswan.Builder:
 
     tracking_cfg = _load_yaml(gentle_humanoid_root / "config" / "tracking.yaml")
     controller_cfg = _load_yaml(gentle_humanoid_root / "config" / "controller.yaml")
-    obs_funcs = _register_gentle_humanoid_extensions()
 
     action_joint_names = list(tracking_cfg["action_joint_names"])
-    dataset_joint_names = list(tracking_cfg["dataset_joint_names"])
     real_joint_names = list(controller_cfg["real_joint_names"])
     default_joint_pos = _map_by_name(
         list(controller_cfg["default_qpos_real"]),
@@ -214,18 +228,9 @@ def setup_builder() -> mjswan.Builder:
         policy=onnx.load(str(policy_path), load_external_data=True),
         config_path=str(policy_json),
         commands={
-            "motion": mjswan.CommandTermConfig(
-                term_name="GentleHumanoidTrackingCommand",
-                params={
-                    "joint_names": action_joint_names,
-                    "future_steps": list(tracking_cfg["future_steps"]),
-                    "switch_tail_keep_steps": int(
-                        tracking_cfg.get("switch_tail_keep_steps", 8)
-                    ),
-                    "transition_steps": int(tracking_cfg.get("transition_steps", 100)),
-                    "ref_max_len": int(tracking_cfg.get("ref_max_len", 2048)),
-                },
-            ),
+            # Built-in engine motion player; the demo's clips are converted to
+            # its body_world format at build time (see _clip_file_bytes, #79).
+            "motion": mjswan.CommandTermConfig(term_name="TrackingCommand"),
             "compliance": mjswan.ui_command(
                 [
                     mjswan.CheckboxConfig(
@@ -251,38 +256,32 @@ def setup_builder() -> mjswan.Builder:
         observations={
             "policy": ObservationGroupCfg(
                 terms={
-                    "boot": ObservationTermCfg(func=obs_funcs["boot"]),
+                    "boot": ObservationTermCfg(func=BUILDERS["gentle_humanoid_boot"]),
                     "tracking": ObservationTermCfg(
-                        func=obs_funcs["tracking"],
+                        func=BUILDERS["gentle_humanoid_tracking"],
                         params={"future_steps": list(tracking_cfg["future_steps"])},
                     ),
                     "compliance": ObservationTermCfg(
-                        func=obs_funcs["compliance"],
-                        params={
-                            "command_name": "compliance",
-                            "default_enabled": float(
-                                tracking_cfg.get("compliance_flag_value", 1.0)
-                            ),
-                            "default_force": float(default_compliance_force),
-                        },
+                        func=BUILDERS["gentle_humanoid_compliance"],
+                        params={"command_name": "compliance"},
                     ),
                     "target_joint_pos": ObservationTermCfg(
-                        func=obs_funcs["target_joint_pos"],
+                        func=BUILDERS["gentle_humanoid_target_joint_pos"],
                         params={
                             "future_steps": list(tracking_cfg["future_steps"]),
                             "num_joints": len(action_joint_names),
                         },
                     ),
                     "target_root_z": ObservationTermCfg(
-                        func=obs_funcs["target_root_z"],
+                        func=BUILDERS["gentle_humanoid_target_root_z"],
                         params={"future_steps": list(tracking_cfg["future_steps"])},
                     ),
                     "target_projected_gravity": ObservationTermCfg(
-                        func=obs_funcs["target_projected_gravity"],
+                        func=BUILDERS["gentle_humanoid_target_projected_gravity"],
                         params={"future_steps": list(tracking_cfg["future_steps"])},
                     ),
                     "root_ang_vel": ObservationTermCfg(
-                        func=obs_funcs["root_ang_vel"],
+                        func=BUILDERS["gentle_humanoid_root_ang_vel"],
                         params={
                             "history_steps": list(
                                 tracking_cfg["root_angvel_history_steps"]
@@ -290,7 +289,7 @@ def setup_builder() -> mjswan.Builder:
                         },
                     ),
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_funcs["projected_gravity"],
+                        func=BUILDERS["gentle_humanoid_projected_gravity"],
                         params={
                             "history_steps": list(
                                 tracking_cfg["projected_gravity_history_steps"]
@@ -298,7 +297,7 @@ def setup_builder() -> mjswan.Builder:
                         },
                     ),
                     "joint_pos": ObservationTermCfg(
-                        func=obs_funcs["joint_pos"],
+                        func=BUILDERS["gentle_humanoid_joint_pos"],
                         params={
                             "history_steps": list(
                                 tracking_cfg["joint_pos_history_steps"]
@@ -307,7 +306,7 @@ def setup_builder() -> mjswan.Builder:
                         },
                     ),
                     "joint_vel": ObservationTermCfg(
-                        func=obs_funcs["joint_vel"],
+                        func=BUILDERS["gentle_humanoid_joint_vel"],
                         params={
                             "history_steps": list(
                                 tracking_cfg["joint_vel_history_steps"]
@@ -316,7 +315,7 @@ def setup_builder() -> mjswan.Builder:
                         },
                     ),
                     "prev_actions": ObservationTermCfg(
-                        func=obs_funcs["prev_actions"],
+                        func=BUILDERS["gentle_humanoid_prev_actions"],
                         params={
                             "history_steps": int(tracking_cfg["prev_action_steps"])
                         },
@@ -338,28 +337,33 @@ def setup_builder() -> mjswan.Builder:
         default=True,
     )
 
+    # Clips are converted to the engine's body_world format (joints reordered
+    # into action order), so the bundled npz's joint order IS action order.
     policy.add_motion(
         name="default",
-        source=str(_ensure_default_motion_file(tracking_cfg)),
+        source=str(_write_generated("default", _default_clip_bytes(tracking_cfg))),
         fps=50.0,
         anchor_body_name="pelvis",
         body_names=("pelvis",),
-        dataset_joint_names=dataset_joint_names,
+        dataset_joint_names=action_joint_names,
         default=True,
         loop=False,
     )
     for motion_cfg in tracking_cfg["motions"]:
-        source = gentle_humanoid_root / motion_cfg["path"]
+        payload = _clip_file_bytes(
+            gentle_humanoid_root / motion_cfg["path"],
+            int(motion_cfg.get("start", 0)),
+            int(motion_cfg.get("end", -1)),
+            action_joint_names,
+        )
         policy.add_motion(
             name=motion_cfg["name"],
-            source=str(source),
+            source=str(_write_generated(motion_cfg["name"], payload)),
             fps=50.0,
             anchor_body_name="pelvis",
             body_names=("pelvis",),
-            dataset_joint_names=dataset_joint_names,
+            dataset_joint_names=action_joint_names,
             loop=False,
-        ).set_metadata("start", int(motion_cfg.get("start", 0))).set_metadata(
-            "end", int(motion_cfg.get("end", -1))
         )
 
     return builder

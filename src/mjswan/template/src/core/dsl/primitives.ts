@@ -71,6 +71,41 @@ function trackingTerm(ctx: EvalContext): TrackingSource | null {
   return isTrackingSource(term) && term.isReady() ? (term as TrackingSource) : null;
 }
 
+/** A motion command exposing reference-trajectory buffers — distinct from the
+ * anchor-based {@link TrackingSource}; built-in and bespoke players declare them. */
+type MotionRefSource = {
+  isReady(): boolean;
+  refRootPos: Float32Array[];
+  refRootQuat: Float32Array[];
+  refJointPos: Float32Array[];
+  refIdx: number;
+  refLen: number;
+};
+
+/** The active motion command carrying reference buffers, or null. */
+function motionRefTerm(ctx: EvalContext): MotionRefSource | null {
+  const term = ctx.runner.getContext()?.commandManager?.getTerm('motion');
+  if (
+    typeof term === 'object' &&
+    term !== null &&
+    'refRootPos' in term &&
+    'refRootQuat' in term &&
+    'refJointPos' in term &&
+    typeof (term as { isReady?: unknown }).isReady === 'function'
+  ) {
+    return term as unknown as MotionRefSource;
+  }
+  return null;
+}
+
+/** Add `step` to `base`, clamped to `[0, len-1]` (matches clampFutureIndices). */
+function clampRefIdx(base: number, step: number, len: number): number {
+  const i = base + step;
+  if (i < 0) return 0;
+  if (i >= len) return Math.max(0, len - 1);
+  return i;
+}
+
 // --- Model name-table decoders + address resolution --------------------------
 
 function decodeNames(
@@ -197,15 +232,35 @@ export const Primitives: Record<string, Primitive> = {
   Add: (inputs) => elementwise(inputs[0], inputs[1], (a, b) => a + b),
   Sub: (inputs) => elementwise(inputs[0], inputs[1], (a, b) => a - b),
   Mul: (inputs) => elementwise(inputs[0], inputs[1], (a, b) => a * b),
+  Div: (inputs) => elementwise(inputs[0], inputs[1], (a, b) => a / b),
   Neg: (inputs) => unary(inputs[0], (a) => -a),
   Abs: (inputs) => unary(inputs[0], Math.abs),
+  Sqrt: (inputs) => unary(inputs[0], Math.sqrt),
   Acos: (inputs) => unary(inputs[0], (a) => Math.acos(Math.max(-1, Math.min(1, a)))),
+
+  // Reduce a vector to the scalar sum of its elements.
+  Sum: (inputs) => {
+    const v = asVec(inputs[0]);
+    let s = 0;
+    for (let i = 0; i < v.length; i++) s += v[i];
+    return s;
+  },
 
   // -- Indexing ------------------------------------------------------------
   Index: (inputs, attrs) => {
     const vec = asVec(inputs[0]);
     const idx = Number(attrs.i ?? 0);
     return vec[idx] ?? 0;
+  },
+
+  // Extract the contiguous sub-range [start, start+len) of a vector.
+  Slice: (inputs, attrs) => {
+    const vec = asVec(inputs[0]);
+    const start = Number(attrs.start ?? 0);
+    const len = Number(attrs.len ?? 0);
+    const out = new Float32Array(len);
+    for (let i = 0; i < len; i++) out[i] = vec[start + i] ?? 0;
+    return out;
   },
 
   // -- Comparisons (produce Uint8Array for vectors, boolean for scalars) --
@@ -435,6 +490,37 @@ export const Primitives: Record<string, Primitive> = {
     const xquat = ctx.runner.getContext()?.mjData?.xquat;
     if (id < 0 || xquat === undefined) return new Float32Array([1, 0, 0, 0]);
     return new Float32Array(xquat.slice(id * 4, id * 4 + 4));
+  },
+
+  // -- Motion reference trajectory, sampled at a lookahead offset ----------
+  // `field`: 'root_pos' (3) | 'root_quat' (4) | 'joint_pos' (nJoints).
+  // `step`: offset added to refIdx, clamped to [0, refLen-1].
+  // Not ready → finite fallback (identity quat / zeros); pair with
+  // `TrackingIsReady` to zero the term out.
+  TrackingRefField: (_in, attrs, ctx) => {
+    const field = String(attrs.field ?? '');
+    const fallback = () =>
+      field === 'root_quat'
+        ? new Float32Array([1, 0, 0, 0])
+        : field === 'root_pos'
+          ? new Float32Array(3)
+          : new Float32Array(ctx.runner.getNumActions());
+    const term = motionRefTerm(ctx);
+    if (!term || !term.isReady()) return fallback();
+    const buf =
+      field === 'root_pos'
+        ? term.refRootPos
+        : field === 'root_quat'
+          ? term.refRootQuat
+          : term.refJointPos;
+    const frame = buf[clampRefIdx(term.refIdx, Number(attrs.step ?? 0), term.refLen)];
+    return frame ? new Float32Array(frame) : fallback();
+  },
+
+  // 1.0 when a motion reference is loaded and ready, else 0.0.
+  TrackingIsReady: (_in, _attrs, ctx) => {
+    const term = motionRefTerm(ctx);
+    return term && term.isReady() ? 1.0 : 0.0;
   },
 
   // -- Tracking reference, per body (world frame) --------------------------

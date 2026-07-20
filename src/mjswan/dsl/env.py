@@ -25,19 +25,18 @@ from .node import Node, NodeRef
 # ---------------------------------------------------------------------------
 
 _ENTITY_DATA_SLOTS: dict[str, str] = {
-    # Root state (base frame derivations).
+    # Root state (base frame derivations).  The engine tracks a single root
+    # angular velocity, so both mjlab spellings map to the same `RootAngVelB`.
     "root_link_lin_vel_b": "RootLinkLinVelB",
-    "root_link_ang_vel_b": "RootLinkAngVelB",
-    "root_ang_vel_b": "RootAngVelB",  # alias used in mjlab terminations
+    "root_link_ang_vel_b": "RootAngVelB",
+    "root_ang_vel_b": "RootAngVelB",
     "root_link_pos_w": "RootLinkPosW",
     "root_link_quat_w": "RootLinkQuatW",
     "projected_gravity_b": "ProjectedGravityB",
     # Joint state.
     "joint_pos": "JointPos",
-    "joint_pos_biased": "JointPosBiased",
     "joint_vel": "JointVel",
     "default_joint_pos": "DefaultJointPos",
-    "default_joint_vel": "DefaultJointVel",
 }
 
 
@@ -81,20 +80,3 @@ class SymbolicEnv:
 
     def entity(self, name: str) -> Entity:
         return Entity(name)
-
-    def command(self, name: str) -> _CommandRef:
-        return _CommandRef(name)
-
-
-class _CommandRef:
-    """Symbolic accessor for ``env.command_manager.get_command(name)``."""
-
-    __slots__ = ("name",)
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __getattr__(self, field: str) -> NodeRef:
-        return NodeRef(
-            Node(op="CommandField", attrs={"command": self.name, "field": field})
-        )

@@ -67,6 +67,12 @@ class NodeRef:
     def __rmul__(self, other: NodeRef | float) -> NodeRef:
         return _binary("Mul", other, self)
 
+    def __truediv__(self, other: NodeRef | float) -> NodeRef:
+        return _binary("Div", self, other)
+
+    def __rtruediv__(self, other: NodeRef | float) -> NodeRef:
+        return _binary("Div", other, self)
+
     def __neg__(self) -> NodeRef:
         return NodeRef(Node(op="Neg", inputs=[self._node]))
 
@@ -105,6 +111,27 @@ class NodeRef:
 
     def __invert__(self) -> NodeRef:
         return NodeRef(Node(op="Not", inputs=[self._node]))
+
+    # ------------------------------------------------------------------
+    # Control-flow guards (ADR 0003): a symbolic value has no truth value at
+    # trace time, so `if x`, `while x`, `x and y`, `for e in x` are unsupported.
+    # Without these, Python's defaults silently mistrace (`__bool__` → always
+    # True; iteration falls back to `__getitem__` → infinite loop).
+    # ------------------------------------------------------------------
+    def __bool__(self) -> bool:
+        raise TypeError(
+            f"Cannot evaluate the truth of a symbolic DSL value (op '{self._node.op}') "
+            "at trace time. Control flow over tensor values (if/while/and/or/not/bool) "
+            "is not traceable — build the branch with element-wise ops "
+            "(gt/lt/any_/all_, & | ~) instead. See ADR 0003."
+        )
+
+    def __iter__(self):
+        raise TypeError(
+            f"Cannot iterate a symbolic DSL value (op '{self._node.op}'). Iterate a "
+            "static Python list from params instead (e.g. `for name in body_names`), "
+            "or select a component with a static-int index `x[i]`. See ADR 0003."
+        )
 
     # ------------------------------------------------------------------
     # Indexing (static integer only — see ADR 0003)

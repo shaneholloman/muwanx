@@ -20,6 +20,12 @@ shortcuts were removed outright (no alias) — see Removed.**
 - `Builder.add_project_mjlab(task_id, ...)` — instance-method counterpart to the
   `Builder.from_mjlab` classmethod factory, for adding an mjlab task to a builder
   that already has other projects. `from_mjlab` now delegates to it.
+- Declarative-DSL primitives so more observations compose without custom
+  TypeScript (see ADR 0003, #79): `mjswan.dsl` gains `div` / `sqrt` / `sum_` /
+  `slice_` / `history` / `normalize` / `quat_to_rot6d_columns` and the
+  motion-reference sources `tracking_ref_root_pos` / `tracking_ref_root_quat` /
+  `tracking_ref_joint_pos` / `tracking_is_ready`; `NodeRef` supports `/`. The
+  Gentle Humanoid demo's observations are now fully declarative.
 
 ### Changed
 
