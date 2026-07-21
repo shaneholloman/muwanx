@@ -10,6 +10,9 @@ import fs from 'fs';
 // `dist/` so they resolve relative to the bundle on a public CDN (jsDelivr).
 // See src/engine/ and docs/adr/0004-headless-engine-core.md.
 
+// Set MJSWAN_DEBUG=1 to keep console/debugger statements.
+const isDebug = process.env.MJSWAN_DEBUG === '1';
+
 function getOrtCdnBase(): string {
   // Bake the installed ort version into the bundle so OnnxModule.ts can redirect
   // ort's dynamic file fetches to its own CDN package (*.jsep.mjs, *.wasm, etc.).
@@ -184,6 +187,9 @@ export default defineConfig({
         assetFileNames: '[name]-[hash][extname]',
       },
     },
+  },
+  esbuild: {
+    drop: isDebug ? [] : ['console', 'debugger'],
   },
   build: {
     outDir: 'dist',

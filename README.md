@@ -25,22 +25,12 @@
   <em>Check out the demo ― <a href="https://ttktjmt.github.io/mjswan/">ttktjmt.github.io/mjswan</a></em>
 </p>
 
-<p align="center">
-  <a href="https://mjswan-mjlab.pages.dev/"><img src="https://img.shields.io/badge/mjlab-E0E0E0?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAACgUlEQVR4nERSz08TaxQ937zhx2sptK+lEKAtfa/k8SBPFhhI2ADGhRIXgBETjQtduvVPMMaNCS7ZGYwxBIzRmJiIxkSEKChGUIOFCgFatD/SAg30x8x3r/mmGCez+Gbuuefcc7+jN/4/BjCDwCazxNHBAIipyGQQGcwm2ARMlkUdCs4QAIQQGpgJUN/MxL8fMEpI3WIFmC4MtwmNX82tb8d22apJk3p7/unuajJg3B59RlLx/OHwDjBTrbvi4fi5k73BKnvZ9MsIs2SWNQ599ObgyGB3+7/+lbXY+kYcII1Jjdvsq1a6wPCZtjpvpTIFCrU416PxeCJzcHAYOubTy3Uwa8olqNlfA0BKKi/Xr17pslzS5Yt9QX/9ndfhG2OPahtcdpvOzBqzJDKCAdXw9Hn4MFe8NNLp9diCHQ2nekNTb1b3M2mf1zW3EjvI5oFfpoN+J4BwJHmYK54f6rh1fWA2svMtmq7O5U/0dNrttu93pw1DyaqRmM2/Ay4AyVR2fOL9p/B2Jpdr8rin5sKb+9mZhaUXs8tnT3eqbYN1sBTgYOAvAInU/uLHzaVwyuaw9//n4sViWb6mye0siMq+rha3y5ZKFZQHr6eyyl5RUgDkVmSnPeB6Mrs6NTE/ef/tvQfzQ33tmibaWhuZTQ2QzT5naaeJ5B5Jmny8+Hkj3X889PXLVvJHenlhzeVQdK0tDQDpzKbb/efmdhpAPLEHYcaimWx8d2Y1mi8UAC4WjXcfIvV1To/bAbCoDV0DhKVw9DJJsEkkhfotuRRKMhkmk6GrDLJCCWhWo7pHFV4LXcoUWDIkFBHpJPNQWRVkiQiU8qpq1lGxMpuCiaE0fwYAAP//k7+eneLJBrkAAAAASUVORK5CYII=" alt="mjlab Demo"></a>
-  &nbsp;
-  <a href="https://ttktjmt.github.io/mjswan/robotdesc"><img src="https://img.shields.io/badge/Robot_Descriptions-E0E0E0?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAACYUlEQVR4nHyS208TQRjFv5nd7mW2205JQSExjVwfEEQxoon+q/4DRiKRlhTiLTGxNZK0gA8QLUZpbGtppLvd2es3ZlsfePI8/V7OzDknH5VS9vqXB6/fhGEkrylJkutcr9cnTAHgy/FRJpMJw7DdbjcajUqlAgB+ELx7/qxafpUkMSJqmlatVgEgNXysf7p3d900meM4p6enCwsL/X5/cHlJbyyurK6dn3+nlG5sbBiGAelLvl+r1cb/yv9EklK2Wi0pJRmJ4GroKJQwyyIA3W5XeN7t+XlE6fZ/6aal23lEiZj4QmRtmxJChkM3SSQZy/NGVKETbr7d+7C/O2HfF67rEEJUADANHUDCWLado5ROOF9a4sWZYa+dLc6ZJkviOC2dxqKgaZlJ3NxYE15cfwBaVuczUsogCBDHs2oqLdiMYmhqumXqo85F5A2ZoZm6Gvpi7uY0t5mpqzxn2VnGDI2qqkoV9c/VcBKjfVQ7OdjBJBFCdDqds7OzwWCQ9mkevdjeBoC0A6VUzWQISQ285lcJECCEMVYocM55oVBAxKXlFaKZAEDiOEGJvhCGaVECo5FLAJiVRYlhEKoZVVVUlBhFkfAE51wNovhH5/cMt2kcB0Ls7Lw0DOPh1pZFlff7VRPk8pOnucJU69vXi58Xd9bW0gWFH/hCAEAYRfc3N6WUum70et2DvUq5XK7slhVFOTz8nOd5xhjx/PDk+MRxnK3Hj0DKMAyDILAsq9vpzs7NNpuNUqnE+ZTnjVzXKRanU4PruoiYtW0CQAhBREopokySOIoixhiiBPh3Cn8DAAD//3KKiEEyOiLAAAAAAElFTkSuQmCC" alt="Robot Descriptions Demo"></a>
-  &nbsp;
-  <a href="https://ttktjmt.github.io/mjswan/playground"><img src="https://img.shields.io/badge/MuJoCo_Playground-E0E0E0?logo=deepmind" alt="MuJoCo Playground Demo"></a>
-  &nbsp;
-  <a href="https://ttktjmt.github.io/mjswan/myosuite"><img src="https://img.shields.io/badge/MyoSuite-E0E0E0?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PGRlZnM+PHN0eWxlPi5jbHMtMXtmaWxsOiMxNTUyNTc7fS5jbHMtMntmaWxsOiNlNmY1ZjA7fTwvc3R5bGU+PC9kZWZzPjxnIGlkPSJMYXllcl8xMCIgZGF0YS1uYW1lPSJMYXllciAxMCI+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMjEsMTNsLTQuMywzLjQ2TDEyLjE3LDkuMzksNy4yOCw2LDEwLjM5LDI2LjJsNi4zMSwxLDYuODctMTAuNDFaTTE1LjY2LDI1LjFsLTMuOS0uNTlMOS4zNCw5LjA2bC41OS40LDYuMjgsOS43NSw0LjkzLTMuOTIuNTQuNzhaIi8+PHBhdGggY2xhc3M9ImNscy0yIiBkPSJNMjEuMTQsMTUuMjlsLTQuOTMsMy45Mkw5LjkzLDkuNDZsLS41OS0uNCwyLjQyLDE1LjQ1LDMuOS41OSw2LTlaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMTQuNDQsMjQuMzFhMy40OCwzLjQ4LDAsMCwwLTEuMTYtLjE5LDMuNTcsMy41NywwLDAsMC0xLjE1LDYuOTQsMy40NywzLjQ3LDAsMCwwLDEuMTUuMTksMy41OCwzLjU4LDAsMCwwLDMuMzgtMi40MSwzLjU3LDMuNTcsMCwwLDAtMi4yMi00LjUzWiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTEzLjA2LDguMjNhMy41NSwzLjU1LDAsMCwwLTEtMi41NEEzLjQ5LDMuNDksMCwwLDAsOS41Niw0LjZIOS40OUEzLjU5LDMuNTksMCwwLDAsNS45Miw4LjFhMy41NywzLjU3LDAsMCwwLDMuNSwzLjYzaC4wN0EzLjU5LDMuNTksMCwwLDAsMTMuMDYsOC4yM1oiLz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0yNi4xOCwxNS4xOEEzLjU1LDMuNTUsMCwwLDAsMjYsMTIuNDVhMy42MiwzLjYyLDAsMCwwLTMuMi0yLDMuNTcsMy41NywwLDAsMC0xLjE2LDcsMy40OCwzLjQ4LDAsMCwwLDEuMTYuMTlBMy41NiwzLjU2LDAsMCwwLDI2LjE4LDE1LjE4WiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTIyLDUuNTJhMy42MSwzLjYxLDAsMCwwLS4xNy0yLjcyLDMuNTUsMy41NSwwLDAsMC0zLjIxLTJoMEEzLjU3LDMuNTcsMCwxLDAsMjIsNS41MloiLz48L2c+PC9zdmc+" alt="MyoSuite Demo"></a>
-
-</p>
-
 ---
 
 
 ## News
 
+<!-- - **2026-07-24**: Released a beta version of [mjswan Cloud](https://mjswan.com) 🎉 -->
 - **2026-06-02**: Adopted for the [MuscleMimic](https://github.com/amathislab/musclemimic) live demo [[Demo](https://mjswan-musclemimic.pages.dev/)]
 - **2026-05-06**: Adopted for the [GentleHumanoid](https://gentle-humanoid.axell.top/#/) live demo [[Demo](https://mjswan-gentlehumanoid.pages.dev/), [X](https://x.com/Axell_wppr/status/2051878574874148953)]
 - **2026-04-08**: Featured in the [MuJoCo README](https://github.com/google-deepmind/mujoco#first-party-bindings)
