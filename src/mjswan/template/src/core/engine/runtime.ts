@@ -671,8 +671,6 @@ export class mjswanRuntime {
       return;
     }
 
-    this.resetSimulationState();
-
     try {
       const config = policy.config;
       // Motion metadata lives in policy.json; the app supplies the bytes as
