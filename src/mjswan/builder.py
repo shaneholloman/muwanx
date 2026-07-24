@@ -442,7 +442,6 @@ class Builder:
             dist/
             ├── index.html
             ├── logo.svg
-            ├── manifest.json
             ├── robots.txt
             ├── assets/
             │   ├── config.json
@@ -450,7 +449,6 @@ class Builder:
             └── <project-id>/ (or 'main')
                 ├── index.html
                 ├── logo.svg
-                ├── manifest.json
                 └── assets/
                     └── <scene-id>/
                         ├── scene.mjz/.mjb
@@ -549,7 +547,7 @@ class Builder:
                 shutil.copy(str(root_index), str(project_dir / "index.html"))
 
             # Copy static root assets
-            for static_name in ["manifest.json", "logo.svg"]:
+            for static_name in ["logo.svg"]:
                 src_static = output_path / static_name
                 if src_static.exists():
                     shutil.copy(str(src_static), str(project_dir / static_name))

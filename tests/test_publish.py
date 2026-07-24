@@ -138,7 +138,6 @@ def _make_dist(tmp_path: Path, *, uses_custom_js: bool = False) -> Path:
     (dist / "assets" / "index-abc.css").write_text("body{}")
     (dist / "assets" / "mujoco-x.wasm").write_bytes(b"\0asm")
     (dist / "main" / "index.html").write_text("<!doctype html>")
-    (dist / "main" / "manifest.json").write_text(json.dumps({"name": "mjswan"}))
     return dist
 
 
@@ -198,11 +197,10 @@ class TestPlanPublish:
         assert config_file.source.name == "config.json"
         assert config_file.source.parent.name == "assets"
 
-    def test_excludes_html_js_css_wasm_and_manifest(self, tmp_path: Path):
+    def test_excludes_html_js_css_wasm(self, tmp_path: Path):
         plan = plan_publish(_make_dist(tmp_path))
         paths = {f.upload_path for f in plan.files}
         assert not any(p.endswith((".html", ".js", ".css", ".wasm")) for p in paths)
-        assert not any(p.endswith("manifest.json") for p in paths)
 
     def test_manifest_has_content_types_and_sizes(self, tmp_path: Path):
         plan = plan_publish(_make_dist(tmp_path))
