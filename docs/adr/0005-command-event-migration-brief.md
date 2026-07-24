@@ -1,0 +1,265 @@
+# Companion brief: ONNX Command & Event migration
+
+> Companion to [ADR 0005](0005-onnx-traced-terms-superseding-the-declarative-dsl.md).
+> This is an **implementation brief**, not a decision record — it turns ADR 0005's
+> phased plan into concrete Command/Event migration scope spanning both the Python
+> build path and the TypeScript runtime, and it carries a **review checkpoint** of
+> findings surfaced by the first real trace runs. Read it alongside the ADR.
+
+## Status
+
+| Area | State |
+|---|---|
+| §2 tracer on Cartpole (Obs/Term) | **done** — `src/mjswan/compile/tracer.py`, parity clean |
+| §2b RNG spy/replay harness | **done** — `src/mjswan/compile/rng.py` |
+| Reset-mode Event tracing (`write_joint_state_to_sim`) | **done** — Cartpole `reset_slider`/`reset_hinge` parity clean |
+| Dynamic-slot Event path (reads live state) | **implemented, awaiting a real interval event to exercise** |
+| `entity_write` (root pose/velocity) | **in progress** — see §4-findings and (a) below |
+| §3 `OnnxCommand` (Velocity/Lift) | not started |
+| §4 interval/startup native dispatch, entity-write apply (TS) | not started |
+| §3a `SliderCommandConfig` extension (TS) | not started |
+| Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` | **deferred** — see note below |
+
+**Sequencing (dependency order, not a schedule):** RNG harness (§2b) → tracer on
+Cartpole → **this review checkpoint** → interval-event dynamic-slot + `entity_write`
+generalization (a) → §3 `OnnxCommand` Python side → §4 native timers + entity-write
+apply (TS) → §3a `SliderCommandConfig` last. Cartpole was the deliberate first
+target: no Command, only `mode="reset"` Events, so it exercises the tracer and RNG
+harness in isolation before Command/Event complexity is layered on.
+
+## 1. Reference tasks (`examples/mjlab/`, full set — not a curated pair)
+
+| Project | task_id(s) | Command pattern | Treatment |
+|---|---|---|---|
+| defaults | Cartpole-Balance / -Swingup | none | full ONNX parity (Obs/Term/Action/reset-Event) |
+| defaults | Velocity-Flat/Rough × G1/Go1 | `UniformVelocityCommandCfg` | full parity **incl. Command** (§3a) |
+| defaults | Lift-Cube-Yam | `LiftingCommandCfg` → ONNX (§3b) | full parity **incl. Command** |
+| g1_spinkick | Tracking-Flat-…-No-State-Estimation | `TrackingCommand` (motion lookup) | **carved out** — open design |
+| musclemimic | myoMimicFullbody-v0 | `TrackingCommand`-shaped (Mimic) | **carved out** (private-repo dep) |
+| unitree_rl | Unitree-G1-Tracking-… | `TrackingCommand`-shaped | **carved out** |
+| myosuite | Myosuite-* | none (scene-only, no policy) | nothing to trace |
+
+**Exit criterion:** for every task, Obs/Term/Action ONNX parity holds using whichever
+Event modes that task declares. Cartpole needs only `mode="reset"`. Velocity-Flat/Rough
+need `mode="startup"` and `mode="interval"` (`push_robot`); Lift-Cube-Yam needs
+`mode="startup"`. Tasks with `UniformVelocityCommandCfg`/`LiftingCommandCfg` must also
+match the Command term body (§3a/§3b). `TrackingCommand`-shaped commands keep their
+existing native implementation and are **not** required to be ONNX-traced yet. A green
+run does **not** validate Command tracing beyond `UniformVelocityCommandCfg` and
+`LiftingCommandCfg`.
+
+## 2. Tracer approach
+
+**Discard, do not evolve, `src/mjswan/dsl/`.** The `SymbolicEnv` tracer is a bespoke
+operator-overloading recorder over a closed op set; it does not run real tensors and
+cannot express anything `torch.onnx.export` can't do better. The term-serialization
+step in the Builder/`policy.py` path is rewritten to (1) wrap each term body in a
+`torch.nn.Module`, (2) resolve every `SceneEntityCfg` regex to static indices at trace
+time (baked as graph constants), (3) trace with `torch.onnx.export` (dynamic batch
+axis, static everything else). `scripts/verify_dsl_migration.py` is superseded by the
+numeric-parity harness.
+
+> **Deferral note (implementation reality).** The current `config.json`/`policy.json`
+> format and the shipping frontend interpreter still consume the DSL graph shape.
+> `dsl/` and `verify_dsl_migration.py` are removed **only once the ONNX path actually
+> replaces the DSL in the build output** (a later phase), per the ADR's own gate
+> ("once the new harness supersedes their coverage"). Removing now would break the
+> shipping pipeline.
+
+**On tracing risk:** mjlab must run thousands of parallel envs on GPU, which forces
+term bodies to avoid per-env Python `if`/`for` on tensor values in favor of masking
+(`torch.where`) — the same shape `torch.onnx.export` needs. So terms are likely close
+to traceable by construction. §9's fail-loudly escape hatch (native TS reimplementation,
+never force-trace, never ship source) is the safety net.
+
+## 2b. RNG alignment for the parity harness
+
+**Build/test-time only — never ships to the browser.** Unrelated to ADR 0005 §2's
+orchestrator-owned seeded PRNG (runtime randomness + bit-for-bit session replay); do
+not conflate them. The comparison is `allclose`-within-tolerance, not bit-for-bit
+(float32 eager PyTorch vs ONNX Runtime can reorder ops in the last bits). It compares
+mjlab's live Python env against the exported graphs run via `onnxruntime` in Python;
+the browser runtime (WASM physics, TS orchestrator, ONNX Runtime Web) is exercised only
+in later phases.
+
+Because Event/Command bodies take `rand` as an explicit input (ADR §2), the harness
+must **record every random draw mjlab makes** during the reference computation and
+**replay those exact values** into the graph's `rand` input.
+
+1. **Spy, don't stub.** Patch the term function's own module globals (e.g.
+   `reset_joints_by_offset.__globals__["sample_uniform"]`) — not the source module,
+   which mjlab has already imported by name — so RNG helpers still return mjlab's real
+   draw while recording `(values)` in call order.
+2. **Count each term's draws from source, do not guess.** Record the count as
+   `rand_dim` in the term's config. (Cartpole reset: 1 pos + 1 vel = 2. `push_robot`
+   via `_sample_se3_range`: 6. `LiftingCommand._resample_command`: 3 target pos + 1 yaw
+   + 3 cube pos + its orientation draw — enumerate before tracing.)
+3. Replay recorded values as `rand`, in consumption order. Non-firing steps
+   (`resample_mask=False`) can receive zeros — the graph's `torch.where` discards them.
+4. This validates the traced *math* reproduces mjlab's transform of a given draw into a
+   final value. It does **not** validate that mjlab and mjswan draw the same numbers at
+   runtime (separate, already-solved concern — ADR §2).
+5. Applies equally to Event terms with randomness — `push_robot`, and the startup DR
+   terms (`foot_friction`, `encoder_bias`, `base_com`) — not just Command.
+
+Resample *timing* (native trigger deciding when `resample_mask` flips) is a TS-side
+concern, out of scope for this Python harness — it only needs to exercise both
+`resample_mask` states directly.
+
+## 3. Command designs — one shared mechanism
+
+The engine ships **one** generic built-in, `OnnxCommand`:
+
+```
+forward(prev_state, resample_mask, rand, robot_state) -> (next_state, command, entity_write?)
+```
+
+It owns the resample timer (scalar, ADR §5), persists `state` across frames (reusing
+`OnnxModule`'s `is_init`/`carry` convention, §4), calls the term's `.onnx` each frame,
+optionally overwrites `command` from a declarative `ui` config (§3a), and — if the graph
+emits `entity_write` — applies it via a generic "write a named entity's pose/velocity"
+primitive.
+
+> **`entity_write` is new work, not reuse.** `DslEvent.ts`'s `Mutation`/`Sample`
+> machinery *samples and writes in one step* (`Math.random()` then apply); it has no
+> "apply an already-computed value" entry point. Its low-level mjData writes (joint
+> qpos/qvel, freejoint pose) may be reusable building blocks, but the "take an
+> ONNX-produced value and write it to a named entity's field" primitive must be built.
+
+`UniformVelocityCommandCfg` and `LiftingCommandCfg` are **data instantiations** of
+`OnnxCommand` — different `.onnx`, `state_fields`, `ui`/`entity_write` — no engine-side
+class each. `register_command`/`CommandBinding` keeps its shape but `ts_name` points at
+`OnnxCommand` and `serializer` traces to ONNX. `LiftingCommand.ts` and
+`_serialize_uniform_velocity_command`'s UI-only mapping are superseded. `UiCommand`
+stays for genuinely never-computed commands.
+
+### 3a. `UniformVelocityCommandCfg` → `OnnxCommand` config
+
+**Match mjlab play-time exactly** (`velocity_command.py`, `scripts/play.py`,
+`viewer/viser/viewer.py`). Key property: **the autonomous computation is never
+skipped** — `compute()` runs `super().compute()` (resample + heading tracking) every
+frame regardless of GUI, then the GUI *conditionally overwrites* per-axis for the viewed
+env only. `apply_gui_reset`/`on_viewer_pause` are base no-ops for this type (keep them
+as generic no-op interface points).
+
+State fields (each needs a declared **shape + dtype** in `policy.json`, not just a name):
+`vel_command_b` `(3,) f32`, `vel_command_w` `(3,) f32`, `heading_target` `() f32`,
+`is_heading_env` `() bool`, `is_standing_env` `() bool`, `is_world_env` `() bool`,
+`is_forward_env` `() bool`. No `entity_write` for the common case. `ui`: one checkbox
+(`enabled`), three sliders (`lin_vel_x`/`lin_vel_y`/`ang_vel_z`), one button (`zero`) —
+declarative data the React app renders and drives via `setValue`/`triggerButton`.
+`OnnxCommand`'s generic override (compute always; if `enabled`, overwrite `command` with
+slider values) is nothing velocity-specific.
+
+**`SliderCommandConfig` gets an adjustable range, entirely client-side** (mjlab's
+"Max `<label>`" meta-slider only rescales the value slider's drag range, symmetric around
+zero; no engine state, no new verb):
+
+```ts
+export interface SliderRangeControl { min: number; max: number; step: number; default: number; }
+export interface SliderCommandConfig {
+  type: 'slider'; name: string; label: string;
+  min: number; max: number; step: number; default: number;
+  enabled_when?: string;
+  adjustable_range?: SliderRangeControl;   // NEW
+}
+```
+
+When present, the app renders a companion "Max `<label>`" slider and locally clamps the
+main slider's displayed range to `[-value, value]` — client-side only, never sent via
+`setValue`. Assumes symmetry around zero (matches the three velocity axes); asymmetric
+ranges are a follow-up. `get_env_idx()` collapses trivially at N=1.
+
+### 3b. `LiftingCommandCfg` → `OnnxCommand` config (retires `LiftingCommand.ts`)
+
+`tasks/manipulation/mdp/commands.py`. Second data instantiation of `OnnxCommand`, no
+lifting-specific engine code:
+
+- **State:** just `target_pos` `(3,)` at N=1 — this *is* the `command`. `episode_success`
+  / `metrics` are training-only; drop them.
+- **No continuous update:** `_update_command()` is `pass`. `next_state =
+  where(resample_mask, resample(...), prev_state)`, no post-update.
+- **No `ui`** (mjlab has no `create_gui` for it — autonomous only; don't add one).
+- **`entity_write`:** `_resample_command` samples the cube's own spawn pose/velocity
+  (`object_pose_range`, yaw-only orientation) and writes it via
+  `write_root_link_pose_to_sim` / `write_root_link_velocity_to_sim` — separate from
+  `target_pos`. `policy.json` declares the entity (`cube`) and fields; the graph outputs
+  the values; the engine applies them via the new generic apply primitive.
+  **Timing:** this write happens where Command sits — after `wasm.forward()`, so the new
+  pose is visible only from the next frame (the accepted one-substep lag, ADR §8). Must
+  **not** be "fixed" with a second `forward()`.
+- **`difficulty`:** a training curriculum knob; bake the played checkpoint's mode
+  (Lift-Cube-Yam uses `"dynamic"`) as a static trace-time choice — not a runtime toggle.
+- Randomness goes through the `rand` input like everything else.
+
+## 4. Carried forward from ADR review (execute, do not re-litigate)
+
+- **Event config lives in `config.json`** (scene-scoped, `ConfigScene.events` via
+  `mjswan/manifest`), not `policy.json`. Obs/Term/Command go in `policy.json`.
+- **Reuse `OnnxModule`'s `is_init`/`carry` recurrent-state convention**
+  (`core/policy/OnnxModule.ts`) for stateful Command/Event state, generalized to named
+  fields — no second state-threading mechanism.
+- **Sweep existing `Math.random()` sites** (`DslEvent.ts` `sampleUniform`,
+  `TrackingCommand.ts` `sampleRangeValue`/`sampleInitialFrame`) into the
+  orchestrator-owned seeded PRNG (ADR §2), or bit-for-bit replay can't hold.
+- **Interval/startup Events are required, not deferrable.** `EventManager.ts` today has
+  only `onReset()`. Velocity-Flat/Rough uses `mode="interval"` (`push_robot`,
+  `interval_range_s=(1.0,3.0)`) and `mode="startup"` (`foot_friction`, `encoder_bias`,
+  `base_com`); Lift-Cube-Yam uses `mode="startup"`. `startup` runs once at init (no
+  timer); `interval` needs the countdown-timer trigger (scalar `time_left` per ADR §5,
+  not tensors).
+
+## 5. Acceptance criteria
+
+- [ ] RNG spy/replay harness (§2b) in place and used for every term with internal
+      randomness before any Command/Event parity claim is trusted. **(done for reset)**
+- [ ] Every `examples/mjlab/*` task: N-step rollout matches the mjlab reference within
+      tolerance on observations and termination flags.
+- [ ] Velocity-Flat/Rough: `fell_over`/`out_of_terrain_bounds` termination tracing;
+      `mode="startup"` + `mode="interval"` dispatch (native timer, §4); the
+      `UniformVelocityCommand` ONNX body + declarative GUI override (§3a; GUI override
+      checked manually, not in the automated parity check).
+- [ ] Lift-Cube-Yam: `mode="startup"` dispatch; the `LiftingCommand` ONNX body (§3b),
+      incl. the object pose/velocity reset side effect via the native delta mechanism.
+- [ ] Tracking/Mimic tasks: physics/Obs/Term/Action/reset-Event parity holds;
+      `TrackingCommand` **not** required to be ONNX-traced yet — confirm the native impl
+      still runs unchanged.
+- [ ] No term's Python source ships to the browser as executable text.
+- [ ] `src/mjswan/dsl/` and `scripts/verify_dsl_migration.py` removed once the new
+      harness supersedes their coverage.
+
+## Review checkpoint — findings from the first real trace run
+
+Findings from tracing Cartpole's observations and reset Events, recorded before
+generalizing (per the sequencing above):
+
+1. **N=1 is load-bearing for Event graphs.** `reset_joints_by_offset` does
+   `joint_pos.view(len(env_ids), -1)`; `len(env_ids)` bakes the env count (=1) into the
+   traced graph as a constant (TorchScript `TracerWarning`). Correct at N=1 (ADR §5); a
+   future N>1 would need this addressed. Not a blocker — it confirms the N=1 decision is
+   real, not cosmetic.
+2. **Resolved indices bake in for free.** `torch.tensor(joint_ids)` and `[:, joint_ids]`
+   become graph constants during tracing — exactly §2's "static indices baked as graph
+   constants," no extra machinery.
+3. **The dynamic-slot Event path is implemented but unexercised by Cartpole.** Reset
+   reads only constants (`default_joint_pos/vel`, `soft_joint_pos_limits`) + `rand`. The
+   first term to exercise a live-state read is `push_by_setting_velocity`, which reads
+   `root_link_vel_w` — a field not yet in the tracer's dynamic-field set. → task (a).
+4. **`entity_write` capture must be built for root pose/velocity.** `trace_event_term`
+   currently captures only `write_joint_state_to_sim`. `push_by_setting_velocity` and
+   `LiftingCommand` write via `write_root_link_velocity_to_sim` /
+   `write_root_link_pose_to_sim`; the capture proxy and the write-target descriptor need
+   those kinds (fields: root pose, root velocity). This is the §3/§3b `entity_write`
+   mechanism starting on the Python side. → task (a).
+5. **Reset parity is exact because we replay mjlab's own draws.** With the recorded draw
+   fed as `rand`, `clamp(default + rand, limits)` reproduces mjlab bit-for-close
+   (`max|Δ|=0`). Because mjlab's draws are within range, `clamp` is a no-op on these
+   inputs, so a clamp-bounds bug would not be caught by this specific check. Meets the
+   brief's "realistic-draw parity" bar; an out-of-range `rand` injection case could be
+   added to also cover the clamp explicitly.
+
+**Next (task a):** add `root_link_vel_w`/root-pose to the tracer's dynamic-field set,
+generalize event write-capture to `write_root_link_velocity_to_sim` /
+`write_root_link_pose_to_sim` with a proper `entity_write` descriptor, then trace
+`push_by_setting_velocity` (interval) against a Velocity task and verify dynamic-slot +
+`rand` parity — the first real interval-event and `entity_write` trace.
