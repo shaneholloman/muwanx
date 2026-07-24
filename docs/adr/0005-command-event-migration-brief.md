@@ -15,7 +15,8 @@
 | Reset-mode Event tracing (`write_joint_state_to_sim`) | **done** — Cartpole `reset_slider`/`reset_hinge` parity clean |
 | Dynamic-slot Event path (reads live state) | **done** — Go1 `push_robot` reads live `root_link_vel_w` as a graph input, parity clean |
 | `entity_write` — root **velocity** | **done** — Go1 `push_robot` (`write_root_link_velocity_to_sim`), parity clean |
-| `entity_write` — root **pose** | **implemented, not yet exercised** — awaits `reset_base`/Lift (needs scene-constant support, below) |
+| `entity_write` — root **pose** | **done** — Go1 `reset_base` (`write_root_link_pose_to_sim`), parity clean (max\|Δ\|≈1e-7) |
+| Scene-const + control-flow-scalar capture | **done** — `env.scene.env_origins`, `asset.is_fixed_base` baked as constants |
 | §3 `OnnxCommand` (Velocity/Lift) | not started |
 | §4 interval/startup native dispatch, entity-write apply (TS) | not started |
 | §3a `SliderCommandConfig` extension (TS) | not started |
@@ -281,6 +282,30 @@ event reads into dynamic inputs vs baked constants like observations, and emits 
    (ii) constant capture of control-flow scalar attrs before these trace. `root_pose`
    `entity_write` is implemented but first exercised once `reset_base` lands.
 
-**Next:** scene-constant + control-flow-scalar capture (unblocks `reset_base` → exercises
-`root_pose` write), then §3 `OnnxCommand` Python side (`UniformVelocityCommandCfg` /
-`LiftingCommandCfg` → config shape).
+**Task (a) follow-up — done.** The event recorder/replayer was generalized from a
+`(entity, field)` slot map to **tagged keys** (`("data", entity, field)` /
+`("scene", attr)` / `("attr", entity, attr)`), so scene-level constants
+(`env.scene.env_origins`) and control-flow scalars (`asset.is_fixed_base`) are captured
+and baked, and non-tensor branch values keep tracing on the same path:
+
+9. **`reset_base` (`reset_root_state_uniform`) now traces — `root_pose` `entity_write`
+   exercised for the first time.** `rand_dim=12` (pose 6 + velocity 6), constants
+   `default_root_state` + `scene:env_origins`; it branches on `is_fixed_base` (baked
+   False → floating-base path) and writes both `write_root_link_pose_to_sim` and
+   `write_root_link_velocity_to_sim`. `max|Δ|≈1.2e-7` over 16 replayed draws (float32
+   rounding through `quat_from_euler_xyz`/`quat_mul`), within tolerance.
+10. **`randomize_terrain` stays native** — it writes a *model field* (terrain), not a
+    joint/root state, so it falls to the "wrote nothing traceable" fallback. Model-field
+    writes are the `mode="startup"` domain-randomization mechanism (`geom_friction`,
+    `encoder_bias`, `body_com_offset`); that is separate `entity_write`-adjacent work
+    tracked under §4 (startup dispatch), not part of the value-graph tracer.
+11. **A name-collision bug was caught and fixed:** the new event replay proxies initially
+    reused the observation replay class names (`_ReplayScene`/`_ReplayEntity`/
+    `_ReplayData`), shadowing them module-wide and breaking the *observation* path. Event
+    proxies are now `_EvReplay*`. (Covered by the Cartpole pytest, which exercises both.)
+
+**Next:** §3 `OnnxCommand` Python side — trace `UniformVelocityCommandCfg` /
+`LiftingCommandCfg` bodies (the stateful `(prev_state, resample_mask, rand) →
+(next_state, command[, entity_write])` shape) and emit `OnnxCommand`'s `policy.json`
+config. Lift's cube respawn reuses the root pose/velocity `entity_write` path proven
+here; velocity's seven state fields need the declared shape/dtype state-threading (§3a).

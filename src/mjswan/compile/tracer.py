@@ -361,26 +361,61 @@ def _flatten_captures(
     return names, tensors
 
 
-class _EventCaptureEntity(_WriteCaptureMixin):
-    """Proxy entity over the real one: records reads, captures writes (no sim write)."""
+# A tagged key identifies one value an event body reads off ``env``:
+#   ("data", entity, field)  -> entity.data.<field>   (tensor; dynamic or const)
+#   ("scene", attr)          -> env.scene.<attr>       (scene-level constant, e.g. env_origins)
+#   ("attr", entity, attr)   -> entity.<attr>          (control-flow scalar, e.g. is_fixed_base)
+TaggedKey = tuple
+
+
+class _EvRecData:
+    """Records ``entity.data.<field>`` reads as ``("data", entity, field)``."""
+
+    def __init__(self, real, entity, log):
+        object.__setattr__(self, "_real", real)
+        object.__setattr__(self, "_entity", entity)
+        object.__setattr__(self, "_log", log)
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._real, name)
+        self._log.append((("data", self._entity, name), value))
+        return value
+
+
+class _EvRecEntity(_WriteCaptureMixin):
+    """Records data-field and (non-``data``) attribute reads; captures writes."""
 
     def __init__(self, real, name, log, captures):
         object.__setattr__(self, "_real", real)
-        object.__setattr__(self, "data", _RecordingData(real.data, name, log))
+        object.__setattr__(self, "_name", name)
+        object.__setattr__(self, "_log", log)
+        object.__setattr__(self, "data", _EvRecData(real.data, name, log))
         object.__setattr__(self, "_captures", captures)
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._real, name)
+        value = getattr(self._real, name)
+        # Only tensors and control-flow scalars can be reproduced during replay.
+        if isinstance(value, (torch.Tensor, bool, int, float)):
+            self._log.append((("attr", self._name, name), value))
+        return value
 
 
-class _EventCaptureScene:
+class _EvRecScene:
+    """Records scene-level attribute reads (e.g. ``env_origins``); indexes entities."""
+
     def __init__(self, real, log, captures):
         self._real = real
         self._log = log
         self._captures = captures
 
-    def __getitem__(self, name: str) -> _EventCaptureEntity:
-        return _EventCaptureEntity(self._real[name], name, self._log, self._captures)
+    def __getitem__(self, name: str) -> _EvRecEntity:
+        return _EvRecEntity(self._real[name], name, self._log, self._captures)
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._real, name)
+        if isinstance(value, (torch.Tensor, bool, int, float)):
+            self._log.append((("scene", name), value))
+        return value
 
 
 class _EventCaptureEnv:
@@ -388,79 +423,104 @@ class _EventCaptureEnv:
 
     def __init__(self, real, log, captures):
         object.__setattr__(self, "_real", real)
-        object.__setattr__(self, "scene", _EventCaptureScene(real.scene, log, captures))
+        object.__setattr__(self, "scene", _EvRecScene(real.scene, log, captures))
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._real, name)
 
 
-class _ReplaySlotEntity(_WriteCaptureMixin):
-    """Proxy entity over injected slot tensors: serves reads, captures writes."""
-
-    def __init__(self, entity, slots, captures):
-        object.__setattr__(self, "data", _ReplaySlotData(entity, slots))
-        object.__setattr__(self, "_captures", captures)
-
-
-class _ReplaySlotData:
-    def __init__(self, entity: str, slots: dict[SlotKey, torch.Tensor]):
+class _EvReplayData:
+    def __init__(self, entity: str, served: dict[TaggedKey, Any]):
         object.__setattr__(self, "_entity", entity)
-        object.__setattr__(self, "_slots", slots)
+        object.__setattr__(self, "_served", served)
 
-    def __getattr__(self, name: str) -> torch.Tensor:
-        key = (self._entity, name)
+    def __getattr__(self, name: str) -> Any:
         try:
-            return self._slots[key]
+            return self._served[("data", self._entity, name)]
         except KeyError:
             raise AttributeError(
-                f"Event term read undeclared slot {key!r} during tracing."
+                f"Event term read undeclared data slot ('data', {self._entity!r}, "
+                f"{name!r}) during tracing (input-dependent read?)."
             ) from None
 
 
-class _ReplaySlotScene:
-    def __init__(self, slots, captures):
-        self._slots = slots
+class _EvReplayEntity(_WriteCaptureMixin):
+    def __init__(self, entity, served, captures):
+        object.__setattr__(self, "_name", entity)
+        object.__setattr__(self, "_served", served)
+        object.__setattr__(self, "data", _EvReplayData(entity, served))
+        object.__setattr__(self, "_captures", captures)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self._served[("attr", self._name, name)]
+        except KeyError:
+            raise AttributeError(
+                f"Event term read undeclared attr ('attr', {self._name!r}, {name!r})."
+            ) from None
+
+
+class _EvReplayScene:
+    def __init__(self, served, captures):
+        self._served = served
         self._captures = captures
 
-    def __getitem__(self, name: str) -> _ReplaySlotEntity:
-        return _ReplaySlotEntity(name, self._slots, self._captures)
+    def __getitem__(self, name: str) -> _EvReplayEntity:
+        return _EvReplayEntity(name, self._served, self._captures)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self._served[("scene", name)]
+        except KeyError:
+            raise AttributeError(
+                f"Event term read undeclared scene attr ('scene', {name!r})."
+            ) from None
 
 
 class _EventReplayEnv:
-    def __init__(self, slots, captures, num_envs: int = 1, device: str = "cpu"):
-        self.scene = _ReplaySlotScene(slots, captures)
+    def __init__(self, served, captures, num_envs: int = 1, device: str = "cpu"):
+        self.scene = _EvReplayScene(served, captures)
         self.num_envs = num_envs
         self.device = device
 
 
 class _EventModule(nn.Module):
     """Wraps a side-effecting event ``func`` so ``forward(*dynamic, rand)`` returns
-    the tensors the term would write, with randomness supplied via ``rand``."""
+    the tensors the term would write, with randomness supplied via ``rand``.
+
+    Dynamic reads arrive as ``forward`` args (data slots that vary at runtime);
+    tensor constants are registered buffers; scalar/bool constants (control-flow)
+    are held as plain Python values. All are served back through the replay env.
+    """
 
     def __init__(
         self,
         func: Callable[..., None],
         params: dict[str, Any],
         dynamic_keys: list[SlotKey],
-        constants: dict[SlotKey, torch.Tensor],
+        tensor_consts: dict[TaggedKey, torch.Tensor],
+        scalar_consts: dict[TaggedKey, Any],
     ):
         super().__init__()
         self._func = func
         self._params = params
         self._dynamic_keys = dynamic_keys
-        self._const_buffers: dict[SlotKey, str] = {}
-        for i, (key, value) in enumerate(constants.items()):
+        self._scalar_consts = scalar_consts
+        self._const_buffers: dict[TaggedKey, str] = {}
+        for i, (key, value) in enumerate(tensor_consts.items()):
             buffer_name = f"_const_{i}"
             self.register_buffer(buffer_name, value.detach().clone())
             self._const_buffers[key] = buffer_name
 
     def forward(self, *args: torch.Tensor):
         *dynamic, rand = args
-        slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
+        served: dict[TaggedKey, Any] = dict(self._scalar_consts)
         for key, buffer_name in self._const_buffers.items():
-            slots[key] = getattr(self, buffer_name)
+            served[key] = getattr(self, buffer_name)
+        for (entity, field_name), tensor in zip(self._dynamic_keys, dynamic):
+            served[("data", entity, field_name)] = tensor
         captures: dict[str, tuple[torch.Tensor, ...]] = {}
-        env = _EventReplayEnv(slots, captures)
+        env = _EventReplayEnv(served, captures)
         with ReplayRng(self._func, rand):
             self._func(env, None, **self._params)
         _, tensors = _flatten_captures(captures)
@@ -482,7 +542,7 @@ class EventExport:
     """Per write-kind descriptor: what the outputs target (entity, kind, fields)."""
     reference_outputs: tuple[torch.Tensor, ...]
     reference_rand: torch.Tensor
-    constant_slots: list[SlotKey] = field(default_factory=list)
+    constant_slots: list[str] = field(default_factory=list)
 
 
 def trace_event_term(
@@ -501,10 +561,12 @@ def trace_event_term(
     ``entity_write``, companion brief §3/§3b). The written tensors become the
     graph outputs; randomness is supplied via an explicit ``rand`` input recorded
     from the live term. State the term reads off ``env`` is classified into
-    dynamic inputs vs baked constants exactly as observations are.
+    dynamic inputs vs baked constants: time-varying ``entity.data`` fields become
+    graph inputs; other ``data`` fields, scene-level tensors (``env_origins``),
+    and control-flow scalars (``is_fixed_base``) are baked as constants.
     """
-    # 1. Discovery on the live env: record draws + read fields + written values.
-    log: list[tuple[SlotKey, Any]] = []
+    # 1. Discovery on the live env: record draws + reads + written values.
+    log: list[tuple[TaggedKey, Any]] = []
     captures: dict[str, tuple[torch.Tensor, ...]] = {}
     proxy = _EventCaptureEnv(env, log, captures)
     with DrawRecorder(func) as rec:
@@ -520,22 +582,32 @@ def trace_event_term(
     ref_rand = rec.rand_vector
     rand_dim = rec.rand_dim
 
+    # 2. Classify recorded reads: dynamic data-field inputs vs baked constants.
     dynamic: dict[SlotKey, torch.Tensor] = {}
-    constants: dict[SlotKey, torch.Tensor] = {}
+    tensor_consts: dict[TaggedKey, torch.Tensor] = {}
+    scalar_consts: dict[TaggedKey, Any] = {}
     for key, value in log:
-        if not isinstance(value, torch.Tensor):
-            continue
-        _, field_name = key
-        bucket = dynamic if field_name in _DYNAMIC_DATA_FIELDS else constants
-        bucket.setdefault(key, value)
+        is_dynamic = (
+            key[0] == "data"
+            and key[2] in _DYNAMIC_DATA_FIELDS
+            and isinstance(value, torch.Tensor)
+        )
+        if is_dynamic:
+            dynamic.setdefault((key[1], key[2]), value)
+        elif isinstance(value, torch.Tensor):
+            tensor_consts.setdefault(key, value)
+        else:
+            scalar_consts.setdefault(key, value)
 
     dynamic_keys = sorted(dynamic)
     dyn_input_names = [_slot_input_name(k) for k in dynamic_keys]
     example = tuple(dynamic[k] for k in dynamic_keys) + (ref_rand,)
     input_names = [*dyn_input_names, "rand"]
 
-    # 2. Trace: rand replayed as an explicit input; written values captured.
-    module = _EventModule(func, params, dynamic_keys, constants).eval()
+    # 3. Trace: rand replayed as an explicit input; written values captured.
+    module = _EventModule(
+        func, params, dynamic_keys, tensor_consts, scalar_consts
+    ).eval()
     dyn_axes = {n: {0: "batch"} for n in [*dyn_input_names, *output_names]}
     buffer = io.BytesIO()
     with torch.no_grad():
@@ -577,7 +649,7 @@ def trace_event_term(
         write_targets=write_targets,
         reference_outputs=tuple(t.detach() for t in ref_tensors),
         reference_rand=ref_rand.detach(),
-        constant_slots=sorted(constants),
+        constant_slots=[":".join(str(p) for p in k) for k in sorted(tensor_consts)],
     )
 
 

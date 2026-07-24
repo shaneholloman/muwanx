@@ -230,7 +230,7 @@ def run_parity(
                 continue
             tr.rand_dim = export.rand_dim
             tr.input_slots = [f"{e}.{f}" for e, f in export.input_slots]
-            tr.constant_slots = [f"{e}.{f}" for e, f in export.constant_slots]
+            tr.constant_slots = list(export.constant_slots)
             session = ort.InferenceSession(
                 export.onnx_bytes, providers=["CPUExecutionProvider"]
             )
