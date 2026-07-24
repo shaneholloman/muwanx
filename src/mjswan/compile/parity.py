@@ -25,7 +25,14 @@ import numpy as np
 import torch
 
 from .rng import DrawRecorder
-from .tracer import TermExport, read_slot, trace_event_term, trace_term
+from .tracer import (
+    TermExport,
+    _EventCaptureEnv,
+    _flatten_captures,
+    read_slot,
+    trace_event_term,
+    trace_term,
+)
 
 
 @dataclass
@@ -124,6 +131,7 @@ def run_parity(
     rtol: float = 1e-4,
     event_modes: tuple[str, ...] = ("reset",),
     n_event_draws: int = 16,
+    include_obs: bool = True,
 ) -> ParityReport:
     """Trace a task's terms and assert live-vs-ONNX parity over ``n_steps``.
 
@@ -142,7 +150,8 @@ def run_parity(
     sessions: dict[str, ort.InferenceSession] = {}
     term_meta: list[tuple[str, Callable[..., torch.Tensor], dict[str, Any]]] = []
 
-    for term_name, func, params in _iter_obs_terms(env, obs_group):
+    obs_terms = _iter_obs_terms(env, obs_group) if include_obs else []
+    for term_name, func, params in obs_terms:
         try:
             export = trace_term(func, params, env, name=term_name)
         except ValueError as exc:
@@ -171,18 +180,19 @@ def run_parity(
             )
         )
 
-    for term_name, func in _iter_termination_terms(env):
-        native = term_name in _NATIVE_TERMINATIONS
-        report.terms.append(
-            TermReport(
-                name=term_name,
-                kind="termination",
-                representation="native" if native else "onnx",
-                passed=True,
-                note="elapsed_s >= episode_length_s" if native else "",
+    if include_obs:
+        for term_name, func in _iter_termination_terms(env):
+            native = term_name in _NATIVE_TERMINATIONS
+            report.terms.append(
+                TermReport(
+                    name=term_name,
+                    kind="termination",
+                    representation="native" if native else "onnx",
+                    passed=True,
+                    note="elapsed_s >= episode_length_s" if native else "",
+                )
             )
-        )
-        # Non-native terminations would be traced here; Cartpole has only time_out.
+            # Non-native terminations would be traced here; Cartpole has only time_out.
 
     reports_by_name = {t.name: t for t in report.terms}
     action_dim = env.action_manager.total_action_dim
@@ -214,9 +224,9 @@ def run_parity(
             report.terms.append(tr)
             try:
                 export = trace_event_term(func, params, env, name=term_name, mode=mode)
-            except ValueError as exc:
+            except Exception as exc:  # noqa: BLE001 — untraceable term → native fallback
                 tr.representation = "native"
-                tr.note = str(exc).split(";")[0]
+                tr.note = f"{type(exc).__name__}: {str(exc).splitlines()[0][:80]}"
                 continue
             tr.rand_dim = export.rand_dim
             tr.input_slots = [f"{e}.{f}" for e, f in export.input_slots]
@@ -227,26 +237,21 @@ def run_parity(
             for _ in range(n_event_draws):
                 # Record a fresh reference invocation (real draws, no sim write).
                 captures: dict[str, tuple] = {}
-                from .tracer import _EventCaptureEnv  # noqa: PLC0415
-
                 proxy = _EventCaptureEnv(env, [], captures)
                 with DrawRecorder(func) as rec:
                     func(proxy, None, **params)
-                ref_pos, ref_vel = captures["joint_state"]
+                _, ref_tensors = _flatten_captures(captures)
                 feeds = {"rand": _to_numpy(rec.rand_vector)}
                 for in_name, slot in zip(export.input_names, export.input_slots):
                     feeds[in_name] = _to_numpy(read_slot(env, slot))
-                onnx_pos, onnx_vel = session.run(export.output_names, feeds)
-                diff = max(
-                    float(np.max(np.abs(onnx_pos - _to_numpy(ref_pos)))),
-                    float(np.max(np.abs(onnx_vel - _to_numpy(ref_vel)))),
-                )
-                tr.max_abs_diff = max(tr.max_abs_diff, diff)
+                onnx_outs = session.run(export.output_names, feeds)
+                for onnx_out, ref in zip(onnx_outs, ref_tensors):
+                    ref_np = _to_numpy(ref)
+                    tr.max_abs_diff = max(
+                        tr.max_abs_diff, float(np.max(np.abs(onnx_out - ref_np)))
+                    )
+                    if not np.allclose(onnx_out, ref_np, atol=atol, rtol=rtol):
+                        tr.passed = False
                 tr.steps_checked += 1
-                if not (
-                    np.allclose(onnx_pos, _to_numpy(ref_pos), atol=atol, rtol=rtol)
-                    and np.allclose(onnx_vel, _to_numpy(ref_vel), atol=atol, rtol=rtol)
-                ):
-                    tr.passed = False
 
     return report

@@ -56,6 +56,9 @@ _DYNAMIC_DATA_FIELDS: frozenset[str] = frozenset(
         "root_link_lin_vel_b",
         "root_link_ang_vel_b",
         "root_ang_vel_b",
+        "root_link_vel_w",
+        "root_link_lin_vel_w",
+        "root_link_ang_vel_w",
         "projected_gravity_b",
     }
 )
@@ -316,31 +319,62 @@ def read_slot(env: Any, key: SlotKey) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-class _EventCaptureEntity:
-    """Proxy entity: records field reads and captures ``write_*_to_sim`` values."""
+# Write kinds an event term may emit, and the ordered field names each produces.
+# The "kind" is the mjData write call; "fields" name the tensors it writes, in
+# argument order. This is the `entity_write` vocabulary (companion brief §3/§3b).
+_WRITE_FIELDS: dict[str, tuple[str, ...]] = {
+    "joint_state": ("position", "velocity"),
+    "root_pose": ("pose",),
+    "root_velocity": ("velocity",),
+}
 
-    def __init__(
-        self,
-        real: Any,
-        name: str,
-        log: list[tuple[SlotKey, Any]],
-        captures: dict[str, tuple[torch.Tensor, ...]],
-    ):
-        object.__setattr__(self, "_real", real)
-        object.__setattr__(self, "data", _RecordingData(real.data, name, log))
-        object.__setattr__(self, "_captures", captures)
+
+class _WriteCaptureMixin:
+    """Records ``write_*_to_sim`` calls into ``self._captures`` (kind → tensors)."""
 
     def write_joint_state_to_sim(
         self, position, velocity, joint_ids=None, env_ids=None
     ):
         self._captures["joint_state"] = (position, velocity)
 
+    def write_root_link_pose_to_sim(self, pose, env_ids=None):
+        self._captures["root_pose"] = (pose,)
+
+    def write_root_link_velocity_to_sim(self, velocity, env_ids=None):
+        self._captures["root_velocity"] = (velocity,)
+
+
+def _flatten_captures(
+    captures: dict[str, tuple[torch.Tensor, ...]],
+) -> tuple[list[str], list[torch.Tensor]]:
+    """Flatten a captures dict into (output_names, tensors) deterministically.
+
+    Insertion order is the term's own write-call order (stable across runs), so
+    the discovery pass and the traced module agree on output ordering.
+    """
+    names: list[str] = []
+    tensors: list[torch.Tensor] = []
+    for kind, values in captures.items():
+        for field_name, tensor in zip(_WRITE_FIELDS[kind], values):
+            names.append(f"{kind}__{field_name}")
+            tensors.append(tensor)
+    return names, tensors
+
+
+class _EventCaptureEntity(_WriteCaptureMixin):
+    """Proxy entity over the real one: records reads, captures writes (no sim write)."""
+
+    def __init__(self, real, name, log, captures):
+        object.__setattr__(self, "_real", real)
+        object.__setattr__(self, "data", _RecordingData(real.data, name, log))
+        object.__setattr__(self, "_captures", captures)
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self._real, name)
 
 
 class _EventCaptureScene:
-    def __init__(self, real: Any, log, captures):
+    def __init__(self, real, log, captures):
         self._real = real
         self._log = log
         self._captures = captures
@@ -352,7 +386,7 @@ class _EventCaptureScene:
 class _EventCaptureEnv:
     """Proxy env for event tracing: records reads, captures writes, no sim mutation."""
 
-    def __init__(self, real: Any, log, captures):
+    def __init__(self, real, log, captures):
         object.__setattr__(self, "_real", real)
         object.__setattr__(self, "scene", _EventCaptureScene(real.scene, log, captures))
 
@@ -360,41 +394,12 @@ class _EventCaptureEnv:
         return getattr(self._real, name)
 
 
-class _EventModule(nn.Module):
-    """Wraps a side-effecting event ``func`` so ``forward(*dynamic, rand)`` returns
-    the tensors the term would write, with randomness supplied via ``rand``."""
+class _ReplaySlotEntity(_WriteCaptureMixin):
+    """Proxy entity over injected slot tensors: serves reads, captures writes."""
 
-    def __init__(
-        self,
-        func: Callable[..., None],
-        params: dict[str, Any],
-        dynamic_keys: list[SlotKey],
-        constants: dict[SlotKey, torch.Tensor],
-        capture_key: str,
-        n_outputs: int,
-    ):
-        super().__init__()
-        self._func = func
-        self._params = params
-        self._dynamic_keys = dynamic_keys
-        self._capture_key = capture_key
-        self._n_outputs = n_outputs
-        self._const_buffers: dict[SlotKey, str] = {}
-        for i, (key, value) in enumerate(constants.items()):
-            buffer_name = f"_const_{i}"
-            self.register_buffer(buffer_name, value.detach().clone())
-            self._const_buffers[key] = buffer_name
-
-    def forward(self, *args: torch.Tensor):
-        *dynamic, rand = args
-        slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
-        for key, buffer_name in self._const_buffers.items():
-            slots[key] = getattr(self, buffer_name)
-        captures: dict[str, tuple[torch.Tensor, ...]] = {}
-        env = _EventCaptureEnv_from_slots(slots, captures)
-        with ReplayRng(self._func, rand):
-            self._func(env, None, **self._params)
-        return captures[self._capture_key]
+    def __init__(self, entity, slots, captures):
+        object.__setattr__(self, "data", _ReplaySlotData(entity, slots))
+        object.__setattr__(self, "_captures", captures)
 
 
 class _ReplaySlotData:
@@ -410,18 +415,6 @@ class _ReplaySlotData:
             raise AttributeError(
                 f"Event term read undeclared slot {key!r} during tracing."
             ) from None
-
-
-class _ReplaySlotEntity:
-    def __init__(self, entity: str, slots, captures):
-        object.__setattr__(self, "_name", entity)
-        object.__setattr__(self, "data", _ReplaySlotData(entity, slots))
-        object.__setattr__(self, "_captures", captures)
-
-    def write_joint_state_to_sim(
-        self, position, velocity, joint_ids=None, env_ids=None
-    ):
-        self._captures["joint_state"] = (position, velocity)
 
 
 class _ReplaySlotScene:
@@ -440,8 +433,38 @@ class _EventReplayEnv:
         self.device = device
 
 
-def _EventCaptureEnv_from_slots(slots, captures) -> _EventReplayEnv:
-    return _EventReplayEnv(slots, captures)
+class _EventModule(nn.Module):
+    """Wraps a side-effecting event ``func`` so ``forward(*dynamic, rand)`` returns
+    the tensors the term would write, with randomness supplied via ``rand``."""
+
+    def __init__(
+        self,
+        func: Callable[..., None],
+        params: dict[str, Any],
+        dynamic_keys: list[SlotKey],
+        constants: dict[SlotKey, torch.Tensor],
+    ):
+        super().__init__()
+        self._func = func
+        self._params = params
+        self._dynamic_keys = dynamic_keys
+        self._const_buffers: dict[SlotKey, str] = {}
+        for i, (key, value) in enumerate(constants.items()):
+            buffer_name = f"_const_{i}"
+            self.register_buffer(buffer_name, value.detach().clone())
+            self._const_buffers[key] = buffer_name
+
+    def forward(self, *args: torch.Tensor):
+        *dynamic, rand = args
+        slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
+        for key, buffer_name in self._const_buffers.items():
+            slots[key] = getattr(self, buffer_name)
+        captures: dict[str, tuple[torch.Tensor, ...]] = {}
+        env = _EventReplayEnv(slots, captures)
+        with ReplayRng(self._func, rand):
+            self._func(env, None, **self._params)
+        _, tensors = _flatten_captures(captures)
+        return tuple(tensors)
 
 
 @dataclass
@@ -455,8 +478,8 @@ class EventExport:
     input_names: list[str]
     rand_dim: int
     output_names: list[str]
-    write_target: dict[str, Any]
-    """Descriptor of what the written outputs target (entity, joint_ids, fields)."""
+    write_targets: list[dict[str, Any]]
+    """Per write-kind descriptor: what the outputs target (entity, kind, fields)."""
     reference_outputs: tuple[torch.Tensor, ...]
     reference_rand: torch.Tensor
     constant_slots: list[SlotKey] = field(default_factory=list)
@@ -473,9 +496,12 @@ def trace_event_term(
 ) -> EventExport:
     """Trace a side-effecting (write-to-sim) event term body to ONNX.
 
-    Currently supports joint-state resets (``write_joint_state_to_sim``): the
-    written ``(position, velocity)`` become the graph outputs, with randomness
-    supplied via an explicit ``rand`` input recorded from the live term.
+    Supports any combination of ``write_joint_state_to_sim`` (reset joints) and
+    ``write_root_link_pose_to_sim`` / ``write_root_link_velocity_to_sim`` (root
+    ``entity_write``, companion brief §3/§3b). The written tensors become the
+    graph outputs; randomness is supplied via an explicit ``rand`` input recorded
+    from the live term. State the term reads off ``env`` is classified into
+    dynamic inputs vs baked constants exactly as observations are.
     """
     # 1. Discovery on the live env: record draws + read fields + written values.
     log: list[tuple[SlotKey, Any]] = []
@@ -484,13 +510,13 @@ def trace_event_term(
     with DrawRecorder(func) as rec:
         func(proxy, None, **params)
 
-    if "joint_state" not in captures:
+    if not captures:
         raise ValueError(
-            f"Event term {name!r} did not call write_joint_state_to_sim; only "
-            "joint-state reset events are traced so far (companion brief §3b "
-            "entity_write is future work)."
+            f"Event term {name!r} wrote nothing traceable "
+            "(no write_joint_state/root_pose/root_velocity_to_sim call); handle "
+            "it natively or extend _WRITE_FIELDS."
         )
-    ref_outputs = captures["joint_state"]
+    output_names, ref_tensors = _flatten_captures(captures)
     ref_rand = rec.rand_vector
     rand_dim = rec.rand_dim
 
@@ -507,12 +533,9 @@ def trace_event_term(
     dyn_input_names = [_slot_input_name(k) for k in dynamic_keys]
     example = tuple(dynamic[k] for k in dynamic_keys) + (ref_rand,)
     input_names = [*dyn_input_names, "rand"]
-    output_names = ["position", "velocity"]
 
     # 2. Trace: rand replayed as an explicit input; written values captured.
-    module = _EventModule(
-        func, params, dynamic_keys, constants, "joint_state", n_outputs=2
-    ).eval()
+    module = _EventModule(func, params, dynamic_keys, constants).eval()
     dyn_axes = {n: {0: "batch"} for n in [*dyn_input_names, *output_names]}
     buffer = io.BytesIO()
     with torch.no_grad():
@@ -528,11 +551,20 @@ def trace_event_term(
         )
 
     asset_cfg = params.get("asset_cfg")
-    write_target = {
-        "entity": getattr(asset_cfg, "name", None),
-        "joint_ids": _static_ids(getattr(asset_cfg, "joint_ids", None)),
-        "fields": ["qpos", "qvel"],
-    }
+    entity = getattr(asset_cfg, "name", None)
+    write_targets = [
+        {
+            "kind": kind,
+            "entity": entity,
+            "fields": list(_WRITE_FIELDS[kind]),
+            **(
+                {"joint_ids": _static_ids(getattr(asset_cfg, "joint_ids", None))}
+                if kind == "joint_state"
+                else {}
+            ),
+        }
+        for kind in captures
+    ]
 
     return EventExport(
         name=name,
@@ -542,8 +574,8 @@ def trace_event_term(
         input_names=dyn_input_names,
         rand_dim=rand_dim,
         output_names=output_names,
-        write_target=write_target,
-        reference_outputs=tuple(t.detach() for t in ref_outputs),
+        write_targets=write_targets,
+        reference_outputs=tuple(t.detach() for t in ref_tensors),
         reference_rand=ref_rand.detach(),
         constant_slots=sorted(constants),
     )

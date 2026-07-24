@@ -13,8 +13,9 @@
 | §2 tracer on Cartpole (Obs/Term) | **done** — `src/mjswan/compile/tracer.py`, parity clean |
 | §2b RNG spy/replay harness | **done** — `src/mjswan/compile/rng.py` |
 | Reset-mode Event tracing (`write_joint_state_to_sim`) | **done** — Cartpole `reset_slider`/`reset_hinge` parity clean |
-| Dynamic-slot Event path (reads live state) | **implemented, awaiting a real interval event to exercise** |
-| `entity_write` (root pose/velocity) | **in progress** — see §4-findings and (a) below |
+| Dynamic-slot Event path (reads live state) | **done** — Go1 `push_robot` reads live `root_link_vel_w` as a graph input, parity clean |
+| `entity_write` — root **velocity** | **done** — Go1 `push_robot` (`write_root_link_velocity_to_sim`), parity clean |
+| `entity_write` — root **pose** | **implemented, not yet exercised** — awaits `reset_base`/Lift (needs scene-constant support, below) |
 | §3 `OnnxCommand` (Velocity/Lift) | not started |
 | §4 interval/startup native dispatch, entity-write apply (TS) | not started |
 | §3a `SliderCommandConfig` extension (TS) | not started |
@@ -258,8 +259,28 @@ generalizing (per the sequencing above):
    brief's "realistic-draw parity" bar; an out-of-range `rand` injection case could be
    added to also cover the clamp explicitly.
 
-**Next (task a):** add `root_link_vel_w`/root-pose to the tracer's dynamic-field set,
-generalize event write-capture to `write_root_link_velocity_to_sim` /
-`write_root_link_pose_to_sim` with a proper `entity_write` descriptor, then trace
-`push_by_setting_velocity` (interval) against a Velocity task and verify dynamic-slot +
-`rand` parity — the first real interval-event and `entity_write` trace.
+**Task (a) — done.** The tracer now generalizes over write kinds (`joint_state`,
+`root_pose`, `root_velocity` via `_WRITE_FIELDS` + `_WriteCaptureMixin`), classifies
+event reads into dynamic inputs vs baked constants like observations, and emits an
+`entity_write` descriptor (`write_targets`). Validated on Go1-Velocity-Flat
+(`scripts/onnx_parity_velocity_events.py`):
+
+6. **`push_robot` (interval) parity clean — dynamic-slot + root-velocity `entity_write`
+   both exercised for the first time.** `rand_dim=6`, no constants; it reads live
+   `root_link_vel_w` as a graph *input* and writes `write_root_link_velocity_to_sim`;
+   `max|Δ|=0` over 16 replayed draws. `reset_robot_joints` (12 joints, `rand_dim=24`)
+   also clean.
+7. **Play mode pops `push_robot`** (`go1/env_cfgs.py:242`), so the light play env has no
+   interval event; the probe re-adds it to a play env (N=1) rather than building the
+   thousands-env training cfg. The interval *timer* is TS-side (out of scope here); the
+   Python harness validates the term-body math on both `resample_mask` states.
+8. **`reset_base` / `randomize_terrain` fall back to native cleanly (next work).**
+   `reset_root_state_uniform` reads `env.scene.env_origins` (a scene-level constant) and
+   branches on `asset.is_fixed_base` (a non-tensor attribute); `randomize_terrain` reads
+   the `env.scene.terrain` object. The tracer needs (i) scene-level constant capture and
+   (ii) constant capture of control-flow scalar attrs before these trace. `root_pose`
+   `entity_write` is implemented but first exercised once `reset_base` lands.
+
+**Next:** scene-constant + control-flow-scalar capture (unblocks `reset_base` → exercises
+`root_pose` write), then §3 `OnnxCommand` Python side (`UniformVelocityCommandCfg` /
+`LiftingCommandCfg` → config shape).
