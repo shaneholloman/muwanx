@@ -52,8 +52,20 @@ def test_time_out_is_native(cartpole_report):
     assert time_out.representation == "native"
 
 
-def test_every_onnx_term_checked_every_step(cartpole_report):
+def test_every_onnx_obs_term_checked_every_step(cartpole_report):
     for t in cartpole_report.terms:
-        if t.representation == "onnx":
+        if t.representation == "onnx" and t.kind == "observation":
             assert t.steps_checked == cartpole_report.n_steps
             assert t.max_abs_diff <= cartpole_report.atol
+
+
+def test_reset_events_are_onnx_and_match(cartpole_report):
+    events = {t.name: t for t in cartpole_report.terms if t.kind == "event"}
+    assert {"reset_slider", "reset_hinge"} <= set(events)
+    for name in ("reset_slider", "reset_hinge"):
+        ev = events[name]
+        assert ev.representation == "onnx"
+        # reset_joints_by_offset draws one position + one velocity offset.
+        assert ev.rand_dim == 2
+        assert ev.steps_checked > 0
+        assert ev.max_abs_diff <= cartpole_report.atol

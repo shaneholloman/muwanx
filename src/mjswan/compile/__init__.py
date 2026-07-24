@@ -8,12 +8,17 @@ Phase 1 covers value-returning terms (observations, non-native terminations).
 from __future__ import annotations
 
 from .parity import ParityReport, TermReport, run_parity
-from .tracer import TermExport, trace_term
+from .rng import DrawRecorder, ReplayRng
+from .tracer import EventExport, TermExport, trace_event_term, trace_term
 
 __all__ = [
     "TermExport",
+    "EventExport",
     "trace_term",
+    "trace_event_term",
     "run_parity",
     "ParityReport",
     "TermReport",
+    "DrawRecorder",
+    "ReplayRng",
 ]

@@ -24,13 +24,14 @@ from typing import Any, Callable
 import numpy as np
 import torch
 
-from .tracer import TermExport, read_slot, trace_term
+from .rng import DrawRecorder
+from .tracer import TermExport, read_slot, trace_event_term, trace_term
 
 
 @dataclass
 class TermReport:
     name: str
-    kind: str  # "observation" | "termination"
+    kind: str  # "observation" | "termination" | "event"
     representation: str  # "onnx" | "native"
     input_slots: list[str] = field(default_factory=list)
     constant_slots: list[str] = field(default_factory=list)
@@ -38,6 +39,7 @@ class TermReport:
     steps_checked: int = 0
     passed: bool = True
     note: str = ""
+    rand_dim: int = 0
 
 
 @dataclass
@@ -59,6 +61,12 @@ class ParityReport:
             status = "OK  " if t.passed else "FAIL"
             if t.representation == "native":
                 lines.append(f"  [{status}] {t.name:<16} native ({t.note})")
+            elif t.kind == "event":
+                lines.append(
+                    f"  [{status}] {t.name:<16} onnx-event  "
+                    f"rand_dim={t.rand_dim} const={t.constant_slots} "
+                    f"max|Δ|={t.max_abs_diff:.2e} over {t.steps_checked} draws"
+                )
             else:
                 lines.append(
                     f"  [{status}] {t.name:<16} onnx  "
@@ -94,6 +102,18 @@ def _iter_termination_terms(env: Any) -> list[tuple[str, Callable[..., torch.Ten
     return [(name, tm.get_term_cfg(name).func) for name in tm.active_terms]
 
 
+def _iter_event_terms(
+    env: Any, mode: str
+) -> list[tuple[str, Callable[..., None], dict[str, Any]]]:
+    em = env.event_manager
+    names = em.active_terms.get(mode, [])
+    out = []
+    for term_name in names:
+        cfg = em.get_term_cfg(term_name)
+        out.append((term_name, cfg.func, dict(cfg.params)))
+    return out
+
+
 def run_parity(
     env: Any,
     *,
@@ -102,10 +122,14 @@ def run_parity(
     seed: int = 0,
     atol: float = 1e-5,
     rtol: float = 1e-4,
+    event_modes: tuple[str, ...] = ("reset",),
+    n_event_draws: int = 16,
 ) -> ParityReport:
     """Trace a task's terms and assert live-vs-ONNX parity over ``n_steps``.
 
     ``env`` must be a freshly constructed mjlab env; this function resets it.
+    Observation terms are checked every step; ``reset``-mode Event terms are
+    checked by replaying ``n_event_draws`` fresh recorded RNG draws (§2b).
     """
     import onnxruntime as ort
 
@@ -182,5 +206,47 @@ def run_parity(
             tr.steps_checked += 1
             if not np.allclose(onnx_out, live_out, atol=atol, rtol=rtol):
                 tr.passed = False
+
+    # --- Event terms: trace once, then replay fresh recorded RNG draws. -----
+    for mode in event_modes:
+        for term_name, func, params in _iter_event_terms(env, mode):
+            tr = TermReport(name=term_name, kind="event", representation="onnx")
+            report.terms.append(tr)
+            try:
+                export = trace_event_term(func, params, env, name=term_name, mode=mode)
+            except ValueError as exc:
+                tr.representation = "native"
+                tr.note = str(exc).split(";")[0]
+                continue
+            tr.rand_dim = export.rand_dim
+            tr.input_slots = [f"{e}.{f}" for e, f in export.input_slots]
+            tr.constant_slots = [f"{e}.{f}" for e, f in export.constant_slots]
+            session = ort.InferenceSession(
+                export.onnx_bytes, providers=["CPUExecutionProvider"]
+            )
+            for _ in range(n_event_draws):
+                # Record a fresh reference invocation (real draws, no sim write).
+                captures: dict[str, tuple] = {}
+                from .tracer import _EventCaptureEnv  # noqa: PLC0415
+
+                proxy = _EventCaptureEnv(env, [], captures)
+                with DrawRecorder(func) as rec:
+                    func(proxy, None, **params)
+                ref_pos, ref_vel = captures["joint_state"]
+                feeds = {"rand": _to_numpy(rec.rand_vector)}
+                for in_name, slot in zip(export.input_names, export.input_slots):
+                    feeds[in_name] = _to_numpy(read_slot(env, slot))
+                onnx_pos, onnx_vel = session.run(export.output_names, feeds)
+                diff = max(
+                    float(np.max(np.abs(onnx_pos - _to_numpy(ref_pos)))),
+                    float(np.max(np.abs(onnx_vel - _to_numpy(ref_vel)))),
+                )
+                tr.max_abs_diff = max(tr.max_abs_diff, diff)
+                tr.steps_checked += 1
+                if not (
+                    np.allclose(onnx_pos, _to_numpy(ref_pos), atol=atol, rtol=rtol)
+                    and np.allclose(onnx_vel, _to_numpy(ref_vel), atol=atol, rtol=rtol)
+                ):
+                    tr.passed = False
 
     return report
