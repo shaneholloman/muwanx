@@ -804,7 +804,7 @@ class _CommandModule(nn.Module):
         orig = {a: getattr(self._term, a) for a in self._entity_attr_names}
         orig_env = getattr(self._term, "_env", None)
         for a in self._entity_attr_names:
-            setattr(self._term, a, _ReplayEntity(self._entity_name, served, captures))
+            setattr(self._term, a, _EvReplayEntity(self._entity_name, served, captures))
         if orig_env is not None:
             self._term._env = _EventReplayEnv(served, captures)
         try:
