@@ -337,6 +337,14 @@ prev)` with `prev` cloned before `_resample_command`'s in-place writes; reset un
     `nonzero`+branch) or the §9 native-TS treatment. This is the honest checkpoint
     before generalizing further.
 
+    *Confirmed empirically* (`scripts/onnx_probe_velocity_command.py`): the
+    `sample_uniform` spy records `rand_dim=0` (the `r.uniform_()` draws are invisible
+    to it), and `trace_command_term` then **fails loudly** with
+    `UnsupportedOperatorError: Exporting the operator 'aten::uniform' to ONNX opset
+    version 17 is not supported` — the §9 escape hatch working as intended (a clear,
+    named failure at export, not a silent miscompile). The RNG operator is the first
+    wall; the data-dependent branches sit behind it.
+
 **Next:** decide `UniformVelocityCommand`'s path (masked rewrite vs native), and emit
 the `OnnxCommand` `policy.json` config shape (state-field specs, `ui` block, `write_targets`)
 from a successful command trace — Lift is ready to serialize; velocity is gated on the above.
