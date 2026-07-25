@@ -19,7 +19,8 @@
 | Scene-const + control-flow-scalar capture | **done** — `env.scene.env_origins`, `asset.is_fixed_base` baked as constants |
 | §3 `OnnxCommand` tracer (Python) | **partial** — stateful `trace_command_term` done; `LiftingCommand` (§3b) parity clean |
 | §3b `LiftingCommandCfg` body | **done** — Lift-Cube-Yam, rand_dim=7, mask gate + cube entity_write, parity clean |
-| §3a `UniformVelocityCommandCfg` body | **path validated** — examples-side trace-friendly override traces + parity clean (core resample+standing); heading tracking needs dynamic-slot Command support (finding 14) |
+| §3a `UniformVelocityCommandCfg` body | **traceable via override** — examples-side trace-friendly override incl. heading tracking traces + parity clean (dynamic-slot Command support, finding 15) |
+| Dynamic-slot Command support (runtime reads) | **done** — `term.robot`/`term._env` swapped to the Event tagged-key proxies; `heading_w` threaded as a graph input |
 | §4 interval/startup native dispatch, entity-write apply (TS) | not started |
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` | **deferred** — see note below |
@@ -369,7 +370,30 @@ prev)` with `prev` cloned before `_resample_command`'s in-place writes; reset un
     to recording proxies in discovery and replay proxies in trace, threading dynamic reads
     as graph inputs. The demo omits heading tracking for exactly this reason.
 
-**Next:** (1) add dynamic-slot Command support (reuse the Event tagged-key proxy on
-`term.robot`/`term._env`) so a full trace-friendly velocity override (incl. heading) traces;
-(2) emit the `OnnxCommand` `policy.json` config shape (state-field specs, `ui` block,
-`write_targets`) from a successful command trace — Lift is ready to serialize.
+15. **Dynamic-slot Command support — done; full velocity override (incl. heading
+    tracking) traces.** The Command tracer now swaps `term.robot`/`term._env` to the
+    Event tagged-key proxies (`_RecordCommand` in discovery, `_EvReplay*`/`_EventReplayEnv`
+    in the traced module), so a command's time-varying runtime reads
+    (`self.robot.data.heading_w`) thread as dynamic graph inputs while scene constants
+    (`env_origins`) and control-flow scalars still bake. *Validated* (override demo v2,
+    Go1-Velocity-Flat): a trace-friendly `twist` with heading tracking (steer `ang_vel_z`
+    toward `heading_target` via `wrap_to_pi` + `torch.where`, reading `heading_w`) traces
+    and holds parity — state `[vel_command_b, heading_target, is_heading_env,
+    is_standing_env]`, `rand_dim=6`, `max|Δ|=0` over 16 draws. The `run_command_parity`
+    `mask=False` check was corrected to compare against `_update_command`-only on prev
+    (velocity applies standing/heading every frame, so "state unchanged" was wrong). The
+    entity-swap refactor left Lift clean (`rand_dim=7`, `max|Δ|≈6e-8`). One fix the first
+    run surfaced: the module must use the event replay entity (`_EvReplayEntity`, which
+    carries `captures`), not the observation-path `_ReplayEntity`.
+
+    With this, the §3a path is complete: `UniformVelocityCommand` is fully traceable via a
+    trace-friendly examples-side override (no upstream mjlab change, no native TS). The
+    override authored here covers lin/ang resample + heading + standing; a
+    production override would also port world-frame/forward/init_velocity (all expressible
+    with the same `sample_uniform` + `torch.where` vocabulary).
+
+**Next:** emit the `OnnxCommand` `policy.json` config shape (state-field specs with
+shape/dtype, `ui` block, `write_targets`, `rand_dim`) from a successful command trace, and
+wire it into the existing `policy.json` serialization — Lift and the velocity override are
+both ready to serialize. Then §4 (TS runtime: interval/startup native dispatch, entity-write
+apply) is the remaining cross-cutting piece.
