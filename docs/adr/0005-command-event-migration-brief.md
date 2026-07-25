@@ -21,6 +21,7 @@
 | §3b `LiftingCommandCfg` body | **done** — Lift-Cube-Yam, rand_dim=7, mask gate + cube entity_write, parity clean |
 | §3a `UniformVelocityCommandCfg` body | **traceable via override** — examples-side trace-friendly override incl. heading tracking traces + parity clean (dynamic-slot Command support, finding 15) |
 | Dynamic-slot Command support (runtime reads) | **done** — `term.robot`/`term._env` swapped to the Event tagged-key proxies; `heading_w` threaded as a graph input |
+| `OnnxCommand` `policy.json` config output | **done** — `command_config`/`write_command_artifact` + JSON schema; unit-tested + end-to-end from real traces |
 | §4 interval/startup native dispatch, entity-write apply (TS) | not started |
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` | **deferred** — see note below |
@@ -392,8 +393,28 @@ prev)` with `prev` cloned before `_resample_command`'s in-place writes; reset un
     production override would also port world-frame/forward/init_velocity (all expressible
     with the same `sample_uniform` + `torch.where` vocabulary).
 
-**Next:** emit the `OnnxCommand` `policy.json` config shape (state-field specs with
-shape/dtype, `ui` block, `write_targets`, `rand_dim`) from a successful command trace, and
-wire it into the existing `policy.json` serialization — Lift and the velocity override are
-both ready to serialize. Then §4 (TS runtime: interval/startup native dispatch, entity-write
-apply) is the remaining cross-cutting piece.
+16. **`OnnxCommand` `policy.json` config output — done.** `mjswan.compile.serialize`
+    turns a `CommandExport` into the single generic `OnnxCommand` config entry the runtime
+    consumes (one handler interprets every command; no engine class per command). It
+    carries everything the handler needs: `state_fields` (each with **shape + dtype**),
+    `command_field`, `rand_dim`, `input_slots` (dynamic runtime reads), `write_targets`
+    (entity_write), and optional `resampling_time_range`/`debug_vis`/`ui`. The `ui` block
+    (checkbox/sliders/button, §3a) is authored task-side, not derived from the trace.
+    `write_command_artifact` writes `command/<name>.onnx` beside it. Shipped with an
+    authoritative JSON Schema (`COMMAND_JSON_SCHEMA`, for browser-side load-time validation
+    per §6) and a dependency-free `validate_command_config`. Unit-tested pure-Python
+    (`tests/test_onnx_command_config.py`, velocity + lifting shapes) and emitted end-to-end
+    from the real velocity-override trace (`scripts/onnx_command_override_demo.py`).
+
+    This reuses the existing `config.json`/`policy.json` contract (brief §4) — the entry
+    replaces a command's DSL/`UiCommand` mapping. Wiring it into `PolicyConfig`'s live
+    serialization (so `Builder.build()` emits it) is the remaining builder-integration step,
+    deferred with the rest of the DSL→ONNX build-output switch (brief §2 deferral note).
+
+**Next:** §4 — the TypeScript runtime is now the critical path: the generic `OnnxCommand`
+handler (owns the resample timer, persists state via `is_init`/`carry`, applies `ui`
+override and `entity_write`), native interval/startup Event dispatch, and the entity-write
+apply primitive. All the Python-side artifacts they consume (obs/term/event/command ONNX +
+configs) are proven. A separate track: model-field-write startup-DR events
+(`geom_friction`/`encoder_bias`/`body_com_offset`) — currently native-fallback, needed for
+Velocity/Lift `mode="startup"` parity.

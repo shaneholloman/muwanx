@@ -82,10 +82,17 @@ def tf_update_command(self) -> None:
 
 
 def main() -> int:
+    import json
+
     from mjlab.envs import ManagerBasedRlEnv
     from mjlab.tasks.velocity.config.go1.env_cfgs import unitree_go1_flat_env_cfg
 
-    from mjswan.compile import run_command_parity
+    from mjswan.compile import (
+        command_config,
+        run_command_parity,
+        trace_command_term,
+        validate_command_config,
+    )
 
     env = ManagerBasedRlEnv(unitree_go1_flat_env_cfg(play=True), device="cpu")
     env.reset()
@@ -96,14 +103,15 @@ def main() -> int:
     term._update_command = types.MethodType(tf_update_command, term)
     print(f"overrode {type(term).__name__}._resample_command / _update_command")
 
+    state_fields = [
+        "vel_command_b",
+        "heading_target",
+        "is_heading_env",
+        "is_standing_env",
+    ]
     report = run_command_parity(
         term,
-        state_fields=[
-            "vel_command_b",
-            "heading_target",
-            "is_heading_env",
-            "is_standing_env",
-        ],
+        state_fields=state_fields,
         name="twist",
         command_field="vel_command_b",
         n_draws=16,
@@ -114,6 +122,50 @@ def main() -> int:
         f"max|Δ|={report.max_abs_diff:.2e} over {report.steps_checked} draws  "
         f"({report.note})"
     )
+
+    # End-to-end: emit the OnnxCommand policy.json config from the real trace.
+    export = trace_command_term(
+        term, state_fields, name="twist", command_field="vel_command_b"
+    )
+    # A velocity task author supplies the UI descriptor (mirrors mjlab create_gui).
+    ui = {
+        "controls": [
+            {"type": "checkbox", "name": "enabled", "label": "Joystick"},
+            {
+                "type": "slider",
+                "name": "lin_vel_x",
+                "label": "X",
+                "enabled_when": "enabled",
+            },
+            {
+                "type": "slider",
+                "name": "lin_vel_y",
+                "label": "Y",
+                "enabled_when": "enabled",
+            },
+            {
+                "type": "slider",
+                "name": "ang_vel_z",
+                "label": "Yaw",
+                "enabled_when": "enabled",
+            },
+            {"type": "button", "name": "zero", "label": "Zero"},
+        ]
+    }
+    cfg = command_config(
+        export,
+        onnx_ref="command/twist.onnx",
+        resampling_time_range=tuple(term.cfg.resampling_time_range),
+        debug_vis=bool(getattr(term.cfg, "debug_vis", False)),
+        ui=ui,
+    )
+    errors = validate_command_config(cfg)
+    print(f"policy.json OnnxCommand config (valid={not errors}):")
+    print(json.dumps({k: v for k, v in cfg.items() if k != "ui"}, indent=2))
+    if errors:
+        print("CONFIG ERRORS:", errors)
+        report.passed = False
+
     print("PASS" if report.passed else "FAIL")
     return 0 if report.passed else 1
 
