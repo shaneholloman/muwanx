@@ -158,6 +158,7 @@ def ui_command(inputs: list[CommandInput]) -> CommandTermConfig:
 
 
 def velocity_command(
+    *,
     lin_vel_x: tuple[float, float] = (-1.0, 1.0),
     lin_vel_y: tuple[float, float] = (-0.5, 0.5),
     ang_vel_z: tuple[float, float] = (-1.0, 1.0),
