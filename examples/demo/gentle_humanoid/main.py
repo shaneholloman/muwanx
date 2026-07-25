@@ -87,6 +87,7 @@ def _body_world_npz(
     dof_pos: np.ndarray,  # (N, n_source), source joint order
     source_joint_names: list[str],
     target_joint_names: list[str],
+    *,
     fps: float = 50.0,
 ) -> bytes:
     """Convert a root+dof clip to the engine's ``body_world`` format (#79):

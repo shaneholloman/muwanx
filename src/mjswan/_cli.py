@@ -108,6 +108,7 @@ def publish_cmd(
     dist_dir: Annotated[
         Path, typer.Argument(help="Path to a built mjswan dist directory.")
     ],
+    *,
     title: Annotated[
         Optional[str],
         typer.Option(help="Simulation title. Defaults to the first project's name."),

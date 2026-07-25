@@ -768,6 +768,7 @@ class _CommandModule(nn.Module):
         state_fields: list[str],
         entity_attr_names: list[str],
         entity_name: str,
+        *,
         dynamic_keys: list[SlotKey],
         tensor_consts: dict[TaggedKey, torch.Tensor],
         scalar_consts: dict[TaggedKey, Any],
@@ -923,9 +924,9 @@ def trace_command_term(
         state_fields,
         entity_attr_names,
         entity_name,
-        dynamic_keys,
-        tensor_consts,
-        scalar_consts,
+        dynamic_keys=dynamic_keys,
+        tensor_consts=tensor_consts,
+        scalar_consts=scalar_consts,
     ).eval()
     dyn_axes = {
         n: {0: "batch"}

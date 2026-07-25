@@ -424,6 +424,7 @@ class ClientBuilder:
 
     def build(
         self,
+        *,
         clean: bool = False,
         base_path: str = "/",
         gtm_id: str | None = None,
