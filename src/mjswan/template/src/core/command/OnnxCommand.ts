@@ -32,17 +32,15 @@
 
 import { SeededRng } from '../rng';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from '../event/entityWrite';
+import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
+
+export type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader };
 
 export interface OnnxStateFieldSpec {
   name: string;
   shape: number[];
   dtype: string;
-}
-
-export interface OnnxInputSlot {
-  entity?: string | null;
-  field: string;
 }
 
 export interface OnnxCommandConfig extends CommandConfigEntry {
@@ -56,19 +54,6 @@ export interface OnnxCommandConfig extends CommandConfigEntry {
   rand_ranges?: Array<[number, number]>;
   debug_vis?: boolean;
 }
-
-/** Minimal ORT-Web surface this handler needs — injectable for tests. */
-export interface OnnxSession {
-  run(feeds: Record<string, OnnxTensorLike>): Promise<Record<string, OnnxTensorLike>>;
-}
-
-export interface OnnxTensorLike {
-  data: Float32Array | BigInt64Array | Uint8Array;
-  dims: readonly number[];
-}
-
-/** Reads the dynamic runtime state a command's `input_slots` declare. */
-export type SlotReader = (slot: OnnxInputSlot) => Float32Array | null;
 
 export interface OnnxCommandDeps {
   session: OnnxSession;
