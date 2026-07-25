@@ -26,7 +26,10 @@
 | §4 interval/startup/reset Event triggers (TS) | **done** — `core/event/triggers.ts`, scalar per ADR §5 |
 | §4 `entity_write` apply primitive (TS) | **done** — `core/event/entityWrite.ts` (joint_state/root_pose/root_velocity) |
 | §3 generic `OnnxCommand` handler (TS) | **done** — `core/command/OnnxCommand.ts` (timer, state, rand, UI override, writes) |
-| §4 wire triggers/OnnxCommand into EventManager/CommandManager + runtime | not started |
+| §4 generic `OnnxEvent` handler (TS) | **done** — `core/event/OnnxEvent.ts`, no persistent state (traced events are stateless), same async in-flight guard as `OnnxCommand` |
+| §4 mode-aware `EventManager` dispatch | **done** — `startup()`/`tick()`/async `onReset()`, backward compatible with legacy `DslEvent`/registry reset terms |
+| §4 `OnnxCommand` registered in `CommandManager` | **done** — registry-bypass special case, mirrors `DslEvent`'s bypass in `EventManager` |
+| §4 real byte delivery (ResolvedPolicy/SceneInput → runtime → sessions) | **deferred (by design, option B)** — the injectable-session seam is built and tested; real bytes wait for the Builder-side artifact wiring (also deferred, §2 note) |
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` | **deferred** — see note below |
 
@@ -454,11 +457,57 @@ prev)` with `prev` cloned before `_resample_command`'s in-place writes; reset un
     The ONNX session is injected behind a two-method `OnnxSession` interface, so all of the
     above is testable headless with a fake — no ORT, no browser, no WASM.
 
-**Next:** wire these into the engine: `EventManager` gains mode-aware dispatch driven by the
-triggers (calling a term's ONNX graph only on frames a trigger fires — brief §4's
-"fusion reduces graph count, never call frequency"), `CommandManager` registers
-`OnnxCommand` with an ORT-backed session built from app-supplied bytes (ADR 0004 §4 — the
-engine never fetches), and the existing `Math.random()` sites in `DslEvent`/`TrackingCommand`
-are swept into the seeded PRNG. A separate track: model-field-write startup-DR events
+18. **A real bug caught before wiring: `command_config()`'s `"name"` field was backwards.**
+    Every existing command wire format in this codebase
+    (`CommandTermConfig.to_dict()`) uses `"name"` as the **`CommandManager` registry
+    key** (`"UiCommand"`, `"TrackingCommand"`) — the term's own identity is the *outer*
+    dict key the author chooses in `PolicyConfig.commands` (e.g.
+    `commands={"twist": ...}`), passed to the constructor separately. The serializer had
+    it backwards (`"name": export.name`, e.g. `"twist"`), which would have made
+    `CommandManager` look for a registry entry literally called `"twist"` and fail every
+    command. Fixed: `"name"` is the constant `"OnnxCommand"`; the traced term's own name
+    is kept as `"term_id"` for diagnostics only, not consumed by `CommandManager`.
+
+19. **§4 wired into the engine — `EventManager`/`CommandManager` now dispatch real
+    `OnnxEvent`/`OnnxCommand` instances**, behind an **injectable ONNX session** (option B
+    from the byte-delivery discussion: build the wiring now, defer real bytes to the
+    Builder-side artifact integration, which doesn't exist yet either — brief §2's
+    deferral note):
+
+    - **`core/onnx/session.ts`** — the shared `OnnxSession`/`OnnxTensorLike`/
+      `OnnxInputSlot`/`SlotReader` types (moved out of `OnnxCommand.ts` so command and
+      event don't duplicate them), a real `onnxruntime-web`-backed `createOnnxSession`,
+      and `OnnxSessionCache` (name → session, with an injectable factory for tests).
+    - **`core/event/OnnxEvent.ts`** — the event-side counterpart to `OnnxCommand`, but
+      with **no persistent state**: every event traced so far (Cartpole resets, Go1
+      `push_robot`/`reset_base`) is a pure function of baked constants + dynamic reads +
+      `rand` → `entity_write`, with no `self.foo` carried across firings the way a
+      Command's `vel_command_b` is. Same async in-flight guard as `OnnxCommand`.
+    - **`EventManager`** is now mode-aware: `mode="reset"` terms (legacy `DslEvent`/
+      registry classes *and* `OnnxEvent`) fire through a `ResetTrigger` gate that
+      defaults un-gated (`minStepCountBetweenReset=0` preserves today's "always fires on
+      reset" exactly — no behavior change for existing scenes); `mode="interval"` terms
+      fire fire-and-forget through `IntervalTrigger`; `mode="startup"` terms fire once
+      via `startup()`. `onReset()` is now `async` (awaited by the caller).
+      `EventContext.mjModel`/`mjData` widened to nullable to match the runtime's actual
+      field types (`private mjModel: MjModel | null`).
+    - **`CommandManager`** special-cases `entry.name === "OnnxCommand"` — bypassing the
+      class registry exactly as `EventManager` already bypasses it for `DslEvent` — and
+      pulls the session from `context.onnxSessions` (keyed by the config's `onnx` path)
+      and the seeded PRNG from `context.rng`, with `context.readOnnxSlot` threaded
+      through for dynamic input slots. A missing session/rng warns and skips that one
+      command rather than throwing and taking down every other command in the policy.
+
+    84 vitest tests green across the engine (9 files), tsc clean, eslint clean.
+
+**Next:** thread **real** bytes through `ResolvedPolicy`/`SceneInput` → `runtime.ts` →
+`OnnxSessionCache.load()` (mirroring the existing `motions: MotionInput[]` pattern per ADR
+0004 §4 — additive, no fetch), instantiate `rng`/`onnxSessions` on `mjswanRuntime` and pass
+through `CommandTermContext`/event dispatch, call `eventManager.startup()`/`tick()` from the
+main loop and `await eventManager.onReset()` in `resetSimulationState`, and sweep the
+existing `Math.random()` sites in `DslEvent`/`TrackingCommand` into the seeded PRNG. This
+last mile can only be fully exercised once the Builder-side artifact wiring (writing
+command/event `.onnx` into the actual build output) exists — until then it's structural,
+tested with fakes. A separate track: model-field-write startup-DR events
 (`geom_friction`/`encoder_bias`/`body_com_offset`) — currently native-fallback, needed for
 Velocity/Lift `mode="startup"` parity.
