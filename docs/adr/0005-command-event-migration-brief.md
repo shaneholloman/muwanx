@@ -17,7 +17,9 @@
 | `entity_write` — root **velocity** | **done** — Go1 `push_robot` (`write_root_link_velocity_to_sim`), parity clean |
 | `entity_write` — root **pose** | **done** — Go1 `reset_base` (`write_root_link_pose_to_sim`), parity clean (max\|Δ\|≈1e-7) |
 | Scene-const + control-flow-scalar capture | **done** — `env.scene.env_origins`, `asset.is_fixed_base` baked as constants |
-| §3 `OnnxCommand` (Velocity/Lift) | not started |
+| §3 `OnnxCommand` tracer (Python) | **partial** — stateful `trace_command_term` done; `LiftingCommand` (§3b) parity clean |
+| §3b `LiftingCommandCfg` body | **done** — Lift-Cube-Yam, rand_dim=7, mask gate + cube entity_write, parity clean |
+| §3a `UniformVelocityCommandCfg` body | **blocked** — tensor-method RNG + data-dependent control flow (finding 13) |
 | §4 interval/startup native dispatch, entity-write apply (TS) | not started |
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` | **deferred** — see note below |
@@ -304,8 +306,37 @@ and baked, and non-tensor branch values keep tracing on the same path:
     `_ReplayData`), shadowing them module-wide and breaking the *observation* path. Event
     proxies are now `_EvReplay*`. (Covered by the Cartpole pytest, which exercises both.)
 
-**Next:** §3 `OnnxCommand` Python side — trace `UniformVelocityCommandCfg` /
-`LiftingCommandCfg` bodies (the stateful `(prev_state, resample_mask, rand) →
-(next_state, command[, entity_write])` shape) and emit `OnnxCommand`'s `policy.json`
-config. Lift's cube respawn reuses the root pose/velocity `entity_write` path proven
-here; velocity's seven state fields need the declared shape/dtype state-threading (§3a).
+**§3 Command tracer — started.** `trace_command_term` traces a class-based
+`CommandTerm`'s `_resample_command` (gated by `resample_mask`) + `_update_command`
+(always) as a pure function, promoting hidden state to explicit graph I/O
+(`forward(prev_state…, resample_mask, rand) → (next_state…, entity_write?)`). State is
+injected as inputs and read back as outputs (declared shape/dtype for `policy.json`);
+randomness is replayed through `rand`; the resample gate is `where(mask, resampled,
+prev)` with `prev` cloned before `_resample_command`'s in-place writes; reset unifies to
+`resample_mask=True`.
+
+12. **`LiftingCommand` traced — first stateful Command to ONNX (§3b).** On
+    Lift-Cube-Yam (difficulty=`dynamic`): state `target_pos`, `rand_dim=7` (3 target + 3
+    cube pos + 1 yaw, exactly as §2b predicted), the cube respawn `entity_write`
+    (`root_pose` + `root_velocity`) reuses the proven root-write capture, and both
+    `resample_mask` states are validated (True → resampled, False → unchanged).
+    `max|Δ|≈6e-8` over 16 replayed draws. `_update_command` is `pass`; no dynamic
+    runtime read, so the whole body traces as a pure function of `(prev_state, rand)`.
+
+13. **`UniformVelocityCommand` is blocked — the first term to hit §9's escape hatch
+    territory (§3a).** Two obstacles, both structural: (i) it draws with the **tensor
+    method** `r.uniform_(*range)` rather than the `sample_uniform` *function*, so the
+    RNG spy (which patches module globals) doesn't see it — spying `Tensor.uniform_`
+    means monkeypatching the tensor type, which is global and intrusive; (ii)
+    `_resample_command`/`_update_command` use **data-dependent control flow** —
+    `if len(fwd_ids) > 0` (forward-only envs), the `init_velocity` block, and
+    `.nonzero()`+masked index-assign in `_update_command` (heading/world/standing) —
+    which `torch.onnx.export` bakes to the trace-time branch rather than evaluating at
+    runtime. Neither is a threading problem the current tracer can paper over; it needs
+    either a trace-friendly masked rewrite of the term (`torch.where` instead of
+    `nonzero`+branch) or the §9 native-TS treatment. This is the honest checkpoint
+    before generalizing further.
+
+**Next:** decide `UniformVelocityCommand`'s path (masked rewrite vs native), and emit
+the `OnnxCommand` `policy.json` config shape (state-field specs, `ui` block, `write_targets`)
+from a successful command trace — Lift is ready to serialize; velocity is gated on the above.
