@@ -29,13 +29,18 @@ from .tracer import CommandExport
 # Authoritative JSON Schema for one OnnxCommand config entry. The TS runtime
 # validates the manifest against this at load time (brief §6); the Python emitter
 # self-checks against the lighter `validate_command_config` below.
+#
+# "name" is the registry key CommandManager looks up a class by — always the
+# literal "OnnxCommand" here, matching every other *_command() factory's wire
+# convention in command.py, not the term's own identity (that is the outer dict
+# key in PolicyConfig.commands, e.g. commands={"twist": ...}). "term_id" carries
+# the traced term's own name for diagnostics only.
 COMMAND_JSON_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "OnnxCommand",
     "type": "object",
     "required": [
         "name",
-        "type",
         "onnx",
         "command_field",
         "rand_dim",
@@ -45,8 +50,8 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
     ],
     "additionalProperties": False,
     "properties": {
-        "name": {"type": "string"},
-        "type": {"const": "OnnxCommand"},
+        "name": {"const": "OnnxCommand"},
+        "term_id": {"type": "string"},
         "onnx": {"type": "string"},
         "command_field": {"type": "string"},
         "rand_dim": {"type": "integer", "minimum": 0},
@@ -98,6 +103,16 @@ def command_config(
 ) -> dict[str, Any]:
     """Build the ``OnnxCommand`` config entry for ``policy.json`` from a trace.
 
+    Follows the same wire convention as every other command term in this codebase
+    (``CommandTermConfig.to_dict()``): ``"name"`` is the **registry key** the
+    TS-side ``CommandManager`` looks up a class by (here, the constant
+    ``"OnnxCommand"`` — the one generic handler, ADR 0005 §3), not the term's own
+    identity. The term's own id is the *outer* dict key the author chooses when
+    placing this entry into ``PolicyConfig.commands`` (e.g.
+    ``commands={"twist": ...}``) — mirrored by every existing ``*_command()``
+    factory in ``command.py``. ``export.name`` is kept only as ``term_id`` for
+    diagnostics and is not consumed by ``CommandManager``.
+
     Args:
         export: The traced command (:func:`~mjswan.compile.tracer.trace_command_term`).
         onnx_ref: Bundle-relative path to the written ``.onnx`` graph.
@@ -108,8 +123,8 @@ def command_config(
             Not derivable from the trace; the task author supplies it.
     """
     cfg: dict[str, Any] = {
-        "name": export.name,
-        "type": "OnnxCommand",
+        "name": "OnnxCommand",
+        "term_id": export.name,
         "onnx": onnx_ref,
         "command_field": export.command_field,
         "rand_dim": export.rand_dim,
@@ -157,7 +172,6 @@ def validate_command_config(cfg: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     required: dict[str, type | tuple[type, ...]] = {
         "name": str,
-        "type": str,
         "onnx": str,
         "command_field": str,
         "rand_dim": int,
@@ -171,8 +185,8 @@ def validate_command_config(cfg: dict[str, Any]) -> list[str]:
         elif not isinstance(cfg[key], typ):
             errors.append(f"'{key}' must be {getattr(typ, '__name__', typ)}")
 
-    if cfg.get("type") != "OnnxCommand":
-        errors.append("'type' must be 'OnnxCommand'")
+    if cfg.get("name") != "OnnxCommand":
+        errors.append("'name' must be 'OnnxCommand' (the registry key)")
 
     names: set[str] = set()
     for sf in cfg.get("state_fields", []):

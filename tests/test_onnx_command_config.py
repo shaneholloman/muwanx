@@ -50,8 +50,11 @@ def test_command_config_shape():
     cfg = command_config(
         export, onnx_ref="command/twist.onnx", resampling_time_range=(3.0, 8.0)
     )
-    assert cfg["type"] == "OnnxCommand"
-    assert cfg["name"] == "twist"
+    # "name" is the CommandManager registry key (always "OnnxCommand" — the one
+    # generic handler); the term's own id ("twist") is the caller's dict key in
+    # PolicyConfig.commands, kept here only as "term_id" for diagnostics.
+    assert cfg["name"] == "OnnxCommand"
+    assert cfg["term_id"] == "twist"
     assert cfg["onnx"] == "command/twist.onnx"
     assert cfg["command_field"] == "vel_command_b"
     assert cfg["rand_dim"] == 6
