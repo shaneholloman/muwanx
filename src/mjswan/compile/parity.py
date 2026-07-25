@@ -255,3 +255,86 @@ def run_parity(
                 tr.steps_checked += 1
 
     return report
+
+
+def run_command_parity(
+    term: Any,
+    state_fields: list[str],
+    *,
+    name: str,
+    command_field: str,
+    n_draws: int = 16,
+    atol: float = 1e-5,
+    rtol: float = 1e-4,
+) -> TermReport:
+    """Trace a stateful CommandTerm and check live-vs-ONNX parity (brief §3).
+
+    Traces ``_resample_command``+``_update_command`` once, then for ``n_draws``
+    replays fresh recorded RNG through the graph with ``resample_mask=True`` and
+    compares the next state, command, and any ``entity_write`` against the live
+    term. Also checks that ``resample_mask=False`` leaves the state unchanged.
+    """
+    import onnxruntime as ort
+
+    from .tracer import (
+        _CaptureEntityWrites,
+        _find_write_entity,
+        _flatten_captures,
+        _restore_state,
+        _snapshot_state,
+        trace_command_term,
+    )
+
+    tr = TermReport(name=name, kind="command", representation="onnx")
+    export = trace_command_term(
+        term, state_fields, name=name, command_field=command_field
+    )
+    tr.rand_dim = export.rand_dim
+    tr.note = f"state={[s['name'] for s in export.state_fields]} cmd={command_field}"
+    session = ort.InferenceSession(
+        export.onnx_bytes, providers=["CPUExecutionProvider"]
+    )
+    write_entity = _find_write_entity(term)
+    env_ids = torch.arange(term.num_envs)
+
+    for _ in range(n_draws):
+        snap = _snapshot_state(term)
+        prev = {f: getattr(term, f).detach().clone() for f in state_fields}
+        captures: dict[str, tuple] = {}
+        ctx = _CaptureEntityWrites(write_entity, captures) if write_entity else None
+        with DrawRecorder(term._resample_command) as rec:
+            if ctx is not None:
+                ctx.__enter__()
+            try:
+                term._resample_command(env_ids)
+                term._update_command()
+            finally:
+                if ctx is not None:
+                    ctx.__exit__(None, None, None)
+        ref_next = {f: getattr(term, f).detach().clone() for f in state_fields}
+        _, ref_writes = _flatten_captures(captures)
+        _restore_state(term, snap)
+
+        feeds = {f"prev_{f}": _to_numpy(prev[f]) for f in state_fields}
+        feeds["resample_mask"] = np.ones((term.num_envs,), dtype=bool)
+        feeds["rand"] = _to_numpy(rec.rand_vector)
+        outs = session.run(export.output_names, feeds)
+        refs = [ref_next[f] for f in state_fields] + list(ref_writes)
+        for out, ref in zip(outs, refs):
+            ref_np = _to_numpy(ref)
+            tr.max_abs_diff = max(tr.max_abs_diff, float(np.max(np.abs(out - ref_np))))
+            if not np.allclose(out, ref_np, atol=atol, rtol=rtol):
+                tr.passed = False
+        tr.steps_checked += 1
+
+    # resample_mask=False must leave the state unchanged (no resample).
+    prev = {f: getattr(term, f).detach().clone() for f in state_fields}
+    feeds = {f"prev_{f}": _to_numpy(prev[f]) for f in state_fields}
+    feeds["resample_mask"] = np.zeros((term.num_envs,), dtype=bool)
+    feeds["rand"] = _to_numpy(export.reference_rand)
+    outs = session.run(export.output_names, feeds)
+    for f, out in zip(state_fields, outs):
+        if not np.allclose(out, _to_numpy(prev[f]), atol=atol, rtol=rtol):
+            tr.passed = False
+            tr.note += " [mask=False changed state!]"
+    return tr
