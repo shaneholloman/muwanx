@@ -10,16 +10,19 @@ need to be importable for mjswan to function.
 
 Mapping strategy
 ----------------
-Because mjswan sentinels and classes **share the same names** as their
-mjlab counterparts, the adapter resolves mappings dynamically via
-``getattr`` on the mjswan modules — no hardcoded registries required.
-
-* **Observation / termination functions**: ``func.__name__`` is looked
-  up directly on ``mjswan.envs.mdp.observations`` /
-  ``mjswan.envs.mdp.terminations``.
+* **Observation / termination / event functions**: mjlab's own function
+  object is traced directly (ADR 0005) against the scene's live env at build
+  time — there is no mjswan-side reimplementation to look up by name. An
+  author can still override what gets traced for a given mjlab function or
+  term name via ``register_observation`` / ``register_termination`` /
+  ``register_event`` (e.g. to supply a trace-friendly rewrite, or an
+  ``unsupported_reason`` marker for a term that cannot run in the browser).
+* **Commands**: ``type(cfg).__name__`` is looked up in the command registry;
+  a registered entry either builds+traces the term via ``cfg.build(env)``
+  (ADR 0005 §3) or maps to a permanently-native TS class (``TrackingCommand``).
 * **Action configs**: ``type(cfg).__name__`` is looked up on
   ``mjswan.envs.mdp.actions``, and dataclass fields are copied
-  automatically.
+  automatically. Actions stay a fixed, native, non-traced closed set.
 """
 
 from __future__ import annotations
@@ -27,15 +30,13 @@ from __future__ import annotations
 import dataclasses
 import re
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..command import CommandTermConfig as MjswanCommandTermConfig
+from ..command import PendingCommandTrace
 from ..command import _custom_registry as _custom_command_registry
 from ..envs.mdp import actions as _actions_module
-from ..envs.mdp import events as _events_module
-from ..envs.mdp import observations as _obs_module
-from ..envs.mdp import terminations as _term_module
 from ..envs.mdp.actions.actions import (
     ActionTermCfg as MjswanActionTermCfg,
 )
@@ -67,60 +68,31 @@ def _is_from_mjlab(obj: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObservationBinding:
-    """Convert an mjlab observation callable to an mjswan ``ObservationBinding`` sentinel.
+def _adapt_obs_func(
+    func: Any, term_name: str | None = None
+) -> ObservationBinding | Callable[..., Any]:
+    """Resolve the function an observation term's ONNX graph is traced from.
 
-    If *func* is already an mjswan ``ObservationBinding`` it is returned as-is, so
-    mjswan sentinels can be passed directly inside mjlab ``ObservationTermCfg``
-    for functions that have no mjlab equivalent.
+    If *func* is already an mjswan ``ObservationBinding`` (an ``unsupported_reason``
+    marker, or a ``ts_src`` custom-JS class reference) it is returned as-is.
 
-    Otherwise, looks up ``func.__name__`` directly on
-    ``mjswan.envs.mdp.observations``.  When the function name resolves to an
-    unsupported sentinel (e.g. ``builtin_sensor`` used for standard state
-    observations in some mjlab tasks), ``term_name`` is tried as a fallback so
-    that terms like ``base_lin_vel`` and ``base_ang_vel`` are resolved
-    correctly even though their underlying mjlab function is ``builtin_sensor``.
+    An author can register an override for a given mjlab function or term name
+    via ``register_observation`` — either an ``ObservationBinding`` (to mark a
+    term unsupported) or a trace-friendly replacement callable (ADR 0005 §3a's
+    "examples-side trace-friendly override" pattern, generalized beyond commands).
+
+    Otherwise, *func* — mjlab's own function object — is returned unchanged; the
+    build traces it directly against the scene's live env (ADR 0005). There is
+    no mjswan-side reimplementation to look up by name.
     """
     if isinstance(func, ObservationBinding):
         return func
     name = getattr(func, "__name__", None)
-    sentinel = getattr(_obs_module, name, None) if name else None
-    if (
-        name
-        and name in _custom_registry
-        and (
-            not isinstance(sentinel, ObservationBinding)
-            or sentinel.unsupported_reason is not None
-        )
-    ):
-        return _custom_registry[name]
-    if isinstance(sentinel, ObservationBinding) and sentinel.unsupported_reason is None:
-        return sentinel
-    # DSL callable (ADR 0003) — pass through; the build will trace it.
-    if callable(sentinel):
-        return sentinel  # type: ignore[return-value]
-    # Fall back to term name when the function name is missing or unsupported
-    if term_name:
-        if term_name in _custom_registry:
-            return _custom_registry[term_name]
-        fallback = getattr(_obs_module, term_name, None)
-        if isinstance(fallback, ObservationBinding):
-            return fallback
-        if callable(fallback):
-            return fallback  # type: ignore[return-value]
-    if isinstance(sentinel, ObservationBinding):
-        return sentinel
-    # Fall back to user-registered custom sentinels
     if name and name in _custom_registry:
         return _custom_registry[name]
     if term_name and term_name in _custom_registry:
         return _custom_registry[term_name]
-    raise ValueError(
-        f"No mjswan mapping for mjlab observation function '{name}'. "
-        f"Ensure a matching ObservationBinding sentinel exists in "
-        f"mjswan.envs.mdp.observations, or register one with "
-        f"mjswan.envs.mdp.observations.register_observation()."
-    )
+    return func
 
 
 def _sanitize_obs_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -163,11 +135,25 @@ def _sanitize_obs_params(params: dict[str, Any]) -> dict[str, Any]:
 def _adapt_obs_term(
     term: Any, term_name: str | None = None
 ) -> MjswanObservationTermCfg:
-    """Convert a single mjlab ``ObservationTermCfg`` to mjswan."""
+    """Convert a single mjlab ``ObservationTermCfg`` to mjswan.
+
+    Params are only sanitized (``asset_cfg`` flattened to JSON-safe strings)
+    when *func* resolved to a legacy ``ObservationBinding`` — those params are
+    written verbatim into the browser JSON for a named TS class to consume. A
+    func destined for ONNX tracing keeps its params as-is: ``trace_term`` calls
+    ``func(env, **params)`` and needs the real ``SceneEntityCfg`` mjlab's own
+    function expects, not a flattened stand-in.
+    """
     raw_params = dict(getattr(term, "params", None) or {})
+    func = _adapt_obs_func(term.func, term_name=term_name)
+    params = (
+        _sanitize_obs_params(raw_params)
+        if isinstance(func, ObservationBinding)
+        else raw_params
+    )
     return MjswanObservationTermCfg(
-        func=_adapt_obs_func(term.func, term_name=term_name),
-        params=_sanitize_obs_params(raw_params),
+        func=func,
+        params=params,
         scale=getattr(term, "scale", None),
         clip=getattr(term, "clip", None),
         history_length=getattr(term, "history_length", 0) or 0,
@@ -214,38 +200,25 @@ def adapt_observations(
 # ---------------------------------------------------------------------------
 
 
-def _adapt_term_func(func: Any, term_name: str | None = None) -> TerminationBinding:
-    """Convert an mjlab termination callable to an mjswan ``TerminationBinding`` sentinel.
+def _adapt_term_func(
+    func: Any, term_name: str | None = None
+) -> TerminationBinding | Callable[..., Any]:
+    """Resolve the function a termination term's ONNX graph is traced from.
 
-    If *func* is already an mjswan ``TerminationBinding`` it is returned as-is, so
-    mjswan sentinels can be passed directly inside mjlab ``TerminationTermCfg``
-    for functions that have no mjlab equivalent.
-
-    Otherwise, looks up ``func.__name__`` directly on
-    ``mjswan.envs.mdp.terminations``.  When the function is a closure (e.g.
-    ``_fn``), *term_name* is tried as a fallback against ``_custom_term_registry``
-    so tasks can register by dict key rather than by function name.
+    See :func:`_adapt_obs_func` — same resolution order (mjswan sentinel
+    pass-through, then a ``register_termination`` override by function or term
+    name, then mjlab's own function traced directly). *term_name* also covers
+    closures (e.g. a term configured with a nameless ``_fn``), which can only be
+    registered by their dict key.
     """
     if isinstance(func, TerminationBinding):
         return func
     name = getattr(func, "__name__", None)
-    sentinel = getattr(_term_module, name, None) if name else None
-    if isinstance(sentinel, TerminationBinding):
-        return sentinel
-    # DSL callable (ADR 0003) — pass through; the build will trace it.
-    if callable(sentinel):
-        return sentinel  # type: ignore[return-value]
     if name and name in _custom_term_registry:
         return _custom_term_registry[name]
-    # Fall back to term_name when the function name is a closure (e.g. '_fn')
     if term_name and term_name in _custom_term_registry:
         return _custom_term_registry[term_name]
-    raise ValueError(
-        f"No mjswan mapping for mjlab termination function '{name}'. "
-        f"Ensure a matching TerminationBinding sentinel exists in "
-        f"mjswan.envs.mdp.terminations, or register one with "
-        f"mjswan.envs.mdp.terminations.register_termination()."
-    )
+    return func
 
 
 def _sanitize_termination_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -276,11 +249,22 @@ def _sanitize_termination_params(params: dict[str, Any]) -> dict[str, Any]:
 def _adapt_term_cfg(
     term: Any, term_name: str | None = None
 ) -> MjswanTerminationTermCfg:
-    """Convert a single mjlab ``TerminationTermCfg`` to mjswan."""
+    """Convert a single mjlab ``TerminationTermCfg`` to mjswan.
+
+    See :func:`_adapt_obs_term` — params are only sanitized for the legacy
+    ``TerminationBinding`` path; a func destined for ONNX tracing keeps its
+    real params (e.g. ``asset_cfg``) unchanged.
+    """
     raw_params = dict(getattr(term, "params", None) or {})
+    func = _adapt_term_func(term.func, term_name=term_name)
+    params = (
+        _sanitize_termination_params(raw_params)
+        if isinstance(func, TerminationBinding)
+        else raw_params
+    )
     return MjswanTerminationTermCfg(
-        func=_adapt_term_func(term.func, term_name=term_name),
-        params=_sanitize_termination_params(raw_params),
+        func=func,
+        params=params,
         time_out=getattr(term, "time_out", False),
     )
 
@@ -320,6 +304,21 @@ def _adapt_command_cfg(term: Any) -> MjswanCommandTermConfig:
             f"Register one with mjswan.register_command()."
         )
 
+    if spec.is_onnx_traced:
+        assert spec.state_fields is not None and spec.command_field is not None
+        ui = spec.ui(term) if callable(spec.ui) else spec.ui
+        return MjswanCommandTermConfig(
+            term_name="OnnxCommand",
+            pending_trace=PendingCommandTrace(
+                mjlab_cfg=term,
+                state_fields=spec.state_fields,
+                command_field=spec.command_field,
+                trace_override=spec.trace_override,
+                ui=ui,
+            ),
+        )
+
+    assert spec.serializer is not None
     serialized = dict(spec.serializer(term))
     return MjswanCommandTermConfig(term_name=spec.ts_name, params=serialized)
 
@@ -472,23 +471,21 @@ def resolve_action_scales(
 # ---------------------------------------------------------------------------
 
 
-def _adapt_event_func(func: Any) -> EventBinding:
-    """Convert an mjlab event callable to an mjswan ``EventBinding`` sentinel."""
+def _adapt_event_func(
+    func: Any, term_name: str | None = None
+) -> EventBinding | Callable[..., Any]:
+    """Resolve the function an event term's ONNX graph is traced from.
+
+    See :func:`_adapt_obs_func` — same resolution order.
+    """
     if isinstance(func, EventBinding):
         return func
     name = getattr(func, "__name__", None)
-    sentinel = getattr(_events_module, name, None) if name else None
-    if isinstance(sentinel, EventBinding):
-        return sentinel
-    # DSL mutation builder (ADR 0003) — pass through; the build will trace it.
-    if callable(sentinel):
-        return sentinel  # type: ignore[return-value]
     if name and name in _custom_event_registry:
         return _custom_event_registry[name]
-    raise ValueError(
-        f"No mjswan mapping for mjlab event function '{name}'. "
-        f"Register one with mjswan.envs.mdp.events.register_event()."
-    )
+    if term_name and term_name in _custom_event_registry:
+        return _custom_event_registry[term_name]
+    return func
 
 
 def _sanitize_event_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -520,43 +517,51 @@ def _sanitize_event_params(params: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _adapt_event_cfg(term: Any) -> MjswanEventTermCfg | None:
+def _adapt_event_cfg(term: Any, term_name: str | None = None) -> MjswanEventTermCfg:
     """Convert a single mjlab ``EventTermCfg`` to mjswan.
 
-    Only ``mode="reset"`` events are meaningful for the browser runtime.
+    Covers ``reset``, ``interval``, and ``startup`` modes (ADR 0005 §4) — unlike
+    the pre-ONNX design, non-reset modes are no longer dropped here. As in
+    :func:`_adapt_obs_term`, params are only sanitized for the legacy
+    ``EventBinding`` path; a func destined for ONNX tracing keeps its real
+    params unchanged.
     """
-    mode = getattr(term, "mode", "reset")
-    if mode != "reset":
-        return None
-    try:
-        func = _adapt_event_func(term.func)
-    except ValueError as exc:
-        warnings.warn(str(exc), category=RuntimeWarning, stacklevel=3)
-        return None
+    func = _adapt_event_func(term.func, term_name=term_name)
     raw_params = dict(getattr(term, "params", None) or {})
-    params = _sanitize_event_params(raw_params)
-    return MjswanEventTermCfg(func=func, mode=mode, params=params)
+    params = (
+        _sanitize_event_params(raw_params)
+        if isinstance(func, EventBinding)
+        else raw_params
+    )
+    return MjswanEventTermCfg(
+        func=func,
+        mode=getattr(term, "mode", "reset"),
+        params=params,
+        interval_range_s=getattr(term, "interval_range_s", None),
+        is_global_time=getattr(term, "is_global_time", False),
+        min_step_count_between_reset=getattr(
+            term, "min_step_count_between_reset", None
+        ),
+    )
 
 
 def adapt_events(
     events: Mapping[str, Any] | None,
-) -> list[dict[str, Any]] | None:
+) -> dict[str, MjswanEventTermCfg] | None:
     """Adapt event configs, converting mjlab types if detected.
 
-    Returns a list of serialized event dicts ready for JSON output,
-    filtering to ``mode="reset"`` only.
+    Returns a dict of mjswan ``EventTermCfg`` objects — serialization (including
+    ONNX tracing) happens lazily at build time, once the scene's live env and
+    output directory are known (same timing as observations/terminations).
     """
     if not events:
         return None
-    result: list[dict[str, Any]] = []
+    result: dict[str, MjswanEventTermCfg] = {}
     for key, term in events.items():
         if isinstance(term, MjswanEventTermCfg):
-            if term.mode == "reset":
-                result.append(term.to_dict())
+            result[key] = term
         elif _is_from_mjlab(term):
-            adapted = _adapt_event_cfg(term)
-            if adapted is not None:
-                result.append(adapted.to_dict())
+            result[key] = _adapt_event_cfg(term, term_name=key)
         # non-mjlab, non-mjswan entries are skipped
     return result or None
 

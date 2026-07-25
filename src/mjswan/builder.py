@@ -409,6 +409,118 @@ class Builder:
             raise ValueError("Motion name must be a non-empty string.")
         return f"{name2id(policy_name)}_{name2id(motion_name)}.npz"
 
+    def _serialize_policy_config(
+        self, policy, env, scene_dir: Path, policy_path: Path
+    ) -> dict | None:
+        """Assemble one policy's JSON config, tracing ONNX terms via the scene's env.
+
+        Returns ``None`` when ``policy.config_path`` is set but the file doesn't
+        exist (a warning is issued; nothing is written, matching prior
+        behaviour) or when the policy has nothing to serialize at all.
+
+        Unlike the pre-ADR-0005 code this replaces, a trace or config-parse
+        failure is **not** caught and silently downgraded to a raw file copy —
+        it propagates and fails the build (ADR 0005: "a term that fails to
+        trace fails the build loudly").
+        """
+        from ._onnx_build import (
+            serialize_command,
+            serialize_observation_group,
+            serialize_termination,
+        )
+
+        config_path = getattr(policy, "config_path", None)
+        has_mdp = (
+            policy.commands
+            or policy.observations
+            or policy.actions
+            or policy.terminations
+            or policy.policy_joint_names
+            or policy.policy_num_actions
+            or policy.motions
+        )
+        if not config_path and not has_mdp:
+            return None
+
+        data: dict = {}
+        if config_path:
+            config_src = Path(config_path).expanduser()
+            if not config_src.is_absolute():
+                config_src = (Path.cwd() / config_src).resolve()
+            if not config_src.exists():
+                warnings.warn(
+                    f"Policy config path not found: {config_src}",
+                    category=RuntimeWarning,
+                    stacklevel=2,
+                )
+                return None
+            with open(config_src, "r") as f:
+                data = json.load(f)
+            data.setdefault("onnx", {})
+            if isinstance(data["onnx"], dict):
+                onnx_config = data["onnx"]
+                onnx_config["path"] = policy_path.name
+                meta = dict(onnx_config.get("meta") or {})
+                if "in_keys" in data and "in_keys" not in meta:
+                    meta["in_keys"] = data["in_keys"]
+                if "out_keys" in data and "out_keys" not in meta:
+                    meta["out_keys"] = data["out_keys"]
+                if meta:
+                    onnx_config["meta"] = meta
+        else:
+            data = {"onnx": {"path": policy_path.name}}
+
+        if policy.policy_joint_names:
+            data["policy_joint_names"] = policy.policy_joint_names
+        if policy.policy_num_actions:
+            data["policy_num_actions"] = policy.policy_num_actions
+        if policy.default_joint_pos:
+            data["default_joint_pos"] = policy.default_joint_pos
+        if policy.encoder_bias:
+            data["encoder_bias"] = policy.encoder_bias
+        if getattr(policy, "initial_qpos", None):
+            data["initial_qpos"] = policy.initial_qpos
+        if getattr(policy, "initial_qvel", None):
+            data["initial_qvel"] = policy.initial_qvel
+        if getattr(policy, "extras", None):
+            data["extras"] = policy.extras
+
+        if policy.commands:
+            data["commands"] = {
+                name: serialize_command(name, cmd, env, scene_dir)
+                for name, cmd in policy.commands.items()
+            }
+        if policy.observations:
+            obs_config = data.get("observations", {})
+            for key, group in policy.observations.items():
+                # Avoid overwriting existing groups (e.g. an ONNX "policy"
+                # group already present from config_path).
+                target_key = key
+                if target_key in obs_config:
+                    target_key = f"{key}_monitor"
+                obs_config[target_key] = serialize_observation_group(
+                    group, env, scene_dir
+                )
+            data["observations"] = obs_config
+        if policy.actions:
+            data["actions"] = {
+                name: cfg.to_dict() for name, cfg in policy.actions.items()
+            }
+        if policy.terminations:
+            terminations = {}
+            for name, cfg in policy.terminations.items():
+                entry = serialize_termination(name, cfg, env, scene_dir)
+                if entry is not None:
+                    terminations[name] = entry
+            if terminations:
+                data["terminations"] = terminations
+        if policy.motions:
+            data["motions"] = [
+                motion.to_dict(self._motion_filename(policy.name, motion.name))
+                for motion in policy.motions
+            ]
+        return data
+
     def _validate_muscle_action_terms(self, scene: SceneConfig) -> None:
         """Validate every ``MuscleActivationActionCfg`` in the scene's policies.
 
@@ -517,9 +629,6 @@ class Builder:
         assets_dir = output_path / "assets"
         assets_dir.mkdir(exist_ok=True)
 
-        # Save root configuration (project metadata and structure)
-        self._save_config_json(output_path)
-
         # Compile author custom-MDP terms into a standalone runtime ESM beside
         # config.json (esbuild; never rebuilds the engine). ADR 0004 §10.
         if _build_uses_custom_js() and client_builder is not None:
@@ -589,165 +698,29 @@ class Builder:
                         scene.model = None
                     gc.collect()
 
+                    # Serialize scene-level events now that scene_dir and the
+                    # scene's live env (if any) are both known — same timing as
+                    # observations/terminations below. Overwrites `scene.events`
+                    # in place with the final JSON list `_save_config_json`
+                    # (called after this loop) reads.
+                    if scene.events:
+                        from ._onnx_build import serialize_events
+
+                        scene.events = serialize_events(
+                            scene.events, scene.mjlab_env, scene_dir
+                        )
+
                     # Save policies
                     for policy in scene.policies:
                         policy_id = name2id(policy.name)
                         policy_path = scene_dir / f"{policy_id}.onnx"
                         onnx.save(policy.model, str(policy_path))
 
-                        config_path = getattr(policy, "config_path", None)
-                        if config_path:
-                            config_src = Path(config_path).expanduser()
-                            if not config_src.is_absolute():
-                                config_src = (Path.cwd() / config_src).resolve()
-                            if config_src.exists():
-                                target = policy_path.with_suffix(".json")
-                                try:
-                                    with open(config_src, "r") as f:
-                                        data = json.load(f)
-                                    data.setdefault("onnx", {})
-                                    if isinstance(data["onnx"], dict):
-                                        onnx_config = data["onnx"]
-                                        onnx_config["path"] = policy_path.name
-                                        meta = dict(onnx_config.get("meta") or {})
-                                        if "in_keys" in data and "in_keys" not in meta:
-                                            meta["in_keys"] = data["in_keys"]
-                                        if (
-                                            "out_keys" in data
-                                            and "out_keys" not in meta
-                                        ):
-                                            meta["out_keys"] = data["out_keys"]
-                                        if meta:
-                                            onnx_config["meta"] = meta
-                                    # Serialize commands if any are defined
-                                    if policy.commands:
-                                        data["commands"] = {
-                                            name: cmd.to_dict()
-                                            for name, cmd in policy.commands.items()
-                                        }
-                                    # Merge observation groups into observations
-                                    if policy.observations:
-                                        obs_config = data.get("observations", {})
-                                        for key, group in policy.observations.items():
-                                            # Avoid overwriting existing groups
-                                            # (e.g. ONNX "policy" group from config_path)
-                                            target_key = key
-                                            if target_key in obs_config:
-                                                target_key = f"{key}_monitor"
-                                            obs_config[target_key] = group.to_list()
-                                        data["observations"] = obs_config
-                                    # Serialize action terms
-                                    if policy.actions:
-                                        data["actions"] = {
-                                            name: cfg.to_dict()
-                                            for name, cfg in policy.actions.items()
-                                        }
-                                    if getattr(policy, "policy_joint_names", None):
-                                        data["policy_joint_names"] = (
-                                            policy.policy_joint_names
-                                        )
-                                    if getattr(policy, "policy_num_actions", None):
-                                        data["policy_num_actions"] = (
-                                            policy.policy_num_actions
-                                        )
-                                    if getattr(policy, "default_joint_pos", None):
-                                        data["default_joint_pos"] = (
-                                            policy.default_joint_pos
-                                        )
-                                    if getattr(policy, "encoder_bias", None):
-                                        data["encoder_bias"] = policy.encoder_bias
-                                    if getattr(policy, "initial_qpos", None):
-                                        data["initial_qpos"] = policy.initial_qpos
-                                    if getattr(policy, "initial_qvel", None):
-                                        data["initial_qvel"] = policy.initial_qvel
-                                    if getattr(policy, "extras", None):
-                                        data["extras"] = policy.extras
-                                    if getattr(policy, "motions", None):
-                                        data["motions"] = [
-                                            motion.to_dict(
-                                                self._motion_filename(
-                                                    policy.name, motion.name
-                                                )
-                                            )
-                                            for motion in policy.motions
-                                        ]
-                                    # Serialize termination terms
-                                    if policy.terminations:
-                                        data["terminations"] = {
-                                            name: cfg.to_dict()
-                                            for name, cfg in policy.terminations.items()
-                                        }
-                                    with open(target, "w") as f:
-                                        json.dump(data, f, indent=2)
-                                except Exception:
-                                    shutil.copy(str(config_src), str(target))
-                            else:
-                                warnings.warn(
-                                    f"Policy config path not found: {config_src}",
-                                    category=RuntimeWarning,
-                                    stacklevel=2,
-                                )
-                        elif (
-                            policy.commands
-                            or policy.observations
-                            or policy.actions
-                            or policy.terminations
-                            or policy.policy_joint_names
-                            or policy.policy_num_actions
-                            or policy.motions
-                        ):
-                            # No config_path but MDP components defined
+                        data = self._serialize_policy_config(
+                            policy, scene.mjlab_env, scene_dir, policy_path
+                        )
+                        if data is not None:
                             target = policy_path.with_suffix(".json")
-                            data: dict = {
-                                "onnx": {"path": policy_path.name},
-                            }
-                            if policy.policy_joint_names:
-                                data["policy_joint_names"] = policy.policy_joint_names
-                            if policy.policy_num_actions:
-                                data["policy_num_actions"] = policy.policy_num_actions
-                            if policy.default_joint_pos:
-                                data["default_joint_pos"] = policy.default_joint_pos
-                            if policy.encoder_bias:
-                                data["encoder_bias"] = policy.encoder_bias
-                            if getattr(policy, "initial_qpos", None):
-                                data["initial_qpos"] = policy.initial_qpos
-                            if getattr(policy, "initial_qvel", None):
-                                data["initial_qvel"] = policy.initial_qvel
-                            if policy.commands:
-                                data["commands"] = {
-                                    name: cmd.to_dict()
-                                    for name, cmd in policy.commands.items()
-                                }
-                            if policy.observations:
-                                data["observations"] = {
-                                    key: group.to_list()
-                                    for key, group in policy.observations.items()
-                                }
-                            if policy.actions:
-                                data["actions"] = {
-                                    name: cfg.to_dict()
-                                    for name, cfg in policy.actions.items()
-                                }
-                            if policy.terminations:
-                                from .envs.mdp.terminations import TerminationBinding
-
-                                terminations = {
-                                    name: cfg.to_dict()
-                                    for name, cfg in policy.terminations.items()
-                                    if not (
-                                        isinstance(cfg.func, TerminationBinding)
-                                        and cfg.func.unsupported_reason is not None
-                                    )
-                                }
-                                if terminations:
-                                    data["terminations"] = terminations
-                            if policy.motions:
-                                data["motions"] = [
-                                    motion.to_dict(
-                                        self._motion_filename(policy.name, motion.name)
-                                    )
-                                    for motion in policy.motions
-                                ]
                             with open(target, "w") as f:
                                 json.dump(data, f, indent=2)
 
@@ -796,6 +769,12 @@ class Builder:
                                 )
 
                     progress.advance(task)
+
+        # Save root configuration (project metadata and structure) — after the
+        # scene loop above, since it reads each scene's `events`, which the
+        # loop just resolved from raw EventTermCfg objects into their final
+        # ONNX-traced JSON form (same timing as observations/terminations).
+        self._save_config_json(output_path)
 
         print(f"✓ Saved mjswan application to: {output_path}")
 

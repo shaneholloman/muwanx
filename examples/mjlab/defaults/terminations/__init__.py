@@ -1,11 +1,11 @@
 """Env-derived params for the terrain-related terminations.
 
-``out_of_terrain_bounds`` and ``terrain_edge_reached`` are now declarative
-built-ins (see ADR 0003), resolved by the mjlab adapter directly from
-``mjswan.envs.mdp.terminations``.  The terrain generator constants
-(``limit_x``/``limit_y``, ``half_x``/``half_y``) are still env-derived, so
-this helper injects them into the mjlab ``TerminationTermCfg.params`` before
-the build runs.
+``out_of_terrain_bounds`` and ``terrain_edge_reached`` are mjlab's own
+task-side functions, traced directly to ONNX (ADR 0005) — no mjswan
+reimplementation involved. The terrain generator constants
+(``limit_x``/``limit_y``, ``half_x``/``half_y``) are env-derived, so this
+helper injects them into the mjlab ``TerminationTermCfg.params`` before the
+build runs (and therefore before tracing sees them).
 """
 
 from __future__ import annotations

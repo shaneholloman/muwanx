@@ -183,7 +183,11 @@ class TestAdaptObservations:
         assert term.scale == 0.5
         assert term.history_length == 3
 
-    def test_mjlab_asset_cfg_joint_scope_preserved(self):
+    def test_mjlab_asset_cfg_kept_intact_for_tracing(self):
+        # A plain (non-Binding) func is traced to ONNX at build time
+        # (ADR 0005) via `func(env, **params)` — params must reach the tracer
+        # unchanged, including the real `asset_cfg` object mjlab's own
+        # function expects, not a flattened entity_name/joint_names stand-in.
         mjlab_func = _make_mjlab_obs_func("joint_pos_rel")
         asset_cfg = FakeMjlabSceneEntityCfg(
             name="robot", joint_names=("joint1", "joint2")
@@ -196,16 +200,19 @@ class TestAdaptObservations:
         result = adapt_observations({"policy": mjlab_group})
         assert result is not None
         term = result["policy"].terms["jp"]
-        assert term.params["entity_name"] == "robot"
-        assert term.params["joint_names"] == ["joint1", "joint2"]
+        assert term.params["asset_cfg"] is asset_cfg
 
-    def test_unknown_mjlab_obs_func_raises(self):
+    def test_any_mjlab_obs_func_passes_through_for_tracing(self):
+        # ADR 0005: there is no mjswan-side mirror to resolve by name — any
+        # mjlab function (however unfamiliar) is passed straight through and
+        # traced to ONNX at build time.
         mjlab_func = _make_mjlab_obs_func("nonexistent_function")
         mjlab_term = FakeMjlabObsTermCfg(func=mjlab_func)
         mjlab_group = FakeMjlabObsGroupCfg(terms={"x": mjlab_term})
 
-        with pytest.raises(ValueError, match="No mjswan mapping"):
-            adapt_observations({"policy": mjlab_group})
+        result = adapt_observations({"policy": mjlab_group})
+        assert result is not None
+        assert result["policy"].terms["x"].func is mjlab_func
 
     def test_multiple_groups(self):
         # `base_ang_vel` and `projected_gravity` are DSL terms (ADR 0003) —
@@ -284,7 +291,9 @@ class TestAdaptTerminations:
         assert result["timeout"].time_out is True
         assert callable(result["timeout"].func)
 
-    def test_mjlab_term_strips_asset_cfg_from_params(self):
+    def test_mjlab_term_keeps_asset_cfg_intact_for_tracing(self):
+        # Same as observations — a plain func's params reach the tracer
+        # unchanged (ADR 0005), no asset_cfg -> entity_name flattening.
         mjlab_func = _make_mjlab_term_func("bad_orientation")
         asset_cfg = FakeMjlabSceneEntityCfg(name="robot", body_names=("torso_link",))
         mjlab_cfg = FakeMjlabTermTermCfg(
@@ -296,18 +305,17 @@ class TestAdaptTerminations:
         result = adapt_terminations({"fallen": mjlab_cfg})
         assert result is not None
         term = result["fallen"]
-        assert term.params == {
-            "limit_angle": 1.0,
-            "entity_name": "robot",
-            "body_names": ["torso_link"],
-        }
+        assert term.params == {"limit_angle": 1.0, "asset_cfg": asset_cfg}
 
-    def test_unknown_mjlab_term_func_raises(self):
+    def test_any_mjlab_term_func_passes_through_for_tracing(self):
+        # ADR 0005: no mjswan-side mirror to resolve by name — any mjlab
+        # function passes straight through and is traced to ONNX at build time.
         mjlab_func = _make_mjlab_term_func("nonexistent_term")
         mjlab_cfg = FakeMjlabTermTermCfg(func=mjlab_func)
 
-        with pytest.raises(ValueError, match="No mjswan mapping"):
-            adapt_terminations({"x": mjlab_cfg})
+        result = adapt_terminations({"x": mjlab_cfg})
+        assert result is not None
+        assert result["x"].func is mjlab_func
 
 
 # ===================================================================
@@ -410,28 +418,23 @@ class TestAdaptCommands:
 
 
 class TestAdaptedSerialization:
-    """Ensure adapted objects serialize correctly via to_dict() / to_list()."""
+    """Ensure adapted plain-callable terms defer to ONNX tracing (ADR 0005)."""
 
-    def test_adapted_obs_serializes(self):
-        # ``last_action`` is a DSL observation (ADR 0003) — the adapter passes
-        # the callable through and serialization emits a composition graph
-        # (with PrevAction as the source op) instead of a legacy named entry.
+    def test_adapted_obs_to_dict_requires_tracing(self):
+        # A plain-callable func (mjlab's own, resolved by the adapter with no
+        # mirror lookup) cannot be serialized via to_dict()/to_list() directly
+        # — it must be traced to ONNX against a live env at build time
+        # (mjswan._onnx_build.serialize_observation_group).
         mjlab_func = _make_mjlab_obs_func("last_action")
         mjlab_term = FakeMjlabObsTermCfg(func=mjlab_func)
         mjlab_group = FakeMjlabObsGroupCfg(terms={"la": mjlab_term})
 
         result = adapt_observations({"policy": mjlab_group})
         assert result is not None
-        entries = result["policy"].to_list()
-        assert len(entries) == 1
-        assert entries[0]["kind"] == "observation"
-        assert "name" not in entries[0]
-        assert "PrevAction" in [n["op"] for n in entries[0]["nodes"]]
+        with pytest.raises(TypeError, match="serialize_observation_group"):
+            result["policy"].to_list()
 
-    def test_adapted_term_serializes(self):
-        # ``root_height_below_minimum`` is a DSL term (ADR 0003) — the
-        # adapter passes the callable through and serialization emits a
-        # composition graph instead of a legacy {name, params} entry.
+    def test_adapted_term_to_dict_requires_tracing(self):
         mjlab_func = _make_mjlab_term_func("root_height_below_minimum")
         mjlab_cfg = FakeMjlabTermTermCfg(
             func=mjlab_func,
@@ -440,10 +443,8 @@ class TestAdaptedSerialization:
 
         result = adapt_terminations({"fallen": mjlab_cfg})
         assert result is not None
-        d = result["fallen"].to_dict()
-        assert d["kind"] == "termination"
-        ops = [n["op"] for n in d["nodes"]]
-        assert "RootLinkPosW" in ops and "Lt" in ops
+        with pytest.raises(TypeError, match="serialize_termination"):
+            result["fallen"].to_dict()
 
     def test_adapted_action_serializes(self):
         mjlab_cfg = FakeMjlabJointPositionActionCfg(

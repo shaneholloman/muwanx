@@ -141,6 +141,7 @@ class ProjectHandle:
             ```
         """
         try:
+            from mjlab.envs import ManagerBasedRlEnv
             from mjlab.scene import Scene
             from mjlab.tasks.registry import load_env_cfg
         except ImportError as e:
@@ -156,6 +157,15 @@ class ProjectHandle:
         scene.spec.assets.update(_collect_mjlab_scene_assets(env_cfg.scene))
         apply_mjlab_sim_options(scene.spec, getattr(env_cfg, "sim", None))
         handle = self.add_scene(spec=scene.spec, name=task_id)
+
+        # A live, reset() env is what ONNX tracing (ADR 0005) runs authored term
+        # functions against — `func(env, **params)` reads `env.scene[name].data.X`
+        # regardless of whether `func` is one of this env's own configured
+        # manager terms, so a fresh env constructed straight from `env_cfg` is
+        # the right (and only) source of truth, not the `Scene` built above
+        # (which lacks the manager/torch machinery `Entity.data` properties need).
+        handle._config.mjlab_env = ManagerBasedRlEnv(env_cfg, device="cpu")
+        handle._config.mjlab_env.reset()
         viewer_cfg = _adapt_mjlab_viewer_config(getattr(env_cfg, "viewer", None))
         if viewer_cfg is not None:
             handle.set_viewer(viewer_cfg)

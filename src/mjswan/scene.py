@@ -194,11 +194,19 @@ class SceneConfig:
     viewer: ViewerConfig | None = None
     """Optional viewer configuration for this scene."""
 
-    events: list[Any] | None = None
-    """Optional list of scene-level reset events (serialized EventTermCfg dicts)."""
+    events: dict[str, Any] | None = None
+    """Optional dict of scene-level ``EventTermCfg`` instances (mjswan or mjlab),
+    serialized lazily at build time (same timing as observations/terminations) so
+    ONNX tracing has access to the scene's live env and output directory."""
 
     terrain_data: dict[str, Any] | None = None
     """Optional terrain data (e.g. flat_patches) for browser-side event execution."""
+
+    mjlab_env: Any = field(default=None, repr=False, compare=False)
+    """Live ``mjlab.envs.ManagerBasedRlEnv`` for scenes built via
+    :meth:`ProjectHandle.add_scene_mjlab`. Python-build-time-only state used to
+    trace observation/termination/event/command term bodies to ONNX (ADR 0005);
+    it is never part of the scene's serialized JSON output."""
 
     @property
     def scene_filename(self) -> str:
@@ -271,11 +279,11 @@ class SceneHandle:
             PolicyHandle for configuring the policy (adding commands, etc.)
 
         Example:
+            from mjlab.envs.mdp import observations as obs_fns
             from mjswan.managers.observation_manager import (
                 ObservationGroupCfg,
                 ObservationTermCfg,
             )
-            from mjswan.envs.mdp import observations as obs_fns
 
             policy = scene.add_policy(
                 policy=onnx.load("locomotion.onnx"),
@@ -670,10 +678,14 @@ class SceneHandle:
         return self
 
     def set_events(self, events: Mapping[str, Any]) -> SceneHandle:
-        """Set scene-level reset events.
+        """Set scene-level events.
 
-        Accepts a dict of ``EventTermCfg`` instances (mjswan or mjlab).
-        Only ``mode="reset"`` events are passed to the browser runtime.
+        Accepts a dict of ``EventTermCfg`` instances (mjswan or mjlab), covering
+        ``reset``, ``interval``, and ``startup`` modes. Adaptation resolves mjlab
+        types to mjswan ``EventTermCfg`` objects; actual ONNX tracing happens
+        lazily at build time (:meth:`Builder.build`), once the scene's live env
+        and output directory are known — the same timing as observations and
+        terminations.
 
         Args:
             events: Dict mapping event names to ``EventTermCfg`` instances.

@@ -29,9 +29,13 @@
 | §4 generic `OnnxEvent` handler (TS) | **done** — `core/event/OnnxEvent.ts`, no persistent state (traced events are stateless), same async in-flight guard as `OnnxCommand` |
 | §4 mode-aware `EventManager` dispatch | **done** — `startup()`/`tick()`/async `onReset()`, backward compatible with legacy `DslEvent`/registry reset terms |
 | §4 `OnnxCommand` registered in `CommandManager` | **done** — registry-bypass special case, mirrors `DslEvent`'s bypass in `EventManager` |
-| §4 real byte delivery (ResolvedPolicy/SceneInput → runtime → sessions) | **deferred (by design, option B)** — the injectable-session seam is built and tested; real bytes wait for the Builder-side artifact wiring (also deferred, §2 note) |
+| Builder-side artifact integration (Python) | **done** — `mjswan._onnx_build` bridges cfg objects to the tracer; `Builder._save_web` writes real `.onnx` bytes + traced `policy.json`/`config.json`. `mjlab_adapter` no longer does name-based mirror resolution for obs/term/event — mjlab's own functions (or an author's, same treatment) are traced directly against the scene's live env. Verified against a real `Mjlab-Cartpole-Balance` build (real `obs/*.onnx`, `event/reset_*.onnx`, native `time_out`). |
+| §3 Command wiring via `cfg.build(env)` | **done** — `LiftingCommandCfg` (`target_pos`, no override) and `UniformVelocityCommandCfg` (trace-friendly override + per-task joystick `ui` resolved from `cfg.ranges`) registered in `examples/mjlab/defaults/commands`; both verified end-to-end (real `.onnx` + schema-valid `policy.json` entry) against Lift-Cube-Yam and a Go1 velocity task. `LiftingCommand.ts` retired. |
+| Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` (Python) | **done** — `src/mjswan/dsl/` and the script deleted; `envs/mdp/{observations,terminations,events}.py` gutted to only the `*Binding`/`register_*`/`_custom_registry` escape hatch, all DSL-builder function bodies removed |
+| Remove TS-side DSL (`core/dsl/`, `DslObservation.ts`, `DslTermination.ts`, `DslEvent.ts`) | **not started** — dead code now that the Python build path never emits a DSL JSON envelope; needs a registry-wiring check in `ObservationManager.ts`/`TerminationManager.ts`/`EventManager.ts` plus corresponding vitest removal |
 | §3a `SliderCommandConfig` extension (TS) | not started |
-| Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` | **deferred** — see note below |
+| Non-mjlab-task scenes (`add_scene()` + custom obs/term/event) | **known gap, not resolved** — ONNX tracing needs a live env (`env.scene[name].data.field`); a raw `add_scene()` scene has none. `examples/demo/main.py`/`splat.py`/`muscle.py`/`examples/tutorial/minimum_policy.py` still reference the now-deleted mjswan mirror functions for exactly this case and will fail to build until this is designed (see options below) |
+| `OnnxCommand` debug-vis marker | **known gap** — `LiftingCommand.ts`'s target-position sphere is not reproduced; `OnnxCommand.ts` has no `updateDebugVisuals()` yet (`debug_vis` is still threaded into `policy.json` for a future generic mechanism) |
 
 **Sequencing (dependency order, not a schedule):** RNG harness (§2b) → tracer on
 Cartpole → **this review checkpoint** → interval-event dynamic-slot + `entity_write`
@@ -212,9 +216,12 @@ lifting-specific engine code:
 - **Reuse `OnnxModule`'s `is_init`/`carry` recurrent-state convention**
   (`core/policy/OnnxModule.ts`) for stateful Command/Event state, generalized to named
   fields — no second state-threading mechanism.
-- **Sweep existing `Math.random()` sites** (`DslEvent.ts` `sampleUniform`,
-  `TrackingCommand.ts` `sampleRangeValue`/`sampleInitialFrame`) into the
-  orchestrator-owned seeded PRNG (ADR §2), or bit-for-bit replay can't hold.
+- **Sweep `TrackingCommand.ts`'s `Math.random()` sites**
+  (`sampleRangeValue`/`sampleInitialFrame`) into the orchestrator-owned seeded
+  PRNG (ADR §2), or bit-for-bit replay can't hold for Tracking-based tasks.
+  `DslEvent.ts` does **not** get the same treatment — it is deleted outright
+  once the Builder emits ONNX event configs (ADR 0005 Consequences), not
+  patched; correction from an earlier draft of this brief.
 - **Interval/startup Events are required, not deferrable.** `EventManager.ts` today has
   only `onReset()`. Velocity-Flat/Rough uses `mode="interval"` (`push_robot`,
   `interval_range_s=(1.0,3.0)`) and `mode="startup"` (`foot_friction`, `encoder_bias`,
@@ -238,8 +245,9 @@ lifting-specific engine code:
       `TrackingCommand` **not** required to be ONNX-traced yet — confirm the native impl
       still runs unchanged.
 - [ ] No term's Python source ships to the browser as executable text.
-- [ ] `src/mjswan/dsl/` and `scripts/verify_dsl_migration.py` removed once the new
-      harness supersedes their coverage.
+- [x] `src/mjswan/dsl/` and `scripts/verify_dsl_migration.py` removed (Python side).
+      TS-side `core/dsl/`/`DslObservation.ts`/`DslTermination.ts`/`DslEvent.ts`
+      are dead code now but not yet deleted — separate follow-up.
 
 ## Review checkpoint — findings from the first real trace run
 

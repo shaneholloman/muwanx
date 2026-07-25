@@ -141,6 +141,16 @@ class TestProjectHandle:
                 self.spec = minimal_spec
                 self.terrain = None
 
+        class FakeManagerBasedRlEnv:
+            """Stands in for mjlab's real env — ADR 0005 needs a live env (held
+            on SceneConfig.mjlab_env) to trace term bodies at build time."""
+
+            def __init__(self, env_cfg, device: str):
+                calls.append(("env", env_cfg, device))
+
+            def reset(self):
+                calls.append(("env_reset",))
+
         def fake_load_env_cfg(task_id: str, play: bool = False):
             calls.append(("load_env_cfg", task_id, play))
             return FakeEnvCfg()
@@ -148,12 +158,15 @@ class TestProjectHandle:
         mjlab_module = ModuleType("mjlab")
         mjlab_scene_module = ModuleType("mjlab.scene")
         mjlab_scene_module.Scene = FakeScene
+        mjlab_envs_module = ModuleType("mjlab.envs")
+        mjlab_envs_module.ManagerBasedRlEnv = FakeManagerBasedRlEnv
         mjlab_tasks_module = ModuleType("mjlab.tasks")
         mjlab_registry_module = ModuleType("mjlab.tasks.registry")
         mjlab_registry_module.load_env_cfg = fake_load_env_cfg
 
         monkeypatch.setitem(sys.modules, "mjlab", mjlab_module)
         monkeypatch.setitem(sys.modules, "mjlab.scene", mjlab_scene_module)
+        monkeypatch.setitem(sys.modules, "mjlab.envs", mjlab_envs_module)
         monkeypatch.setitem(sys.modules, "mjlab.tasks", mjlab_tasks_module)
         monkeypatch.setitem(sys.modules, "mjlab.tasks.registry", mjlab_registry_module)
 
@@ -161,11 +174,13 @@ class TestProjectHandle:
         scene = project.add_scene_mjlab("Mjlab-Velocity-Rough-Unitree-G1", play=True)
 
         assert isinstance(scene, mjswan.SceneHandle)
-        assert calls == [
-            ("load_env_cfg", "Mjlab-Velocity-Rough-Unitree-G1", True),
-            ("scene", fake_scene_cfg, "cpu"),
-        ]
+        assert [c[0] for c in calls] == ["load_env_cfg", "scene", "env", "env_reset"]
+        assert calls[1] == ("scene", fake_scene_cfg, "cpu")
+        assert calls[2][0] == "env"
+        assert calls[2][2] == "cpu"
         assert fake_scene_cfg.num_envs == 1
+        # The live env (ADR 0005 tracing) is retained on SceneConfig.
+        assert scene._config.mjlab_env is not None
 
 
 # ===========================================================================

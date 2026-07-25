@@ -8,11 +8,12 @@ at build time.
 
 Example (identical to mjlab)::
 
+    from mjlab.envs.mdp import observations as obs_fns
+    from mjlab.managers.scene_entity_cfg import SceneEntityCfg
     from mjswan.managers.observation_manager import (
         ObservationGroupCfg,
         ObservationTermCfg,
     )
-    from mjswan.envs.mdp import observations as obs_fns
 
     observations = {
         "policy": ObservationGroupCfg(
@@ -57,13 +58,14 @@ class ObservationTermCfg:
       ``{"name": ..., ...params}`` shape and the engine resolves the class
       from its registry.
     - A plain Python callable taking ``(env, **params)``: the build traces
-      the function against a symbolic env (see :mod:`mjswan.dsl`) and emits
-      the composition graph instead.  This is the declarative path described
-      in ADR 0003.
+      it to ONNX against the scene's live env (:mod:`mjswan.compile`) — either
+      mjlab's own function, or an author's function written against the same
+      live-env API. See ADR 0005.
     """
 
     func: ObservationBinding | Callable[..., Any]
-    """Observation function — ObservationBinding sentinel (legacy) or DSL callable."""
+    """Observation function — ObservationBinding sentinel (legacy) or a
+    plain callable traced to ONNX (ADR 0005)."""
 
     params: dict[str, Any] = field(default_factory=dict)
     """Additional keyword arguments forwarded to the TS observation constructor."""
@@ -94,14 +96,26 @@ class ObservationTermCfg:
     delay_per_env_phase: bool = True
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a JSON-compatible dict for the TS ``PolicyRunner``.
+        """Serialize a **legacy** ``ObservationBinding`` term.
 
-        Legacy ``ObservationBinding`` produces ``{"name": "BaseLinearVelocity", ...}``.
-        A DSL callable produces ``{"kind": "observation", "nodes": [...], ...}``.
+        Produces ``{"name": "BaseLinearVelocity", ...}`` for a term whose
+        ``func`` is an ``ObservationBinding`` (an ``unsupported_reason`` marker
+        or a ``ts_src`` custom-JS class reference).
+
+        A term whose ``func`` is a plain callable is traced to ONNX against a
+        live env at build time (ADR 0005) — that requires the scene's env and
+        output directory, which this method has no access to. The Builder calls
+        ``mjswan._onnx_build.serialize_observation_group`` for those instead;
+        this method is not a valid way to serialize them.
         """
         if isinstance(self.func, ObservationBinding):
             return self._to_dict_legacy()
-        return self._to_dict_traced()
+        raise TypeError(
+            f"ObservationTermCfg.to_dict() cannot serialize a plain callable "
+            f"func ({self.func!r}) — it must be traced to ONNX against a live "
+            f"env. Use mjswan._onnx_build.serialize_observation_group(group, "
+            f"env, out_dir) instead (the Builder does this automatically)."
+        )
 
     def _to_dict_legacy(self) -> dict[str, Any]:
         func: ObservationBinding = self.func  # type: ignore[assignment]
@@ -120,22 +134,6 @@ class ObservationTermCfg:
             merged["history_steps"] = self.history_length
         entry.update(merged)
         return entry
-
-    def _to_dict_traced(self) -> dict[str, Any]:
-        from ..dsl import trace_observation
-
-        # scale / clip / history are baked into the graph as trailing nodes so
-        # the engine interprets one self-contained graph (see ADR 0003).
-        # ``transpose`` (Isaac joint-major action history) maps to the History
-        # node's interleaved layout.
-        return trace_observation(
-            self.func,  # type: ignore[arg-type]
-            self.params,
-            scale=self.scale,
-            clip=self.clip,
-            history_steps=self.history_length or None,
-            interleaved=bool(self.params.get("transpose")),
-        )
 
 
 @dataclass

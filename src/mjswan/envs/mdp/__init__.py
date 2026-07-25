@@ -1,17 +1,19 @@
 """MDP components for mjswan.
 
-Mirrors ``mjlab.envs.mdp``.  Re-exports modules so that the following
-mjlab import patterns translate directly::
+``actions`` mirrors ``mjlab.envs.mdp.actions``: Action stays a closed,
+permanently-native set (ADR 0005 §7), so ``mjswan.envs.mdp.actions`` carries
+real, directly-usable action-term configs, same import pattern as mjlab::
 
-    # mjlab
-    from mjlab.envs.mdp import observations as obs_fns
-    from mjlab.envs.mdp import terminations as term_fns
-    from mjlab.envs.mdp.actions import JointPositionActionCfg
-
-    # mjswan (identical)
-    from mjswan.envs.mdp import observations as obs_fns
-    from mjswan.envs.mdp import terminations as term_fns
     from mjswan.envs.mdp.actions import JointPositionActionCfg
+
+``observations`` / ``terminations`` / ``events`` are different: mjswan does
+**not** reimplement mjlab's term functions (ADR 0005). Use mjlab's own
+functions directly — ``from mjlab.envs.mdp import observations as obs_fns`` —
+and pass them straight to ``ObservationTermCfg(func=obs_fns.base_lin_vel)``;
+the build traces the real function to ONNX. mjswan's own
+``observations``/``terminations``/``events`` submodules only carry the
+``*Binding`` escape hatch (``ts_src`` / ``unsupported_reason``) and the
+``register_*`` custom-override registry.
 """
 
 from . import actions, observations, terminations

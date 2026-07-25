@@ -16,7 +16,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import mujoco
 import pytest
 
 import mjswan
@@ -124,10 +123,12 @@ class TestClientBuilderCustomTerms:
         assert terms["terminations"] == {"FooTerm": src.resolve()}
 
     def test_collect_custom_terms_skips_declarative_callable(self, monkeypatch):
-        # A DSL term is a plain callable with no ts_src — must be skipped, not crash.
-        monkeypatch.setattr(
-            obs_fns, "_custom_registry", {"base_lin_vel": obs_fns.base_lin_vel}
-        )
+        # A term traced to ONNX (ADR 0005) is a plain callable with no
+        # ts_src — must be skipped, not crash.
+        def base_lin_vel(env, **params):
+            del env, params
+
+        monkeypatch.setattr(obs_fns, "_custom_registry", {"base_lin_vel": base_lin_vel})
         assert "observations" not in ClientBuilder._collect_custom_terms()
 
 
@@ -500,6 +501,69 @@ class TestUsesCustomJsFlag:
 
 
 # ===========================================================================
+# A live env for ONNX tracing (ADR 0005) — these helpers stand in for a
+# task's own env when the scene is a raw `add_scene(model=...)` (no mjlab
+# task, hence no `mjlab_env` normally). They satisfy the tracer's only
+# contract, `env.scene[name].data.<field>`, with plain torch tensors; the
+# functions below are "self-authored" observation/termination bodies (ADR
+# 0005 point 2 — traced exactly like an mjlab function, no reimplementation).
+# Requires torch; callers must `pytest.importorskip("torch")` first.
+def _fake_trace_env():
+    import torch
+
+    class _Data:
+        def __init__(self, **fields):
+            for k, v in fields.items():
+                setattr(self, k, v)
+
+    class _Entity:
+        def __init__(self, data):
+            self.data = data
+
+    class _Scene:
+        def __init__(self, entities):
+            self._entities = entities
+
+        def __getitem__(self, name):
+            return self._entities[name]
+
+    class _Env:
+        def __init__(self, entities):
+            self.scene = _Scene(entities)
+
+    data = _Data(
+        joint_pos=torch.tensor([[0.1, 0.2]]),
+        default_joint_pos=torch.tensor([[0.0, 0.0]]),
+        projected_gravity_b=torch.tensor([[0.0, 0.0, -1.0]]),
+        root_link_pos_w=torch.tensor([[0.0, 0.0, 0.5]]),
+    )
+    return _Env({"robot": _Entity(data)})
+
+
+def _fake_joint_pos_rel(env, *, entity_name="robot", **_):
+    d = env.scene[entity_name].data
+    return d.joint_pos - d.default_joint_pos
+
+
+def _fake_bad_orientation(env, *, limit_angle, entity_name="robot", **_):
+    import torch
+
+    pg = env.scene[entity_name].data.projected_gravity_b
+    return torch.acos(torch.clamp(-pg[:, 2], -1.0, 1.0)).abs() > limit_angle
+
+
+def _fake_root_height_below_minimum(env, *, minimum_height, entity_name="robot", **_):
+    return env.scene[entity_name].data.root_link_pos_w[:, 2] < minimum_height
+
+
+def _fake_time_out(env, *, max_episode_length=1e9, **_):
+    import torch
+
+    del env, max_episode_length
+    return torch.tensor([False])
+
+
+# ===========================================================================
 # L1 — _save_web: actions/terminations serialization into policy JSON
 # ===========================================================================
 class TestSaveWebPolicyJson:
@@ -560,29 +624,32 @@ class TestSaveWebPolicyJson:
     def test_no_config_path_terminations_emitted(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             terminations={
-                "time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True),
+                "time_out": TerminationTermCfg(func=_fake_time_out, time_out=True),
             },
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         assert "terminations" in data
         assert "time_out" in data["terminations"]
-        # `time_out` is a DSL term (ADR 0003); time_out flag still set.
+        # A term reading no dynamic entity state is classified native (ADR 0005).
         entry = data["terminations"]["time_out"]
-        assert entry["kind"] == "termination"
-        assert "StepCount" in [n["op"] for n in entry["nodes"]]
+        assert entry["native"] == "elapsed_s >= episode_length_s"
         assert entry["time_out"] is True
 
     def test_no_config_path_both_blocks_emitted(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -591,30 +658,33 @@ class TestSaveWebPolicyJson:
             },
             terminations={
                 "fallen": TerminationTermCfg(
-                    func=term_fns.bad_orientation,
+                    func=_fake_bad_orientation,
                     params={"limit_angle": 1.2},
                 ),
             },
         )
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
         assert "actions" in data
         assert "terminations" in data
         assert data["actions"]["effort"]["type"] == "torque"
-        # `bad_orientation` is a DSL term (ADR 0003).
+        # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["kind"] == "termination"
-        assert "Acos" in [n["op"] for n in fallen["nodes"]]
+        assert fallen["onnx"] == "term/fallen.onnx"
+        assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
 
     def test_no_config_path_actions_absent_when_not_set(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             terminations={
-                "time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True),
+                "time_out": TerminationTermCfg(func=_fake_time_out, time_out=True),
             },
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
@@ -713,54 +783,36 @@ class TestSaveWebPolicyJson:
         assert len(data["commands"]["velocity"]["ui"]["inputs"]) == 3
         assert data["commands"]["velocity"]["ui"]["inputs"][0]["name"] == "lin_vel_x"
 
-    def test_joint_observation_terms_are_enriched_from_scene_spec(
-        self, tmp_path, minimal_onnx
+    def test_plain_observation_term_traces_against_live_env(
+        self, tmp_path, minimal_model, minimal_onnx
     ):
-        xml_path = tmp_path / "scene.xml"
-        xml_path.write_text(
-            '<mujoco model="jointed">'
-            "<worldbody>"
-            '<body name="robot/base">'
-            '<geom type="sphere" size="0.05" mass="1"/>'
-            '<body name="robot/link1">'
-            '<joint name="robot/joint1" type="hinge"/>'
-            '<geom type="capsule" fromto="0 0 0 0 0 0.2" size="0.02" mass="1"/>'
-            '<body name="robot/link2">'
-            '<joint name="robot/joint2" type="slide"/>'
-            '<geom type="capsule" fromto="0 0 0 0 0 0.2" size="0.02" mass="1"/>'
-            "</body>"
-            "</body>"
-            "</body>"
-            "</worldbody>"
-            '<keyframe><key name="init" qpos="0.25 -0.5"/></keyframe>'
-            "</mujoco>"
-        )
-        spec = mujoco.MjSpec.from_file(str(xml_path))
-
+        # A plain-callable observation func (mjlab's own, or a self-authored
+        # one — same treatment per ADR 0005) is traced to ONNX against the
+        # scene's live env; no mjswan-side reimplementation is involved.
+        pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", spec=spec)
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             observations={
                 "policy": ObservationGroupCfg(
                     terms={
-                        "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+                        "joint_pos": ObservationTermCfg(
+                            func=_fake_joint_pos_rel, scale=0.5
+                        ),
                     }
                 ),
             },
         )
 
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
         joint_pos = data["observations"]["policy"][0]
-        # joint_pos_rel is a DSL term (ADR 0003): joint_names is enriched into
-        # the JointPos source node's attrs, and the keyframe default pose is
-        # subtracted as a ConstVec.
-        assert joint_pos["kind"] == "observation"
-        jp_node = next(n for n in joint_pos["nodes"] if n["op"] == "JointPos")
-        assert jp_node["attrs"]["joint_names"] == ["robot/joint1", "robot/joint2"]
-        const_node = next(n for n in joint_pos["nodes"] if n["op"] == "ConstVec")
-        assert const_node["attrs"]["values"] == [0.25, -0.5]
+        assert joint_pos["onnx"] == "obs/joint_pos.onnx"
+        assert joint_pos["scale"] == 0.5
+        assert (out / "main" / "assets" / "s" / joint_pos["onnx"]).exists()
 
     # -----------------------------------------------------------------------
     # config_path branch
@@ -793,38 +845,43 @@ class TestSaveWebPolicyJson:
     def test_config_path_terminations_merged_into_existing_config(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(
             json.dumps({"onnx": {"path": "old.onnx"}, "existing_key": "kept"})
         )
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             config_path=str(config_file),
             terminations={
                 "fallen": TerminationTermCfg(
-                    func=term_fns.bad_orientation,
+                    func=_fake_bad_orientation,
                     params={"limit_angle": 0.8},
                 ),
             },
         )
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
         assert "terminations" in data
-        # `bad_orientation` is a DSL term (ADR 0003).
+        # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["kind"] == "termination"
-        assert "Acos" in [n["op"] for n in fallen["nodes"]]
+        assert fallen["onnx"] == "term/fallen.onnx"
+        assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
         assert data["existing_key"] == "kept"
 
     def test_config_path_both_blocks_merged(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "old.onnx"}}))
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -834,20 +891,19 @@ class TestSaveWebPolicyJson:
             },
             terminations={
                 "height": TerminationTermCfg(
-                    func=term_fns.root_height_below_minimum,
+                    func=_fake_root_height_below_minimum,
                     params={"minimum_height": 0.3},
                 ),
             },
         )
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
         assert data["actions"]["effort"]["type"] == "torque"
         assert data["actions"]["effort"]["scale"] == 1.5
-        # `root_height_below_minimum` is a DSL term (ADR 0003) — emits a
-        # composition graph instead of a legacy {name, params} entry.
+        # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         height_entry = data["terminations"]["height"]
-        assert height_entry["kind"] == "termination"
-        ops = [n["op"] for n in height_entry["nodes"]]
-        assert "RootLinkPosW" in ops and "Lt" in ops
+        assert height_entry["onnx"] == "term/height.onnx"
+        assert (out / "main" / "assets" / "s" / height_entry["onnx"]).exists()
 
     def test_config_path_overwrites_existing_actions_block(
         self, tmp_path, minimal_model, minimal_onnx
@@ -966,44 +1022,47 @@ class TestSaveWebPolicyJson:
     def test_timeout_termination_time_out_flag(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             terminations={
-                "time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True),
+                "time_out": TerminationTermCfg(func=_fake_time_out, time_out=True),
             },
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         term = data["terminations"]["time_out"]
-        # `time_out` is a DSL term (ADR 0003); time_out flag still set.
-        assert term["kind"] == "termination"
-        assert "StepCount" in [n["op"] for n in term["nodes"]]
+        # A term reading no dynamic entity state is classified native (ADR 0005).
+        assert term["native"] == "elapsed_s >= episode_length_s"
         assert term.get("time_out") is True
 
     def test_bad_orientation_params_serialized(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             terminations={
                 "fallen": TerminationTermCfg(
-                    func=term_fns.bad_orientation,
+                    func=_fake_bad_orientation,
                     params={"limit_angle": 1.57},
                 ),
             },
         )
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
-        # `bad_orientation` is a DSL term (ADR 0003); params are inlined as
-        # Const nodes during trace.
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
+        # A term reading dynamic entity state is traced to ONNX (ADR 0005);
+        # `limit_angle` is closed over by the traced function, not serialized.
         fallen = data["terminations"]["fallen"]
-        assert fallen["kind"] == "termination"
-        consts = [n["attrs"]["value"] for n in fallen["nodes"] if n["op"] == "Const"]
-        assert 1.57 in consts
+        assert fallen["onnx"] == "term/fallen.onnx"
+        assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
         assert "time_out" not in fallen
 
 
