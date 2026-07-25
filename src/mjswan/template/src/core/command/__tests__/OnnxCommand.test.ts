@@ -1,0 +1,413 @@
+/**
+ * `OnnxCommand`: the single generic command handler (ADR 0005 §3, brief §3).
+ *
+ * The graph's math is validated Python-side by the parity harness; what needs
+ * testing here is the *native half* this class owns: the scalar resample timer,
+ * state threading across frames, seeded `rand`, the mjlab-parity UI override, the
+ * `entity_write` hand-off, and the sync/async boundary (never block, never queue).
+ *
+ * The ONNX session is injected as a fake, so these run headless with no ORT.
+ */
+import { describe, expect, it } from 'vitest';
+
+import { SeededRng } from '../../rng';
+import { OnnxCommand } from '../OnnxCommand';
+import type { OnnxCommandConfig, OnnxSession, OnnxTensorLike } from '../OnnxCommand';
+
+type MjModel = import('mujoco').MjModel;
+type MjData = import('mujoco').MjData;
+
+/**
+ * Drain the microtask queue.
+ *
+ * `update()` kicks off inference and clears its in-flight flag in a `.finally()`,
+ * so an already-resolved fake session still needs several microtask turns before
+ * the next `update()` is admitted. Real ORT inference awaits genuinely, so this
+ * only matters for the fakes here.
+ */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
+
+/** Tensor data as a plain number array (the data union needs one narrowing). */
+function values(tensor: OnnxTensorLike): number[] {
+  return Array.from(tensor.data as ArrayLike<number>, Number);
+}
+
+/** Records feeds and returns scripted outputs. */
+class FakeSession implements OnnxSession {
+  readonly calls: Array<Record<string, OnnxTensorLike>> = [];
+  private pending: Array<() => void> = [];
+
+  constructor(
+    private readonly respond: (
+      feeds: Record<string, OnnxTensorLike>,
+      call: number,
+    ) => Record<string, OnnxTensorLike>,
+    private readonly manual = false,
+  ) {}
+
+  run(feeds: Record<string, OnnxTensorLike>): Promise<Record<string, OnnxTensorLike>> {
+    const index = this.calls.length;
+    // Snapshot feed data — the handler reuses tensors across frames.
+    this.calls.push(
+      Object.fromEntries(
+        Object.entries(feeds).map(([k, v]) => [
+          k,
+          { data: (v.data as Float32Array).slice(), dims: [...v.dims] } as OnnxTensorLike,
+        ]),
+      ),
+    );
+    const result = this.respond(feeds, index);
+    if (!this.manual) return Promise.resolve(result);
+    return new Promise(resolve => {
+      this.pending.push(() => resolve(result));
+    });
+  }
+
+  /** Resolve one in-flight call (manual mode). */
+  flush(): void {
+    const next = this.pending.shift();
+    next?.();
+  }
+
+  get inFlightCount(): number {
+    return this.pending.length;
+  }
+}
+
+const VELOCITY_CFG: OnnxCommandConfig = {
+  name: 'OnnxCommand',
+  onnx: 'command/twist.onnx',
+  command_field: 'vel_command_b',
+  rand_dim: 6,
+  state_fields: [
+    { name: 'vel_command_b', shape: [1, 3], dtype: 'float32' },
+    { name: 'is_standing_env', shape: [1], dtype: 'bool' },
+  ],
+  input_slots: [{ entity: 'robot', field: 'heading_w' }],
+  resampling_time_range: [3.0, 8.0],
+};
+
+function velocityOutputs(vx: number, vy: number, wz: number): Record<string, OnnxTensorLike> {
+  return {
+    next_vel_command_b: { data: new Float32Array([vx, vy, wz]), dims: [1, 3] },
+    next_is_standing_env: { data: new Uint8Array([0]), dims: [1] },
+  };
+}
+
+describe('OnnxCommand: state threading and command output', () => {
+  it('feeds prev_<field> and reads back next_<field>', async () => {
+    const session = new FakeSession((_f, i) => velocityOutputs(i + 1, 0, 0));
+    const cmd = new OnnxCommand('twist', VELOCITY_CFG, null, {
+      session,
+      rng: new SeededRng(1),
+    });
+
+    await cmd.step(true);
+    expect(Array.from(cmd.getCommand())).toEqual([1, 0, 0]);
+
+    await cmd.step(false);
+    // Second call must have been fed the first call's output as prev state.
+    expect(values(session.calls[1].prev_vel_command_b)).toEqual([1, 0, 0]);
+    expect(Array.from(cmd.getCommand())).toEqual([2, 0, 0]);
+  });
+
+  it('seeds state to zeros from the declared shape/dtype', async () => {
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand('twist', VELOCITY_CFG, null, {
+      session,
+      rng: new SeededRng(1),
+    });
+    await cmd.step(true);
+    expect(values(session.calls[0].prev_vel_command_b)).toEqual([0, 0, 0]);
+    expect(session.calls[0].prev_vel_command_b.dims).toEqual([1, 3]);
+  });
+
+  it('threads a declared dynamic input slot from the slot reader', async () => {
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand('twist', VELOCITY_CFG, null, {
+      session,
+      rng: new SeededRng(1),
+      readSlot: slot => (slot.field === 'heading_w' ? new Float32Array([1.25]) : null),
+    });
+    await cmd.step(true);
+    expect(values(session.calls[0].robot__heading_w)).toEqual([1.25]);
+  });
+});
+
+describe('OnnxCommand: resample timer (scalar, ADR §5)', () => {
+  it('resamples on the first frame, then not until the timer expires', async () => {
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand(
+      'twist',
+      { ...VELOCITY_CFG, resampling_time_range: [1.0, 1.0] },
+      null,
+      { session, rng: new SeededRng(1) },
+    );
+    cmd.update(0.1);
+    await settle();
+    expect(session.calls[0].resample_mask.data[0]).toBe(1); // reset semantics
+
+    cmd.update(0.1);
+    await settle();
+    expect(session.calls[1].resample_mask.data[0]).toBe(0);
+  });
+
+  it('sets resample_mask when the interval elapses', async () => {
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand(
+      'twist',
+      { ...VELOCITY_CFG, resampling_time_range: [1.0, 1.0] },
+      null,
+      { session, rng: new SeededRng(1) },
+    );
+    for (let i = 0; i < 12; i++) {
+      cmd.update(0.1);
+      await settle();
+    }
+    const resampleFrames = session.calls.filter(c => c.resample_mask.data[0] === 1).length;
+    // First frame (reset) + one when the 1.0s timer expired.
+    expect(resampleFrames).toBe(2);
+  });
+
+  it('reset() forces a resample on the next frame', async () => {
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand(
+      'twist',
+      { ...VELOCITY_CFG, resampling_time_range: [10.0, 10.0] },
+      null,
+      { session, rng: new SeededRng(1) },
+    );
+    cmd.update(0.1);
+    await settle();
+    cmd.update(0.1);
+    await settle();
+    expect(session.calls[1].resample_mask.data[0]).toBe(0);
+
+    cmd.reset();
+    cmd.update(0.1);
+    await settle();
+    expect(session.calls[2].resample_mask.data[0]).toBe(1);
+  });
+
+  it('without resampling_time_range, resamples only on reset', async () => {
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cfg = { ...VELOCITY_CFG };
+    delete cfg.resampling_time_range;
+    const cmd = new OnnxCommand('lift', cfg, null, { session, rng: new SeededRng(1) });
+    for (let i = 0; i < 5; i++) {
+      cmd.update(1.0);
+      await settle();
+    }
+    const resampleFrames = session.calls.filter(c => c.resample_mask.data[0] === 1).length;
+    expect(resampleFrames).toBe(1);
+  });
+});
+
+describe('OnnxCommand: seeded rand (ADR §2)', () => {
+  it('feeds rand_dim draws from the orchestrator PRNG', async () => {
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand('twist', VELOCITY_CFG, null, {
+      session,
+      rng: new SeededRng(1),
+    });
+    await cmd.step(true);
+    expect(session.calls[0].rand.data.length).toBe(6);
+  });
+
+  it('is reproducible from a seed (bit-for-bit replay)', async () => {
+    const run = async (): Promise<number[]> => {
+      const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+      const cmd = new OnnxCommand('twist', VELOCITY_CFG, null, {
+        session,
+        rng: new SeededRng(2026),
+      });
+      for (let i = 0; i < 4; i++) await cmd.step(true);
+      return session.calls.flatMap(c => Array.from(c.rand.data as Float32Array));
+    };
+    expect(await run()).toEqual(await run());
+  });
+
+  it('applies rand_ranges per element', async () => {
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand(
+      'twist',
+      { ...VELOCITY_CFG, rand_dim: 2, rand_ranges: [[-1, -0.5], [10, 11]] },
+      null,
+      { session, rng: new SeededRng(3) },
+    );
+    await cmd.step(true);
+    const rand = session.calls[0].rand.data as Float32Array;
+    expect(rand[0]).toBeGreaterThanOrEqual(-1);
+    expect(rand[0]).toBeLessThan(-0.5);
+    expect(rand[1]).toBeGreaterThanOrEqual(10);
+    expect(rand[1]).toBeLessThan(11);
+  });
+});
+
+describe('OnnxCommand: UI override (mjlab play parity, §3a)', () => {
+  const UI_CFG: OnnxCommandConfig = {
+    ...VELOCITY_CFG,
+    ui: {
+      inputs: [
+        { type: 'checkbox', name: 'enabled', label: 'Joystick', default: false },
+        { type: 'slider', name: 'lin_vel_x', label: 'X', min: -1, max: 1, step: 0.01, default: 0 },
+        { type: 'slider', name: 'lin_vel_y', label: 'Y', min: -1, max: 1, step: 0.01, default: 0 },
+        { type: 'slider', name: 'ang_vel_z', label: 'Yaw', min: -1, max: 1, step: 0.01, default: 0 },
+        { type: 'button', name: 'zero', label: 'Zero' },
+      ],
+    },
+  };
+
+  it('returns the autonomous value while the checkbox is off', async () => {
+    const session = new FakeSession(() => velocityOutputs(0.4, 0.1, -0.2));
+    const cmd = new OnnxCommand('twist', UI_CFG, null, { session, rng: new SeededRng(1) });
+    await cmd.step(true);
+    cmd.setValue('lin_vel_x', 0.9);
+    expect(Array.from(cmd.getCommand())).toEqual([0.4, 0.1, -0.2].map(v => Math.fround(v)));
+  });
+
+  it('overwrites per axis once enabled', async () => {
+    const session = new FakeSession(() => velocityOutputs(0.4, 0.1, -0.2));
+    const cmd = new OnnxCommand('twist', UI_CFG, null, { session, rng: new SeededRng(1) });
+    await cmd.step(true);
+    cmd.setValue('enabled', 1);
+    cmd.setValue('lin_vel_x', 0.9);
+    cmd.setValue('ang_vel_z', 0.5);
+    const out = Array.from(cmd.getCommand());
+    expect(out[0]).toBeCloseTo(0.9, 6);
+    expect(out[1]).toBeCloseTo(0, 6); // slider default, not the graph's 0.1
+    expect(out[2]).toBeCloseTo(0.5, 6);
+  });
+
+  it('never skips the autonomous computation while enabled (mjlab parity)', async () => {
+    const session = new FakeSession((_f, i) => velocityOutputs(i, 0, 0));
+    const cmd = new OnnxCommand('twist', UI_CFG, null, { session, rng: new SeededRng(1) });
+    cmd.setValue('enabled', 1);
+    await cmd.step(true);
+    await cmd.step(false);
+    // The graph ran on both frames even though the UI is overriding the output.
+    expect(session.calls.length).toBe(2);
+  });
+
+  it('the zero button zeroes the sliders', async () => {
+    const session = new FakeSession(() => velocityOutputs(0.4, 0.1, -0.2));
+    const cmd = new OnnxCommand('twist', UI_CFG, null, { session, rng: new SeededRng(1) });
+    await cmd.step(true);
+    cmd.setValue('enabled', 1);
+    cmd.setValue('lin_vel_x', 0.9);
+    cmd.triggerButton('zero');
+    expect(Array.from(cmd.getCommand())).toEqual([0, 0, 0]);
+  });
+});
+
+describe('OnnxCommand: entity_write hand-off (§3b)', () => {
+  function fakeModelData(): { mjModel: MjModel; mjData: MjData } {
+    const mjModel = {
+      njnt: 1,
+      jnt_type: Int32Array.from([0]), // free joint
+      jnt_qposadr: Int32Array.from([0]),
+      jnt_dofadr: Int32Array.from([0]),
+      names: new Uint8Array(0).buffer,
+      name_jntadr: Int32Array.from([0]),
+    } as unknown as MjModel;
+    const mjData = {
+      qpos: new Float64Array(7),
+      qvel: new Float64Array(6),
+    } as unknown as MjData;
+    return { mjModel, mjData };
+  }
+
+  const LIFT_CFG: OnnxCommandConfig = {
+    name: 'OnnxCommand',
+    onnx: 'command/lift_height.onnx',
+    command_field: 'target_pos',
+    rand_dim: 7,
+    state_fields: [{ name: 'target_pos', shape: [1, 3], dtype: 'float32' }],
+    write_targets: [
+      { kind: 'root_pose', entity: 'cube', fields: ['pose'] },
+      { kind: 'root_velocity', entity: 'cube', fields: ['velocity'] },
+    ],
+  };
+
+  it('applies the graph-computed cube pose/velocity to mjData', async () => {
+    const { mjModel, mjData } = fakeModelData();
+    const session = new FakeSession(() => ({
+      next_target_pos: { data: new Float32Array([0.4, 0, 0.3]), dims: [1, 3] },
+      root_pose__pose: { data: new Float32Array([0.1, 0.2, 0.05, 1, 0, 0, 0]), dims: [1, 7] },
+      root_velocity__velocity: { data: new Float32Array(6), dims: [1, 6] },
+    }));
+    const cmd = new OnnxCommand(
+      'lift_height',
+      LIFT_CFG,
+      { mjModel, mjData } as unknown as import('../types').CommandTermContext,
+      { session, rng: new SeededRng(1) },
+    );
+    await cmd.step(true);
+    expect(mjData.qpos[0]).toBeCloseTo(0.1, 6);
+    expect(mjData.qpos[1]).toBeCloseTo(0.2, 6);
+    expect(mjData.qpos[3]).toBeCloseTo(1, 6);
+    expect(Array.from(cmd.getCommand())).toEqual([0.4, 0, 0.3].map(v => Math.fround(v)));
+  });
+
+  it('does not treat next_<state> outputs as writes', async () => {
+    const { mjModel, mjData } = fakeModelData();
+    const session = new FakeSession(() => ({
+      next_target_pos: { data: new Float32Array([9, 9, 9]), dims: [1, 3] },
+    }));
+    const cmd = new OnnxCommand(
+      'lift_height',
+      LIFT_CFG,
+      { mjModel, mjData } as unknown as import('../types').CommandTermContext,
+      { session, rng: new SeededRng(1) },
+    );
+    await cmd.step(true);
+    expect(mjData.qpos[0]).toBe(0); // untouched — no write value supplied
+  });
+});
+
+describe('OnnxCommand: sync/async boundary', () => {
+  it('update() does not block and serves the last completed value', () => {
+    const session = new FakeSession(() => velocityOutputs(1, 2, 3), true);
+    const cmd = new OnnxCommand('twist', VELOCITY_CFG, null, {
+      session,
+      rng: new SeededRng(1),
+    });
+    cmd.update(0.02);
+    // Inference is still pending: the command is the previous (zero) value.
+    expect(Array.from(cmd.getCommand())).toEqual([0, 0, 0]);
+    expect(session.inFlightCount).toBe(1);
+  });
+
+  it('skips frames while inference is in flight (never queues a backlog)', async () => {
+    const session = new FakeSession(() => velocityOutputs(1, 2, 3), true);
+    const cmd = new OnnxCommand('twist', VELOCITY_CFG, null, {
+      session,
+      rng: new SeededRng(1),
+    });
+    for (let i = 0; i < 10; i++) cmd.update(0.02);
+    expect(session.calls.length).toBe(1); // 9 frames skipped, not queued
+
+    session.flush();
+    await settle();
+    expect(Array.from(cmd.getCommand())).toEqual([1, 2, 3]);
+  });
+
+  it('a resample that lands during an in-flight frame is not lost', async () => {
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0), true);
+    const cmd = new OnnxCommand(
+      'twist',
+      { ...VELOCITY_CFG, resampling_time_range: [1.0, 1.0] },
+      null,
+      { session, rng: new SeededRng(1) },
+    );
+    cmd.update(0.1); // first frame: resample (reset), stays in flight
+    cmd.update(2.0); // timer expires while in flight → pending resample
+    session.flush();
+    await settle();
+    cmd.update(0.1); // next admitted frame must carry the pending resample
+    await settle();
+    expect(session.calls[1].resample_mask.data[0]).toBe(1);
+  });
+});

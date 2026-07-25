@@ -22,7 +22,11 @@
 | §3a `UniformVelocityCommandCfg` body | **traceable via override** — examples-side trace-friendly override incl. heading tracking traces + parity clean (dynamic-slot Command support, finding 15) |
 | Dynamic-slot Command support (runtime reads) | **done** — `term.robot`/`term._env` swapped to the Event tagged-key proxies; `heading_w` threaded as a graph input |
 | `OnnxCommand` `policy.json` config output | **done** — `command_config`/`write_command_artifact` + JSON schema; unit-tested + end-to-end from real traces |
-| §4 interval/startup native dispatch, entity-write apply (TS) | not started |
+| §4 orchestrator-owned seeded PRNG (TS) | **done** — `core/rng.ts` (xoshiro128**, state snapshot for replay) |
+| §4 interval/startup/reset Event triggers (TS) | **done** — `core/event/triggers.ts`, scalar per ADR §5 |
+| §4 `entity_write` apply primitive (TS) | **done** — `core/event/entityWrite.ts` (joint_state/root_pose/root_velocity) |
+| §3 generic `OnnxCommand` handler (TS) | **done** — `core/command/OnnxCommand.ts` (timer, state, rand, UI override, writes) |
+| §4 wire triggers/OnnxCommand into EventManager/CommandManager + runtime | not started |
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` | **deferred** — see note below |
 
@@ -411,10 +415,50 @@ prev)` with `prev` cloned before `_resample_command`'s in-place writes; reset un
     serialization (so `Builder.build()` emits it) is the remaining builder-integration step,
     deferred with the rest of the DSL→ONNX build-output switch (brief §2 deferral note).
 
-**Next:** §4 — the TypeScript runtime is now the critical path: the generic `OnnxCommand`
-handler (owns the resample timer, persists state via `is_init`/`carry`, applies `ui`
-override and `entity_write`), native interval/startup Event dispatch, and the entity-write
-apply primitive. All the Python-side artifacts they consume (obs/term/event/command ONNX +
-configs) are proven. A separate track: model-field-write startup-DR events
+17. **§4 TypeScript runtime — the four foundational pieces are built and unit-tested**
+    (62 vitest tests green, eslint + tsc clean; all headless, no browser or ORT needed):
+
+    - **`core/rng.ts`** — the orchestrator-owned seeded PRNG (ADR §2). A fully specified
+      xoshiro128** (not a library's, so a dependency bump can never alter a recorded
+      replay), with `getState`/`setState` so a session resumes bit-for-bit, and
+      `randVector(n, ranges)` to fill a term's `rand` input. This is the sink that
+      `Math.random()` call sites get swept into.
+    - **`core/event/triggers.ts`** — native `interval`/`startup`/`reset` dispatch, the
+      genuinely-new functionality (`EventManager` had only `onReset()`). Ports the mjlab
+      *semantics* as scalars per ADR §5: `IntervalTrigger` (countdown, interval resampling,
+      overshoot carried so the average rate doesn't drift, one firing per tick even for a
+      long `dt`, per-episode vs global reset), `StartupTrigger` (fires once),
+      `ResetTrigger` (`min_step_count_between_reset` gating).
+    - **`core/event/entityWrite.ts`** — the apply primitive `DslEvent` never had (brief §3's
+      correction): take a value the graph already computed and write it to mjData.
+      Covers `joint_state` (qpos/qvel at resolved joint ids), `root_pose` (free-joint
+      7-vector), `root_velocity` (6-vector); the `"<kind>__<field>"` output naming mirrors
+      the Python tracer's `_WRITE_FIELDS`, so the tests double as the cross-language
+      contract. Degrades (returns false) on a fixed-base model instead of throwing inside
+      the step loop.
+    - **`core/command/OnnxCommand.ts`** — the single generic command handler. Owns the
+      scalar resample timer, threads state across frames (`prev_<field>` → `next_<field>`,
+      seeded from the config's declared shape/dtype), draws `rand` from the seeded PRNG,
+      applies the mjlab-parity UI override (**the autonomous computation is never skipped**;
+      the UI overwrites per axis afterward, §3a), and hands `entity_write` outputs to the
+      apply primitive. Velocity and Lifting are pure data instantiations — no per-command
+      engine class, as §3 requires.
+
+    **The sync/async boundary, resolved.** `CommandTerm.update()`/`getCommand()` are
+    synchronous but ORT-Web inference is not. `update()` *kicks off* inference and returns;
+    `getCommand()` serves the last completed value; a frame arriving while inference is in
+    flight is **skipped, never queued**, so the command cannot build a backlog. A resample
+    that comes due during an in-flight frame is latched and carried into the next admitted
+    frame (tested). The resulting one-frame lag is the property already accepted in ADR §8.
+
+    The ONNX session is injected behind a two-method `OnnxSession` interface, so all of the
+    above is testable headless with a fake — no ORT, no browser, no WASM.
+
+**Next:** wire these into the engine: `EventManager` gains mode-aware dispatch driven by the
+triggers (calling a term's ONNX graph only on frames a trigger fires — brief §4's
+"fusion reduces graph count, never call frequency"), `CommandManager` registers
+`OnnxCommand` with an ORT-backed session built from app-supplied bytes (ADR 0004 §4 — the
+engine never fetches), and the existing `Math.random()` sites in `DslEvent`/`TrackingCommand`
+are swept into the seeded PRNG. A separate track: model-field-write startup-DR events
 (`geom_friction`/`encoder_bias`/`body_com_offset`) — currently native-fallback, needed for
 Velocity/Lift `mode="startup"` parity.
