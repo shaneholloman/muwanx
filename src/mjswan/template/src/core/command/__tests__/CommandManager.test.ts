@@ -1,0 +1,117 @@
+/**
+ * `CommandManager`: `OnnxCommand` registration (ADR 0005 §3).
+ *
+ * `OnnxCommand` bypasses the class registry the same way `DslEvent` bypasses
+ * `EventManager`'s — it needs a session + rng the registry's
+ * `new Term(name, config, context)` shape has no room for. These tests pin
+ * that bypass and its failure mode (missing session/rng warns and skips
+ * rather than throwing and taking down every other command).
+ */
+import { describe, expect, it, vi } from 'vitest';
+
+import { SeededRng } from '../../rng';
+import { OnnxSessionCache, type OnnxSession, type OnnxTensorLike } from '../../onnx/session';
+import { CommandManager } from '../CommandManager';
+import type { CommandTermContext, CommandsConfig } from '../types';
+import type { OnnxCommandConfig } from '../OnnxCommand';
+
+/** Tensor data as a plain number array (the data union needs one narrowing). */
+function values(tensor: OnnxTensorLike): number[] {
+  return Array.from(tensor.data as ArrayLike<number>, Number);
+}
+
+function fakeSession(run: (feeds: Record<string, OnnxTensorLike>) => Record<string, OnnxTensorLike>): OnnxSession {
+  return { run: (feeds) => Promise.resolve(run(feeds)) };
+}
+
+async function contextWithSession(path: string, session: OnnxSession): Promise<CommandTermContext> {
+  const sessions = new OnnxSessionCache(() => Promise.resolve(session));
+  await sessions.load([{ name: path, data: new ArrayBuffer(0) }]);
+  return {
+    mujoco: {} as unknown as CommandTermContext['mujoco'],
+    mjModel: null,
+    mjData: null,
+    scene: {} as unknown as CommandTermContext['scene'],
+    rng: new SeededRng(1),
+    onnxSessions: sessions,
+  };
+}
+
+const VELOCITY_CFG: OnnxCommandConfig = {
+  name: 'OnnxCommand',
+  onnx: 'command/twist.onnx',
+  command_field: 'vel_command_b',
+  rand_dim: 6,
+  state_fields: [{ name: 'vel_command_b', shape: [1, 3], dtype: 'float32' }],
+};
+
+describe('CommandManager: OnnxCommand registration', () => {
+  it('bypasses the class registry and constructs an OnnxCommand', async () => {
+    const context = await contextWithSession(
+      'command/twist.onnx',
+      fakeSession(() => ({ next_vel_command_b: { data: new Float32Array([1, 2, 3]), dims: [1, 3] } })),
+    );
+    const mgr = new CommandManager();
+    const commands: CommandsConfig = { twist: VELOCITY_CFG };
+    mgr.initialize(commands, context);
+
+    const term = mgr.getTerm('twist');
+    expect(term).toBeDefined();
+    await (term as unknown as { step(resample: boolean): Promise<void> }).step(true);
+    expect(Array.from(mgr.getCommand('twist'))).toEqual([1, 2, 3]);
+  });
+
+  it('does not throw when a registry name is unrelated to OnnxCommand', () => {
+    const mgr = new CommandManager();
+    const context: CommandTermContext = {
+      mujoco: {} as unknown as CommandTermContext['mujoco'],
+      mjModel: null,
+      mjData: null,
+      scene: {} as unknown as CommandTermContext['scene'],
+    };
+    expect(() => mgr.initialize({ ui: { name: 'UiCommand' } }, context)).not.toThrow();
+    expect(mgr.getTerm('ui')).toBeDefined();
+  });
+
+  it('warns and skips when no onnxSessions/rng are supplied (does not throw)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mgr = new CommandManager();
+    const context: CommandTermContext = {
+      mujoco: {} as unknown as CommandTermContext['mujoco'],
+      mjModel: null,
+      mjData: null,
+      scene: {} as unknown as CommandTermContext['scene'],
+    };
+    expect(() => mgr.initialize({ twist: VELOCITY_CFG }, context)).not.toThrow();
+    expect(mgr.getTerm('twist')).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('warns and skips when the named onnx session was never loaded', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const context = await contextWithSession('command/other.onnx', fakeSession(() => ({})));
+    const mgr = new CommandManager();
+    expect(() => mgr.initialize({ twist: VELOCITY_CFG }, context)).not.toThrow();
+    expect(mgr.getTerm('twist')).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('threads context.readOnnxSlot into the constructed OnnxCommand', async () => {
+    const runFn = vi.fn((feeds: Record<string, OnnxTensorLike>) => {
+      expect(values(feeds.robot__heading_w)).toEqual([1.5]);
+      return { next_vel_command_b: { data: new Float32Array(3), dims: [1, 3] } };
+    });
+    const context = await contextWithSession('command/twist.onnx', fakeSession(runFn));
+    context.readOnnxSlot = (slot) => (slot.field === 'heading_w' ? new Float32Array([1.5]) : null);
+    const mgr = new CommandManager();
+    mgr.initialize(
+      { twist: { ...VELOCITY_CFG, input_slots: [{ entity: 'robot', field: 'heading_w' }] } },
+      context,
+    );
+    const term = mgr.getTerm('twist');
+    await (term as unknown as { step(resample: boolean): Promise<void> }).step(true);
+    expect(runFn).toHaveBeenCalledTimes(1);
+  });
+});

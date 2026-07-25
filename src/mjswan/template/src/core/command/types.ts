@@ -1,5 +1,7 @@
 import type * as THREE from 'three';
 import type { MainModule, MjData, MjModel } from 'mujoco';
+import type { SeededRng } from '../rng';
+import type { OnnxSessionCache, SlotReader } from '../onnx/session';
 
 export type CommandType = 'slider' | 'button' | 'checkbox';
 
@@ -70,6 +72,15 @@ export interface CommandTermContext {
   bodies?: Record<number, THREE.Group> | null;
   mujocoRoot?: THREE.Group | null;
   requestReset?: () => void;
+  /**
+   * Deps for `OnnxCommand` terms (ADR 0005 §3): the orchestrator-owned seeded
+   * PRNG and the loaded `.onnx` sessions for this policy's commands, keyed by
+   * the same path `config.onnx` names. Absent for scenes with no ONNX commands.
+   */
+  rng?: SeededRng;
+  onnxSessions?: OnnxSessionCache;
+  /** Reads a command's declared dynamic runtime input slots (brief §3a). */
+  readOnnxSlot?: SlotReader;
 }
 
 export interface CommandTerm {

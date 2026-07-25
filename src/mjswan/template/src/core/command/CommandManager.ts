@@ -1,5 +1,6 @@
 import { CustomCommands } from './custom_commands';
 import { TrackingCommand } from './TrackingCommand';
+import { OnnxCommand, type OnnxCommandConfig } from './OnnxCommand';
 import {
   getCommandInputId,
   type CheckboxCommandConfig,
@@ -14,6 +15,11 @@ import {
   type CommandsConfig,
   type SliderCommandConfig,
 } from './types';
+
+/** True for a config entry naming the shared `OnnxCommand` handler (ADR 0005 §3). */
+function isOnnxCommandConfig(entry: CommandConfigEntry): entry is OnnxCommandConfig {
+  return entry.name === 'OnnxCommand';
+}
 
 type ValueCommandConfig = SliderCommandConfig | CheckboxCommandConfig;
 
@@ -110,6 +116,13 @@ export class CommandManager {
     };
 
     for (const [groupName, entry] of Object.entries(commandsConfig)) {
+      if (isOnnxCommandConfig(entry)) {
+        const term = this.buildOnnxCommand(groupName, entry, context);
+        if (!term) continue;
+        this.terms.set(groupName, term);
+        this.registerUi(groupName, term);
+        continue;
+      }
       const Term = registry[entry.name];
       if (!Term) {
         throw new Error(`Unknown command term: ${entry.name}`);
@@ -118,6 +131,32 @@ export class CommandManager {
       this.terms.set(groupName, term);
       this.registerUi(groupName, term);
     }
+  }
+
+  /**
+   * `OnnxCommand` bypasses the class registry (like `DslEvent` does for
+   * events): it is one shared handler, data-configured, needing a session +
+   * rng the registry-based `new Term(name, config, context)` shape has no room
+   * for. Warns and skips (rather than throwing) so one missing session doesn't
+   * take down every other command in the policy.
+   */
+  private buildOnnxCommand(
+    groupName: string,
+    entry: OnnxCommandConfig,
+    context: CommandTermContext
+  ): OnnxCommand | null {
+    const session = context.onnxSessions?.get(entry.onnx);
+    if (!session || !context.rng) {
+      console.warn(
+        `[CommandManager] OnnxCommand "${groupName}" needs onnxSessions/rng in context; skipping.`
+      );
+      return null;
+    }
+    return new OnnxCommand(groupName, entry, context, {
+      session,
+      rng: context.rng,
+      readSlot: context.readOnnxSlot,
+    });
   }
 
   update(dt: number): void {
