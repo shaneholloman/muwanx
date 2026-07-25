@@ -4,6 +4,25 @@ import { createLights } from './lights';
 import { createTexture, createSkyboxTexture } from './textures';
 import { createTendonMeshes } from './tendons';
 
+
+function reflectanceParams(
+  mjModel: MjModel,
+  matId: number
+): Pick<THREE.MeshPhysicalMaterialParameters, 'specularIntensity' | 'reflectivity' | 'roughness' | 'metalness'> {
+  const specular = matId !== -1 ? (mjModel.mat_specular?.[matId] ?? 0.5) : 0.5;
+  const shininess = matId !== -1 ? (mjModel.mat_shininess?.[matId] ?? 0.5) : 0.5;
+  const reflectance = matId !== -1 ? (mjModel.mat_reflectance?.[matId] ?? 0) : 0;
+  const metallic = matId !== -1 ? (mjModel.mat_metallic?.[matId] ?? -1) : -1;
+  const roughnessAttr = matId !== -1 ? (mjModel.mat_roughness?.[matId] ?? -1) : -1;
+
+  return {
+    specularIntensity: specular,
+    reflectivity: reflectance,
+    roughness: roughnessAttr >= 0 ? roughnessAttr : 1.0 - shininess,
+    metalness: metallic >= 0 ? metallic : specular,
+  };
+}
+
 function isInlineXML(input: string): boolean {
   if (!input) {
     return false;
@@ -439,18 +458,7 @@ export async function loadSceneFromURL(
         color: new THREE.Color(color[0], color[1], color[2]),
         transparent: color[3] < 1.0,
         opacity: color[3],
-        specularIntensity:
-          mjModel.geom_matid[g] !== -1 ? mjModel.mat_specular?.[mjModel.geom_matid[g]] : undefined,
-        reflectivity:
-          mjModel.geom_matid[g] !== -1
-            ? mjModel.mat_reflectance?.[mjModel.geom_matid[g]]
-            : undefined,
-        roughness:
-          mjModel.geom_matid[g] !== -1 && mjModel.mat_shininess
-            ? 1.0 - mjModel.mat_shininess[mjModel.geom_matid[g]]
-            : undefined,
-        metalness:
-          mjModel.geom_matid[g] !== -1 ? mjModel.mat_specular?.[mjModel.geom_matid[g]] : 0.1,
+        ...reflectanceParams(mjModel, mjModel.geom_matid[g]),
       });
 
     if (texture) {
@@ -482,22 +490,7 @@ export async function loadSceneFromURL(
                 color: new THREE.Color(color[0], color[1], color[2]),
                 transparent: color[3] < 1.0,
                 opacity: color[3],
-                specularIntensity:
-                  mjModel.geom_matid[g] !== -1
-                    ? mjModel.mat_specular?.[mjModel.geom_matid[g]]
-                    : undefined,
-                reflectivity:
-                  mjModel.geom_matid[g] !== -1
-                    ? mjModel.mat_reflectance?.[mjModel.geom_matid[g]]
-                    : undefined,
-                roughness:
-                  mjModel.geom_matid[g] !== -1 && mjModel.mat_shininess
-                    ? 1.0 - mjModel.mat_shininess[mjModel.geom_matid[g]]
-                    : undefined,
-                metalness:
-                  mjModel.geom_matid[g] !== -1
-                    ? mjModel.mat_specular?.[mjModel.geom_matid[g]]
-                    : 0.1,
+                ...reflectanceParams(mjModel, mjModel.geom_matid[g]),
                 map: faceTex,
               });
               materials.push(m);
