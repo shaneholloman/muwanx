@@ -283,9 +283,9 @@ def run_command_parity(
     import onnxruntime as ort
 
     from .tracer import (
-        _CaptureEntityWrites,
-        _find_write_entity,
+        _entity_attrs,
         _flatten_captures,
+        _RecordCommand,
         _restore_state,
         _snapshot_state,
         trace_command_term,
@@ -296,32 +296,37 @@ def run_command_parity(
         term, state_fields, name=name, command_field=command_field
     )
     tr.rand_dim = export.rand_dim
+    tr.input_slots = [f"{e}.{f}" for e, f in export.input_slots]
     tr.note = f"state={[s['name'] for s in export.state_fields]} cmd={command_field}"
     session = ort.InferenceSession(
         export.onnx_bytes, providers=["CPUExecutionProvider"]
     )
-    write_entity = _find_write_entity(term)
+    entity_attr_names = _entity_attrs(term)
+    entity_name = getattr(getattr(term, "cfg", None), "entity_name", None)
     env_ids = torch.arange(term.num_envs)
+
+    def _dyn_feeds() -> dict[str, np.ndarray]:
+        # Dynamic slots read runtime state off the term's entity; feed live values.
+        entity = getattr(term, entity_attr_names[0]) if entity_attr_names else None
+        out = {}
+        for in_name, (_ent, fld) in zip(export.input_names, export.input_slots):
+            out[in_name] = _to_numpy(getattr(entity.data, fld))
+        return out
 
     for _ in range(n_draws):
         snap = _snapshot_state(term)
         prev = {f: getattr(term, f).detach().clone() for f in state_fields}
-        captures: dict[str, tuple] = {}
-        ctx = _CaptureEntityWrites(write_entity, captures) if write_entity else None
-        with DrawRecorder(term._resample_command) as rec:
-            if ctx is not None:
-                ctx.__enter__()
-            try:
+        dyn_feeds = _dyn_feeds()  # read before the reference run mutates nothing
+        with _RecordCommand(term, entity_attr_names, entity_name) as rec_env:
+            with DrawRecorder(term._resample_command) as rec:
                 term._resample_command(env_ids)
                 term._update_command()
-            finally:
-                if ctx is not None:
-                    ctx.__exit__(None, None, None)
+            ref_writes = _flatten_captures(dict(rec_env.captures))[1]
         ref_next = {f: getattr(term, f).detach().clone() for f in state_fields}
-        _, ref_writes = _flatten_captures(captures)
         _restore_state(term, snap)
 
         feeds = {f"prev_{f}": _feed_numpy(prev[f]) for f in state_fields}
+        feeds.update(dyn_feeds)
         feeds["resample_mask"] = np.ones((term.num_envs,), dtype=bool)
         feeds["rand"] = _to_numpy(rec.rand_vector)
         outs = session.run(export.output_names, feeds)
@@ -333,14 +338,23 @@ def run_command_parity(
                 tr.passed = False
         tr.steps_checked += 1
 
-    # resample_mask=False must leave the state unchanged (no resample).
+    # resample_mask=False: no resample, but _update_command still runs on prev
+    # state (e.g. velocity's standing-zero / heading). Reference = update-only.
+    snap = _snapshot_state(term)
     prev = {f: getattr(term, f).detach().clone() for f in state_fields}
+    dyn_feeds = _dyn_feeds()
+    with _RecordCommand(term, entity_attr_names, entity_name):
+        term._update_command()
+    ref_false = {f: getattr(term, f).detach().clone() for f in state_fields}
+    _restore_state(term, snap)
+
     feeds = {f"prev_{f}": _feed_numpy(prev[f]) for f in state_fields}
+    feeds.update(dyn_feeds)
     feeds["resample_mask"] = np.zeros((term.num_envs,), dtype=bool)
     feeds["rand"] = _to_numpy(export.reference_rand)
     outs = session.run(export.output_names, feeds)
-    for f, out in zip(state_fields, outs):
-        if not np.allclose(out, _to_numpy(prev[f]), atol=atol, rtol=rtol):
+    for f, out in zip(state_fields, outs[: len(state_fields)]):
+        if not np.allclose(out, _to_numpy(ref_false[f]), atol=atol, rtol=rtol):
             tr.passed = False
-            tr.note += " [mask=False changed state!]"
+            tr.note += f" [mask=False mismatch on {f}]"
     return tr

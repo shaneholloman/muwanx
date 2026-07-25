@@ -60,6 +60,7 @@ _DYNAMIC_DATA_FIELDS: frozenset[str] = frozenset(
         "root_link_lin_vel_w",
         "root_link_ang_vel_w",
         "projected_gravity_b",
+        "heading_w",
     }
 )
 
@@ -681,34 +682,49 @@ _ENTITY_WRITE_METHODS = {
 }
 
 
-class _CaptureEntityWrites:
-    """Patch an entity's ``write_*_to_sim`` methods to capture, not write."""
+def _entity_attrs(term: Any) -> list[str]:
+    """Names of ``term`` attributes that are entities (read state from / write to)."""
+    return [
+        attr
+        for attr, value in vars(term).items()
+        if hasattr(value, "data")
+        and any(hasattr(type(value), m) for m in _ENTITY_WRITE_METHODS)
+    ]
 
-    def __init__(self, entity: Any, captures: dict[str, tuple[torch.Tensor, ...]]):
-        self._entity = entity
-        self._captures = captures
-        self._saved: dict[str, Any] = {}
 
-    def __enter__(self) -> _CaptureEntityWrites:
-        for meth, kind in _ENTITY_WRITE_METHODS.items():
-            if hasattr(type(self._entity), meth):
-                self._saved[meth] = getattr(type(self._entity), meth)
-                setattr(type(self._entity), meth, self._make(kind))
+class _RecordCommand:
+    """Swap a command's entity attrs + ``_env`` to recording proxies (event tagged
+    keys) so its reads are logged and its writes captured, with no sim mutation.
+
+    Reused by the tracer's discovery pass and the parity harness's reference run.
+    Single-entity commands only: all entity attrs are keyed by ``cfg.entity_name``.
+    """
+
+    def __init__(self, term: Any, entity_attr_names: list[str], entity_name: str):
+        self.term = term
+        self._attrs = entity_attr_names
+        self._entity_name = entity_name
+        self.log: list[tuple[TaggedKey, Any]] = []
+        self.captures: dict[str, tuple[torch.Tensor, ...]] = {}
+
+    def __enter__(self) -> _RecordCommand:
+        self._orig = {a: getattr(self.term, a) for a in self._attrs}
+        self._orig_env = getattr(self.term, "_env", None)
+        for a in self._attrs:
+            setattr(
+                self.term,
+                a,
+                _EvRecEntity(self._orig[a], self._entity_name, self.log, self.captures),
+            )
+        if self._orig_env is not None:
+            self.term._env = _EventCaptureEnv(self._orig_env, self.log, self.captures)
         return self
 
     def __exit__(self, *exc: object) -> None:
-        for meth, original in self._saved.items():
-            setattr(type(self._entity), meth, original)
-        self._saved.clear()
-
-    def _make(self, kind: str):
-        captures = self._captures
-
-        def capture(_self, *args, **kwargs):
-            tensors = tuple(a for a in args if isinstance(a, torch.Tensor))
-            captures[kind] = tensors[: len(_WRITE_FIELDS[kind])]
-
-        return capture
+        for a, v in self._orig.items():
+            setattr(self.term, a, v)
+        if self._orig_env is not None:
+            self.term._env = self._orig_env
 
 
 def _snapshot_state(term: Any) -> dict[str, torch.Tensor]:
@@ -737,38 +753,86 @@ def _gate(
 
 
 class _CommandModule(nn.Module):
-    """Traces a CommandTerm's resample+update as forward(prev_state, mask, rand)."""
+    """Traces a CommandTerm's resample+update as a pure function.
 
-    def __init__(self, term: Any, state_fields: list[str], write_entity: Any):
+    ``forward(*dynamic_slots, *prev_state, resample_mask, rand)``. Entity attrs and
+    ``_env`` are swapped to replay proxies serving dynamic reads (graph inputs) and
+    baked constants; state is injected and read back; the resample is gated by
+    ``resample_mask`` (``where(mask, resampled, prev)``); ``_update_command`` always
+    runs; any ``entity_write`` is captured. Reset unifies to ``resample_mask=True``.
+    """
+
+    def __init__(
+        self,
+        term: Any,
+        state_fields: list[str],
+        entity_attr_names: list[str],
+        entity_name: str,
+        dynamic_keys: list[SlotKey],
+        tensor_consts: dict[TaggedKey, torch.Tensor],
+        scalar_consts: dict[TaggedKey, Any],
+    ):
         super().__init__()
         self._term = term
         self._state_fields = state_fields
-        self._write_entity = write_entity
+        self._entity_attr_names = entity_attr_names
+        self._entity_name = entity_name
+        self._dynamic_keys = dynamic_keys
+        self._scalar_consts = scalar_consts
         self._env_ids = torch.arange(term.num_envs)
+        self._const_buffers: dict[TaggedKey, str] = {}
+        for i, (key, value) in enumerate(tensor_consts.items()):
+            buffer_name = f"_const_{i}"
+            self.register_buffer(buffer_name, value.detach().clone())
+            self._const_buffers[key] = buffer_name
 
     def forward(self, *args: torch.Tensor):
-        *state_inputs, resample_mask, rand = args
-        prev = {}
-        for field_name, value in zip(self._state_fields, state_inputs):
-            setattr(self._term, field_name, value)
-            # Clone before _resample_command mutates term.<field> in place, so the
-            # resample_mask gate has an untouched "previous" tensor to fall back to.
-            prev[field_name] = value.clone()
+        n_dyn = len(self._dynamic_keys)
+        n_state = len(self._state_fields)
+        dynamic = args[:n_dyn]
+        state_inputs = args[n_dyn : n_dyn + n_state]
+        resample_mask = args[n_dyn + n_state]
+        rand = args[n_dyn + n_state + 1]
+
+        served: dict[TaggedKey, Any] = dict(self._scalar_consts)
+        for key, buffer_name in self._const_buffers.items():
+            served[key] = getattr(self, buffer_name)
+        for (entity, field_name), tensor in zip(self._dynamic_keys, dynamic):
+            served[("data", entity, field_name)] = tensor
+
         captures: dict[str, tuple[torch.Tensor, ...]] = {}
-        with (
-            ReplayRng(self._term._resample_command, rand),
-            _CaptureEntityWrites(self._write_entity, captures),
-        ):
-            self._term._resample_command(self._env_ids)
-            for field_name in self._state_fields:
-                gated = _gate(
-                    resample_mask, getattr(self._term, field_name), prev[field_name]
-                )
-                setattr(self._term, field_name, gated)
-            self._term._update_command()
-        outputs = [getattr(self._term, f) for f in self._state_fields]
-        _, write_tensors = _flatten_captures(captures)
-        return tuple(outputs) + tuple(write_tensors)
+        orig = {a: getattr(self._term, a) for a in self._entity_attr_names}
+        orig_env = getattr(self._term, "_env", None)
+        for a in self._entity_attr_names:
+            setattr(self._term, a, _ReplayEntity(self._entity_name, served, captures))
+        if orig_env is not None:
+            self._term._env = _EventReplayEnv(served, captures)
+        try:
+            prev = {}
+            for field_name, value in zip(self._state_fields, state_inputs):
+                setattr(self._term, field_name, value)
+                prev[field_name] = value.clone()
+            with ReplayRng(self._term._resample_command, rand):
+                self._term._resample_command(self._env_ids)
+                for field_name in self._state_fields:
+                    setattr(
+                        self._term,
+                        field_name,
+                        _gate(
+                            resample_mask,
+                            getattr(self._term, field_name),
+                            prev[field_name],
+                        ),
+                    )
+                self._term._update_command()
+            outputs = [getattr(self._term, f) for f in self._state_fields]
+            _, write_tensors = _flatten_captures(captures)
+            return tuple(outputs) + tuple(write_tensors)
+        finally:
+            for a, v in orig.items():
+                setattr(self._term, a, v)
+            if orig_env is not None:
+                self._term._env = orig_env
 
 
 @dataclass
@@ -780,19 +844,12 @@ class CommandExport:
     state_fields: list[dict[str, Any]]
     """Per state field: {name, shape, dtype} — declared in policy.json (§3a)."""
     command_field: str
+    input_slots: list[SlotKey]
     input_names: list[str]
     rand_dim: int
     output_names: list[str]
     write_targets: list[dict[str, Any]]
     reference_rand: torch.Tensor
-
-
-def _find_write_entity(term: Any) -> Any:
-    """Return the first entity attribute the command writes through, or None."""
-    for value in vars(term).values():
-        if any(hasattr(type(value), m) for m in _ENTITY_WRITE_METHODS):
-            return value
-    return None
 
 
 def trace_command_term(
@@ -803,54 +860,76 @@ def trace_command_term(
     command_field: str,
     opset: int = 17,
 ) -> CommandExport:
-    """Trace a stateful CommandTerm to ONNX (companion brief §3, Lift-shaped).
+    """Trace a stateful CommandTerm to ONNX (companion brief §3).
 
-    Promotes the term's hidden state (``state_fields``) to explicit graph I/O and
-    threads randomness through an explicit ``rand`` input recorded from the live
-    term. Suitable for commands whose ``_resample_command`` draws via
-    ``sample_uniform`` and reads no time-varying runtime state (e.g.
-    ``LiftingCommand``). Commands using tensor-method RNG (``Tensor.uniform_``) or
-    data-dependent control flow are not yet supported (see companion brief §3a).
-
-    Args:
-        term: A live ``CommandTerm`` instance from a built env's command manager.
-        state_fields: Attribute names constituting the command's state.
-        name: Command name (policy.json key).
-        command_field: Which state field is the command value.
+    Promotes hidden state (``state_fields``) to explicit graph I/O, threads
+    randomness through ``rand`` (from ``sample_uniform``; tensor-method RNG like
+    ``Tensor.uniform_`` is unsupported — supply a trace-friendly override, brief
+    §3a), and threads time-varying runtime reads (``self.robot.data.<field>``) as
+    dynamic graph inputs while baking scene-level constants and control-flow
+    scalars. Any ``entity_write`` (cube/root pose+velocity) is captured as output.
     """
-    write_entity = _find_write_entity(term)
+    entity_attr_names = _entity_attrs(term)
+    entity_name = getattr(getattr(term, "cfg", None), "entity_name", None)
     snap = _snapshot_state(term)
+    state_example = tuple(getattr(term, f).detach().clone() for f in state_fields)
 
-    # 1. Discovery: record draws + written values on the live term (then restore).
-    example_state = tuple(getattr(term, f).detach().clone() for f in state_fields)
-    captures: dict[str, tuple[torch.Tensor, ...]] = {}
-    with DrawRecorder(term._resample_command) as rec:
-        with (
-            _CaptureEntityWrites(write_entity, captures)
-            if write_entity
-            else _null_ctx()
-        ):
+    # 1. Discovery: swap to recording proxies; log reads, capture writes, spy draws.
+    with _RecordCommand(term, entity_attr_names, entity_name) as rec_env:
+        with DrawRecorder(term._resample_command) as rec:
             term._resample_command(torch.arange(term.num_envs))
+            term._update_command()
+        log = list(rec_env.log)
+        captures = dict(rec_env.captures)
     ref_rand = rec.rand_vector
     rand_dim = rec.rand_dim
     _restore_state(term, snap)
 
     output_write_names, _ = _flatten_captures(captures)
-    write_entity_name = getattr(getattr(term, "cfg", None), "entity_name", None)
     write_targets = [
-        {"kind": kind, "entity": write_entity_name, "fields": list(_WRITE_FIELDS[kind])}
+        {"kind": kind, "entity": entity_name, "fields": list(_WRITE_FIELDS[kind])}
         for kind in captures
     ]
 
-    # 2. Trace: prev_state + resample_mask=True + rand -> next_state + entity_write.
+    # 2. Classify reads: dynamic data inputs vs baked tensor/scalar constants.
+    dynamic: dict[SlotKey, torch.Tensor] = {}
+    tensor_consts: dict[TaggedKey, torch.Tensor] = {}
+    scalar_consts: dict[TaggedKey, Any] = {}
+    for key, value in log:
+        is_dynamic = (
+            key[0] == "data"
+            and key[2] in _DYNAMIC_DATA_FIELDS
+            and isinstance(value, torch.Tensor)
+        )
+        if is_dynamic:
+            dynamic.setdefault((key[1], key[2]), value)
+        elif isinstance(value, torch.Tensor):
+            tensor_consts.setdefault(key, value)
+        else:
+            scalar_consts.setdefault(key, value)
+
+    dynamic_keys = sorted(dynamic)
+    dyn_names = [_slot_input_name(k) for k in dynamic_keys]
+    prev_names = [f"prev_{f}" for f in state_fields]
+
+    # 3. Trace: dynamic + prev_state + resample_mask=True + rand -> next_state + writes.
     mask = torch.ones(term.num_envs, dtype=torch.bool)
-    example = (*example_state, mask, ref_rand)
-    input_names = [f"prev_{f}" for f in state_fields] + ["resample_mask", "rand"]
+    example = (*(dynamic[k] for k in dynamic_keys), *state_example, mask, ref_rand)
+    input_names = [*dyn_names, *prev_names, "resample_mask", "rand"]
     output_names = [f"next_{f}" for f in state_fields] + output_write_names
 
-    module = _CommandModule(term, state_fields, write_entity).eval()
+    module = _CommandModule(
+        term,
+        state_fields,
+        entity_attr_names,
+        entity_name,
+        dynamic_keys,
+        tensor_consts,
+        scalar_consts,
+    ).eval()
     dyn_axes = {
-        n: {0: "batch"} for n in [*input_names[:-2], "resample_mask", *output_names]
+        n: {0: "batch"}
+        for n in [*dyn_names, *prev_names, "resample_mask", *output_names]
     }
     buffer = io.BytesIO()
     with torch.no_grad():
@@ -880,17 +959,10 @@ def trace_command_term(
         onnx_bytes=buffer.getvalue(),
         state_fields=state_specs,
         command_field=command_field,
-        input_names=input_names,
+        input_slots=dynamic_keys,
+        input_names=dyn_names,
         rand_dim=rand_dim,
         output_names=output_names,
         write_targets=write_targets,
         reference_rand=ref_rand.detach(),
     )
-
-
-class _null_ctx:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
