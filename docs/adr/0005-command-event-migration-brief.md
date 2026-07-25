@@ -19,7 +19,7 @@
 | Scene-const + control-flow-scalar capture | **done** — `env.scene.env_origins`, `asset.is_fixed_base` baked as constants |
 | §3 `OnnxCommand` tracer (Python) | **partial** — stateful `trace_command_term` done; `LiftingCommand` (§3b) parity clean |
 | §3b `LiftingCommandCfg` body | **done** — Lift-Cube-Yam, rand_dim=7, mask gate + cube entity_write, parity clean |
-| §3a `UniformVelocityCommandCfg` body | **blocked** — tensor-method RNG + data-dependent control flow (finding 13) |
+| §3a `UniformVelocityCommandCfg` body | **path validated** — examples-side trace-friendly override traces + parity clean (core resample+standing); heading tracking needs dynamic-slot Command support (finding 14) |
 | §4 interval/startup native dispatch, entity-write apply (TS) | not started |
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` | **deferred** — see note below |
@@ -345,6 +345,31 @@ prev)` with `prev` cloned before `_resample_command`'s in-place writes; reset un
     named failure at export, not a silent miscompile). The RNG operator is the first
     wall; the data-dependent branches sit behind it.
 
-**Next:** decide `UniformVelocityCommand`'s path (masked rewrite vs native), and emit
-the `OnnxCommand` `policy.json` config shape (state-field specs, `ui` block, `write_targets`)
-from a successful command trace — Lift is ready to serialize; velocity is gated on the above.
+14. **`UniformVelocityCommand`'s path — resolved by an examples-side trace-friendly
+    override, no upstream mjlab change and no native-TS engine work.** The task author
+    supplies a numerically-equivalent override of `_resample_command`/`_update_command`
+    that uses `sample_uniform` (spyable) instead of `r.uniform_` and `torch.where`
+    (branch-free) instead of `.nonzero()`+`if len(...)>0`, and swaps it onto the command
+    before compiling — exactly ADR 0003's "authors write mjlab-style Python terms". This
+    is strictly better than the two options weighed earlier (upstream fork; native TS):
+    one authoring surface, Cloud-safe by construction, no engine PR. Parity is
+    graph-vs-override (trace faithfulness); the override's equivalence to mjlab's original
+    is a separate review/distribution-test concern (bit-parity is impossible across
+    different RNG structures anyway). *Validated* (`scripts/onnx_command_override_demo.py`,
+    Go1-Velocity-Flat): the overridden `twist` command traces to ONNX and holds parity —
+    `rand_dim=4`, `max|Δ|=0` over 16 draws, both `resample_mask` states. The tracer needed
+    two ONNX-compat fixes that generalize to all bool state fields: gate bool fields via
+    int64 (`Where` has no bool-branch kernel), and feed bool graph inputs as bool (not
+    float32).
+
+    **Remaining for *full* velocity: dynamic-slot Command support.** Heading tracking /
+    world-frame rotation read runtime robot state (`self.robot.data.heading_w`), which the
+    current Command tracer would bake as a constant. The fix is the same tagged-key
+    proxy already proven for Events (§a), applied to `term.robot` / `term._env`: swap them
+    to recording proxies in discovery and replay proxies in trace, threading dynamic reads
+    as graph inputs. The demo omits heading tracking for exactly this reason.
+
+**Next:** (1) add dynamic-slot Command support (reuse the Event tagged-key proxy on
+`term.robot`/`term._env`) so a full trace-friendly velocity override (incl. heading) traces;
+(2) emit the `OnnxCommand` `policy.json` config shape (state-field specs, `ui` block,
+`write_targets`) from a successful command trace — Lift is ready to serialize.

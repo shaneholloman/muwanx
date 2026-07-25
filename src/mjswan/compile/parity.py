@@ -92,6 +92,12 @@ def _to_numpy(t: torch.Tensor) -> np.ndarray:
     return t.detach().cpu().numpy().astype(np.float32)
 
 
+def _feed_numpy(t: torch.Tensor) -> np.ndarray:
+    """Convert to numpy preserving bool; float32 otherwise (ONNX input dtypes)."""
+    arr = t.detach().cpu().numpy()
+    return arr if arr.dtype == bool else arr.astype(np.float32)
+
+
 def _iter_obs_terms(
     env: Any, group: str
 ) -> list[tuple[str, Callable[..., torch.Tensor], dict[str, Any]]]:
@@ -315,7 +321,7 @@ def run_command_parity(
         _, ref_writes = _flatten_captures(captures)
         _restore_state(term, snap)
 
-        feeds = {f"prev_{f}": _to_numpy(prev[f]) for f in state_fields}
+        feeds = {f"prev_{f}": _feed_numpy(prev[f]) for f in state_fields}
         feeds["resample_mask"] = np.ones((term.num_envs,), dtype=bool)
         feeds["rand"] = _to_numpy(rec.rand_vector)
         outs = session.run(export.output_names, feeds)
@@ -329,7 +335,7 @@ def run_command_parity(
 
     # resample_mask=False must leave the state unchanged (no resample).
     prev = {f: getattr(term, f).detach().clone() for f in state_fields}
-    feeds = {f"prev_{f}": _to_numpy(prev[f]) for f in state_fields}
+    feeds = {f"prev_{f}": _feed_numpy(prev[f]) for f in state_fields}
     feeds["resample_mask"] = np.zeros((term.num_envs,), dtype=bool)
     feeds["rand"] = _to_numpy(export.reference_rand)
     outs = session.run(export.output_names, feeds)

@@ -728,7 +728,12 @@ def _gate(
     mask: torch.Tensor, resampled: torch.Tensor, prev: torch.Tensor
 ) -> torch.Tensor:
     shape = [mask.shape[0]] + [1] * (resampled.dim() - 1)
-    return torch.where(mask.reshape(shape), resampled, prev)
+    m = mask.reshape(shape)
+    # ONNX Runtime's Where kernel has no bool-branch implementation; select in
+    # int64 and cast back so bool state fields (is_*_env) round-trip.
+    if resampled.dtype == torch.bool:
+        return torch.where(m, resampled.long(), prev.long()).bool()
+    return torch.where(m, resampled, prev)
 
 
 class _CommandModule(nn.Module):
