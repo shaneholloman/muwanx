@@ -137,6 +137,13 @@ class PendingCommandTrace:
     callable ``CommandBinding.ui`` is called with the mjlab cfg before this
     dataclass is constructed (see ``mjlab_adapter._adapt_command_cfg``)."""
 
+    viz: dict[str, Any] | None = None
+    """Author-authored debug-vis descriptor: ``{"field", "shape", "radius",
+    "color"}``, a ``state_fields`` entry rendered as a sphere marker
+    (generic ``OnnxCommand.updateDebugVisuals``, replacing a per-command
+    hand-written TS class). Not derivable from the trace. Already resolved,
+    same as ``ui``."""
+
 
 @dataclass
 class CommandTermConfig:
@@ -175,10 +182,14 @@ class CommandBinding:
       ``OnnxCommand`` handler; ``ts_name``/``serializer`` are unused). Set
       ``trace_override`` when the term needs a trace-friendly rewrite first
       (ADR 0005 §3a) — e.g. tensor-method RNG or data-dependent control flow
-      that ``torch.onnx.export`` cannot handle as-authored. ``ui`` may be a
-      static dict or a ``(mjlab_cfg) -> dict`` callable when the descriptor
-      depends on the task's own cfg (e.g. slider ranges from ``cfg.ranges`,
+      that ``torch.onnx.export`` cannot handle as-authored. ``ui`` and ``viz``
+      may each be a static dict or a ``(mjlab_cfg) -> dict`` callable when the
+      descriptor depends on the task's own cfg (e.g. slider ranges from
+      ``cfg.ranges``, or a marker color from ``cfg.viz.target_color``, both of
       which can differ per task) — resolved once the real cfg is known.
+      ``viz`` names one ``state_fields`` entry to render as a debug-vis sphere
+      (e.g. ``LiftingCommand``'s target position) — see
+      :func:`mjswan.compile.serialize.command_config`.
     - **``ts_src`` escape hatch / unsupported marker**: same as before ADR 0005.
     """
 
@@ -189,6 +200,7 @@ class CommandBinding:
     command_field: str | None = None
     trace_override: Callable[[Any], None] | None = None
     ui: dict[str, Any] | Callable[[Any], dict[str, Any]] | None = None
+    viz: dict[str, Any] | Callable[[Any], dict[str, Any]] | None = None
 
     @property
     def is_onnx_traced(self) -> bool:

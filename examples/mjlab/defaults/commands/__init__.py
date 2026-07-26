@@ -7,12 +7,9 @@ Both commands below are ONNX-traced (ADR 0005 §3): the mjlab cfg is built
 (``cfg.build(env)``) and its ``_resample_command``/``_update_command`` traced
 directly against the scene's live env, run in the browser by the shared
 ``OnnxCommand`` handler — there is no per-command TS class anymore.
-
-Known gap: the generic ``OnnxCommand`` handler does not yet implement
-``updateDebugVisuals()``, so ``LiftingCommand``'s target-position marker
-(previously rendered by the retired ``LiftingCommand.ts``) is not drawn in
-the browser. ``debug_vis`` is still threaded into ``policy.json`` for a
-future generic debug-vis mechanism to pick up.
+``LiftingCommand``'s target-position marker (previously rendered by the
+retired ``LiftingCommand.ts``) is now the generic ``OnnxCommand.viz``
+mechanism instead of a hand-written class.
 """
 
 from __future__ import annotations
@@ -32,11 +29,23 @@ from mjswan import CommandBinding, register_command
 # (captured as `entity_write`, brief §3b); `target_pos` is the only state.
 # ---------------------------------------------------------------------------
 
+
+def _lifting_viz(cfg: Any) -> dict[str, Any]:
+    """Render `target_pos` as a sphere, colored from the task's own cfg.viz."""
+    return {
+        "field": "target_pos",
+        "shape": "sphere",
+        "radius": 0.03,
+        "color": list(cfg.viz.target_color),
+    }
+
+
 register_command(
     "LiftingCommandCfg",
     CommandBinding(
         state_fields=["target_pos"],
         command_field="target_pos",
+        viz=_lifting_viz,
     ),
 )
 

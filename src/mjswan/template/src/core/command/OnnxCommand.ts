@@ -21,6 +21,11 @@
  *   skipped.
  * - **`entity_write`** — hands graph-computed pose/velocity to the apply
  *   primitive (brief §3).
+ * - **Debug-vis marker** — when `viz` names a `state_fields` entry (a 3D
+ *   position), a sphere is drawn there while `debug_vis` is true. Generic:
+ *   any traced command with a position-shaped state field gets this for
+ *   free, replacing what used to be a hand-written TS class per command
+ *   (e.g. the retired `LiftingCommand.ts`).
  *
  * **Async boundary.** `CommandTerm.update()`/`getCommand()` are synchronous, but
  * ORT-Web inference is not. `update()` therefore *kicks off* inference and
@@ -30,9 +35,11 @@
  * property already accepted elsewhere in the design (ADR §8).
  */
 
+import * as THREE from 'three';
 import { SeededRng } from '../rng';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from '../event/entityWrite';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
+import { mjcToThreeCoordinate } from '../scene/coordinate';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
 
 export type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader };
@@ -41,6 +48,15 @@ export interface OnnxStateFieldSpec {
   name: string;
   shape: number[];
   dtype: string;
+}
+
+export interface OnnxCommandVizConfig {
+  /** Which `state_fields` entry to render — must be a 3D position. */
+  field: string;
+  shape: 'sphere';
+  radius: number;
+  /** RGBA, each in [0, 1]. */
+  color: [number, number, number, number];
 }
 
 export interface OnnxCommandConfig extends CommandConfigEntry {
@@ -53,6 +69,7 @@ export interface OnnxCommandConfig extends CommandConfigEntry {
   resampling_time_range?: [number, number];
   rand_ranges?: Array<[number, number]>;
   debug_vis?: boolean;
+  viz?: OnnxCommandVizConfig;
 }
 
 export interface OnnxCommandDeps {
@@ -83,9 +100,10 @@ export class OnnxCommand implements CommandTerm {
   /** Set on the first update so the initial frame resamples (reset semantics). */
   private pendingResample = true;
   private uiValues = new Map<string, number>();
+  private readonly marker: THREE.Mesh | null;
 
   constructor(
-    _termName: string,
+    termName: string,
     config: OnnxCommandConfig,
     context: CommandTermContext | null,
     deps: OnnxCommandDeps,
@@ -101,6 +119,7 @@ export class OnnxCommand implements CommandTerm {
       if (input.type === 'slider') this.uiValues.set(input.name, input.default);
       else if (input.type === 'checkbox') this.uiValues.set(input.name, input.default ? 1 : 0);
     }
+    this.marker = config.viz && context ? this.createMarker(termName, config.viz) : null;
   }
 
   getCommand(): Float32Array {
@@ -141,6 +160,29 @@ export class OnnxCommand implements CommandTerm {
   reset(): void {
     this.pendingResample = true;
     this.timeLeft = this.sampleResampleTime();
+  }
+
+  /** Move the marker to the current `viz.field` state value; visible only
+   * while `debug_vis` is set (generic — see class docs). */
+  updateDebugVisuals(): void {
+    if (!this.marker || !this.cfg.viz) return;
+    this.marker.visible = Boolean(this.cfg.debug_vis);
+    if (!this.marker.visible) return;
+    const tensor = this.state.get(this.cfg.viz.field);
+    if (!tensor) return;
+    this.marker.position.copy(mjcToThreeCoordinate(toFloat32(tensor.data)));
+  }
+
+  dispose(): void {
+    if (!this.marker) return;
+    this.context?.scene.remove(this.marker);
+    this.marker.geometry.dispose();
+    const material = this.marker.material;
+    if (Array.isArray(material)) {
+      for (const entry of material) entry.dispose();
+    } else {
+      material.dispose();
+    }
   }
 
   setValue(inputName: string, value: number): number {
@@ -212,6 +254,21 @@ export class OnnxCommand implements CommandTerm {
     const range = this.cfg.resampling_time_range;
     if (!range) return Number.POSITIVE_INFINITY; // resample only on reset
     return this.deps.rng.uniform(range[0], range[1]);
+  }
+
+  private createMarker(termName: string, viz: OnnxCommandVizConfig): THREE.Mesh {
+    const geometry = new THREE.SphereGeometry(viz.radius, 20, 12);
+    const material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(viz.color[0], viz.color[1], viz.color[2]),
+      transparent: true,
+      opacity: viz.color[3],
+      depthWrite: false,
+    });
+    const marker = new THREE.Mesh(geometry, material);
+    marker.name = `mjswan-command-${termName}-viz`;
+    marker.visible = false;
+    this.context!.scene.add(marker);
+    return marker;
   }
 }
 

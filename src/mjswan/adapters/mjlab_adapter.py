@@ -307,6 +307,7 @@ def _adapt_command_cfg(term: Any) -> MjswanCommandTermConfig:
     if spec.is_onnx_traced:
         assert spec.state_fields is not None and spec.command_field is not None
         ui = spec.ui(term) if callable(spec.ui) else spec.ui
+        viz = spec.viz(term) if callable(spec.viz) else spec.viz
         return MjswanCommandTermConfig(
             term_name="OnnxCommand",
             pending_trace=PendingCommandTrace(
@@ -315,6 +316,7 @@ def _adapt_command_cfg(term: Any) -> MjswanCommandTermConfig:
                 command_field=spec.command_field,
                 trace_override=spec.trace_override,
                 ui=ui,
+                viz=viz,
             ),
         )
 

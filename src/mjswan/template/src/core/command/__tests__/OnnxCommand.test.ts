@@ -8,6 +8,7 @@
  *
  * The ONNX session is injected as a fake, so these run headless with no ORT.
  */
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 
 import { SeededRng } from '../../rng';
@@ -364,6 +365,85 @@ describe('OnnxCommand: entity_write hand-off (§3b)', () => {
     );
     await cmd.step(true);
     expect(mjData.qpos[0]).toBe(0); // untouched — no write value supplied
+  });
+});
+
+describe('OnnxCommand: debug-vis marker (generic — replaces LiftingCommand.ts)', () => {
+  const LIFT_VIZ_CFG: OnnxCommandConfig = {
+    name: 'OnnxCommand',
+    onnx: 'command/lift_height.onnx',
+    command_field: 'target_pos',
+    rand_dim: 7,
+    state_fields: [{ name: 'target_pos', shape: [1, 3], dtype: 'float32' }],
+    debug_vis: true,
+    viz: { field: 'target_pos', shape: 'sphere', radius: 0.03, color: [1, 0.5, 0, 0.3] },
+  };
+
+  function fakeContext(): import('../types').CommandTermContext {
+    return { scene: new THREE.Scene() } as unknown as import('../types').CommandTermContext;
+  }
+
+  it('adds a hidden marker to the scene at construction', () => {
+    const context = fakeContext();
+    new OnnxCommand('lift_height', LIFT_VIZ_CFG, context, {
+      session: new FakeSession(() => ({})),
+      rng: new SeededRng(1),
+    });
+    expect(context.scene.children.length).toBe(1);
+    expect(context.scene.children[0].visible).toBe(false);
+  });
+
+  it('shows and positions the marker at the viz field once debug_vis is on', async () => {
+    const context = fakeContext();
+    const session = new FakeSession(() => ({
+      next_target_pos: { data: new Float32Array([0.4, 0.1, 0.3]), dims: [1, 3] },
+    }));
+    const cmd = new OnnxCommand('lift_height', LIFT_VIZ_CFG, context, {
+      session,
+      rng: new SeededRng(1),
+    });
+    await cmd.step(true);
+    cmd.updateDebugVisuals();
+    const marker = context.scene.children[0];
+    expect(marker.visible).toBe(true);
+    // mjcToThreeCoordinate: (x, z, -y).
+    expect(marker.position.x).toBeCloseTo(0.4, 6);
+    expect(marker.position.y).toBeCloseTo(0.3, 6);
+    expect(marker.position.z).toBeCloseTo(-0.1, 6);
+  });
+
+  it('hides the marker when debug_vis is off', async () => {
+    const context = fakeContext();
+    const cfg = { ...LIFT_VIZ_CFG, debug_vis: false };
+    const cmd = new OnnxCommand('lift_height', cfg, context, {
+      session: new FakeSession(() => ({
+        next_target_pos: { data: new Float32Array([0.4, 0.1, 0.3]), dims: [1, 3] },
+      })),
+      rng: new SeededRng(1),
+    });
+    await cmd.step(true);
+    cmd.updateDebugVisuals();
+    expect(context.scene.children[0].visible).toBe(false);
+  });
+
+  it('does not create a marker without a viz descriptor', () => {
+    const context = fakeContext();
+    new OnnxCommand('twist', VELOCITY_CFG, context, {
+      session: new FakeSession(() => velocityOutputs(0, 0, 0)),
+      rng: new SeededRng(1),
+    });
+    expect(context.scene.children.length).toBe(0);
+  });
+
+  it('dispose() removes the marker from the scene', () => {
+    const context = fakeContext();
+    const cmd = new OnnxCommand('lift_height', LIFT_VIZ_CFG, context, {
+      session: new FakeSession(() => ({})),
+      rng: new SeededRng(1),
+    });
+    expect(context.scene.children.length).toBe(1);
+    cmd.dispose?.();
+    expect(context.scene.children.length).toBe(0);
   });
 });
 

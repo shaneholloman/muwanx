@@ -89,6 +89,22 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
         },
         "debug_vis": {"type": "boolean"},
         "ui": {"type": "object"},
+        "viz": {
+            "type": "object",
+            "required": ["field", "shape", "radius", "color"],
+            "additionalProperties": False,
+            "properties": {
+                "field": {"type": "string"},
+                "shape": {"const": "sphere"},
+                "radius": {"type": "number"},
+                "color": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 4,
+                    "maxItems": 4,
+                },
+            },
+        },
     },
 }
 
@@ -100,6 +116,7 @@ def command_config(
     resampling_time_range: tuple[float, float] | None = None,
     debug_vis: bool = False,
     ui: dict[str, Any] | None = None,
+    viz: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the ``OnnxCommand`` config entry for ``policy.json`` from a trace.
 
@@ -121,6 +138,12 @@ def command_config(
         debug_vis: Mirror of ``cfg.debug_vis``.
         ui: Optional authored UI descriptor (checkbox/sliders/button, brief §3a).
             Not derivable from the trace; the task author supplies it.
+        viz: Optional generic debug-vis descriptor: a 3D-position ``state_fields``
+            entry rendered as a sphere marker (``OnnxCommand.updateDebugVisuals``),
+            visible only while ``debug_vis`` is true. Replaces a per-command
+            hand-written TS class for this — e.g. ``LiftingCommand``'s target
+            marker. Not derivable from the trace; the task author supplies it
+            (e.g. from ``cfg.viz.target_color``).
     """
     cfg: dict[str, Any] = {
         "name": "OnnxCommand",
@@ -137,6 +160,8 @@ def command_config(
         cfg["resampling_time_range"] = [float(v) for v in resampling_time_range]
     if ui is not None:
         cfg["ui"] = ui
+    if viz is not None:
+        cfg["viz"] = viz
     return cfg
 
 
@@ -147,6 +172,7 @@ def write_command_artifact(
     resampling_time_range: tuple[float, float] | None = None,
     debug_vis: bool = False,
     ui: dict[str, Any] | None = None,
+    viz: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write ``<out_dir>/command/<name>.onnx`` and return its config entry."""
     onnx_ref = f"command/{export.name}.onnx"
@@ -159,6 +185,7 @@ def write_command_artifact(
         resampling_time_range=resampling_time_range,
         debug_vis=debug_vis,
         ui=ui,
+        viz=viz,
     )
 
 
@@ -206,5 +233,17 @@ def validate_command_config(cfg: dict[str, Any]) -> list[str]:
     rtr = cfg.get("resampling_time_range")
     if rtr is not None and (not isinstance(rtr, list) or len(rtr) != 2):
         errors.append("resampling_time_range must be [min, max]")
+
+    viz = cfg.get("viz")
+    if viz is not None:
+        if not isinstance(viz, dict) or not {
+            "field",
+            "shape",
+            "radius",
+            "color",
+        } <= set(viz):
+            errors.append(f"viz must have field/shape/radius/color: {viz!r}")
+        elif viz["field"] not in names:
+            errors.append(f"viz field {viz['field']!r} is not a declared state field")
 
     return errors

@@ -35,7 +35,7 @@
 | Remove TS-side DSL (`core/dsl/`, `DslObservation.ts`, `DslTermination.ts`, `DslEvent.ts`) | **not started** — dead code now that the Python build path never emits a DSL JSON envelope; needs a registry-wiring check in `ObservationManager.ts`/`TerminationManager.ts`/`EventManager.ts` plus corresponding vitest removal |
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Non-mjlab-task scenes (`add_scene()` + custom obs/term/event) | **known gap, not resolved** — ONNX tracing needs a live env (`env.scene[name].data.field`); a raw `add_scene()` scene has none. `examples/demo/main.py`/`splat.py`/`muscle.py`/`examples/tutorial/minimum_policy.py` still reference the now-deleted mjswan mirror functions for exactly this case and will fail to build until this is designed (see options below) |
-| `OnnxCommand` debug-vis marker | **known gap** — `LiftingCommand.ts`'s target-position sphere is not reproduced; `OnnxCommand.ts` has no `updateDebugVisuals()` yet (`debug_vis` is still threaded into `policy.json` for a future generic mechanism) |
+| `OnnxCommand` debug-vis marker | **done** — generic `viz` descriptor (`{field, shape, radius, color}`) on any traced command's config; `OnnxCommand.updateDebugVisuals()`/`dispose()` render/clean up a sphere at the named `state_fields` entry. `LiftingCommandCfg` supplies it from `cfg.viz.target_color` (`examples/mjlab/defaults/commands`) — no per-command TS class needed |
 
 **Sequencing (dependency order, not a schedule):** RNG harness (§2b) → tracer on
 Cartpole → **this review checkpoint** → interval-event dynamic-slot + `entity_write`

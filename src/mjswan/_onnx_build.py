@@ -302,4 +302,5 @@ def serialize_command(
         resampling_time_range=getattr(pending.mjlab_cfg, "resampling_time_range", None),
         debug_vis=bool(getattr(pending.mjlab_cfg, "debug_vis", False)),
         ui=pending.ui,
+        viz=pending.viz,
     )
