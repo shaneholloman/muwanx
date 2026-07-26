@@ -79,6 +79,11 @@ class ObservationTermCfg:
     history_length: int = 0
     """Number of past frames to stack. 0 = current only (no history)."""
 
+    history_interleaved: bool = False
+    """Isaac-style joint-major history layout: ``[a0_t, a0_t-1, ..., a1_t, ...]``
+    instead of frame-major (``[a_t, a_t-1, ...]`` each the full vector). Only
+    meaningful when ``history_length`` > 0."""
+
     flatten_history_dim: bool = True
     """Whether to flatten history into the feature dimension.
     Accepted for API compatibility; mjswan always flattens."""

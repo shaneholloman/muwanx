@@ -117,19 +117,25 @@ def _enrich_joint_observations(
     scene_config: SceneConfig,
     observations: dict[str, Any] | None,
 ) -> None:
+    """Resolve joint_names/default_joint_pos from the scene spec for legacy
+    (``ObservationBinding``-typed, ``ts_name``-keyed) joint terms.
+
+    Only applies to the legacy path: those terms serialize straight into JSON
+    for a native TS class, which needs literal joint names/defaults resolved
+    ahead of time. A plain-callable term (ADR 0005) is unconditionally traced
+    to ONNX against the scene's live env instead — the tracer resolves
+    whatever indices/defaults the function itself reads directly from that
+    env, so pre-resolving them here would inject params a real function
+    (mjlab's own, or an author's) doesn't expect and was never asked for.
+    """
     if observations is None:
         return
     model = _get_scene_model(scene_config)
     if model is None:
         return
 
-    # Legacy ObservationBinding terms are keyed by ts_name; DSL terms (ADR 0003) are
-    # plain callables keyed by their function name.  Both need joint_names /
-    # default_joint_pos resolved from the scene spec when not given explicitly.
     legacy_pos = {"JointPos", "JointPositions"}
     legacy_vel = {"JointVelocities"}
-    dsl_pos = {"joint_pos_rel"}
-    dsl_vel = {"joint_vel_rel"}
 
     for group in observations.values():
         terms = getattr(group, "terms", None)
@@ -138,21 +144,14 @@ def _enrich_joint_observations(
         for term in terms.values():
             func = getattr(term, "func", None)
             ts_name = getattr(func, "ts_name", None)
-            dsl_name = getattr(func, "__name__", None) if callable(func) else None
 
-            is_pos = ts_name in legacy_pos or dsl_name in dsl_pos
-            is_vel = ts_name in legacy_vel or dsl_name in dsl_vel
+            is_pos = ts_name in legacy_pos
+            is_vel = ts_name in legacy_vel
             if not (is_pos or is_vel):
                 continue
 
             params = dict(getattr(term, "params", {}) or {})
-            # DSL callables carry their defaults in the signature, not a dict;
-            # mirror the legacy joint_pos_rel/joint_vel_rel defaults here.
-            defaults = (
-                getattr(func, "defaults", {})
-                if ts_name
-                else {"joint_names": "all", "entity_name": "robot"}
-            )
+            defaults = getattr(func, "defaults", {})
             merged = {**defaults, **params}
             if merged.get("joint_name") is not None:
                 continue
@@ -203,10 +202,16 @@ class SceneConfig:
     """Optional terrain data (e.g. flat_patches) for browser-side event execution."""
 
     mjlab_env: Any = field(default=None, repr=False, compare=False)
-    """Live ``mjlab.envs.ManagerBasedRlEnv`` for scenes built via
-    :meth:`ProjectHandle.add_scene_mjlab`. Python-build-time-only state used to
-    trace observation/termination/event/command term bodies to ONNX (ADR 0005);
-    it is never part of the scene's serialized JSON output."""
+    """Live env ONNX tracing (ADR 0005) runs authored observation/termination/
+    event/command term bodies against. Set automatically by
+    :meth:`ProjectHandle.add_scene_mjlab`; a scene built via plain
+    :meth:`ProjectHandle.add_scene` (no mjlab task) has none by default — set
+    one explicitly with :meth:`SceneHandle.set_trace_env` if it uses
+    plain-callable (non-``Binding``) term functions. Only needs
+    ``env.scene[name].data.<field>`` (and, for events, entity write methods) —
+    doesn't have to be a full ``ManagerBasedRlEnv``, see
+    :func:`mjswan.trace_env.build_single_entity_trace_env`. Python-build-time-
+    only state; never part of the scene's serialized JSON output."""
 
     @property
     def scene_filename(self) -> str:
@@ -696,6 +701,34 @@ class SceneHandle:
         from .adapters.mjlab_adapter import adapt_events
 
         self._config.events = adapt_events(events)
+        return self
+
+    def set_trace_env(self, env: Any) -> SceneHandle:
+        """Set the live env ONNX tracing (ADR 0005) runs authored term bodies against.
+
+        Required for a scene built via plain :meth:`ProjectHandle.add_scene`
+        (no mjlab task, hence no env of its own) that passes a plain-callable
+        ``func`` to ``ObservationTermCfg``/``TerminationTermCfg``/``EventTermCfg``
+        — mjswan has no way to construct a task env on its own for these; the
+        author supplies one written against the same
+        ``env.scene[name].data.<field>`` API mjlab's own functions use (and,
+        for write-side event/command terms, entity write methods). It doesn't
+        need to be a full ``ManagerBasedRlEnv`` with observations/actions/
+        terminations configured — see
+        :func:`mjswan.trace_env.build_single_entity_trace_env` for a minimal
+        one built from just a single entity's spec.
+
+        Scenes built via :meth:`ProjectHandle.add_scene_mjlab` already have
+        this set automatically; calling it there overrides that env.
+
+        Args:
+            env: A live env satisfying the tracer's ``env.scene[name].data.<field>``
+                contract.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._config.mjlab_env = env
         return self
 
     def set_metadata(self, key: str, value: Any) -> SceneHandle:

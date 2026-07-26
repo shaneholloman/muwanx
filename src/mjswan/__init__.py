@@ -38,6 +38,7 @@ from .policy import PolicyConfig, PolicyHandle
 from .project import ProjectConfig, ProjectHandle
 from .scene import SceneConfig, SceneHandle
 from .splat import SplatConfig, SplatHandle
+from .trace_env import build_single_entity_trace_env
 from .viewer import ViewerConfig
 
 __all__ = [
@@ -88,6 +89,8 @@ __all__ = [
     "register_command",
     "ui_command",
     "velocity_command",
+    # ONNX tracing (ADR 0005)
+    "build_single_entity_trace_env",
 ]
 
 # Deprecated pre-0.8 aliases (methods, classes, modules). Remove in 0.9.

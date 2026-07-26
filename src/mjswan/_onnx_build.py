@@ -45,6 +45,71 @@ def _write_onnx(out_dir: Path, ref: str, onnx_bytes: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _native_observation_entry(
+    name: str, func: Any, params: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Classify a known non-``entity.data`` observation func into a native marker.
+
+    Two mjlab functions are legitimately native by design: ``last_action``
+    reads ``env.action_manager.action`` and ``generated_commands`` reads
+    ``env.command_manager.get_command(...)`` — both env-level, not
+    ``entity.data``, so the tracer's recording proxy (which only wraps
+    ``env.scene``) never sees them, and ``trace_term`` would raise ``ValueError``
+    (no dynamic state). Checked *before* attempting to trace (rather than
+    catching that ``ValueError``): a scene without the named command traced
+    (e.g. a demo pairing ``generated_commands`` with a purely-native
+    ``UiCommand``, not an ``OnnxCommand``) would raise from mjlab's own
+    ``assert command is not None`` during the discovery call itself, not a
+    clean ``ValueError``. Both are already computed natively every frame by
+    the TS orchestrator (the policy's previous output, and the named
+    command's current value), so no ONNX graph is needed — the observation
+    pipeline substitutes the live value directly. Returns ``None`` if *func*
+    isn't one of these two — the caller should attempt tracing as normal.
+    """
+    func_name = getattr(func, "__name__", None)
+    if func_name == "last_action":
+        entry: dict[str, Any] = {"name": name, "native": "prev_action"}
+        action_name = params.get("action_name")
+        if action_name is not None:
+            entry["action_name"] = action_name
+        return entry
+    if func_name == "generated_commands":
+        return {
+            "name": name,
+            "native": "command",
+            "command_name": params["command_name"],
+        }
+    return None
+
+
+def _apply_observation_pipeline(
+    entry: dict[str, Any],
+    term_cfg: ObservationTermCfg,
+    group_history_length: int | None,
+) -> dict[str, Any]:
+    """Add scale/clip/history metadata shared by every entry shape (traced,
+    native, or baked-constant) — mirrors mjlab's compute -> scale -> history
+    pipeline order (noise/delay are training-only, dropped, ADR 0005)."""
+    if term_cfg.scale is not None:
+        entry["scale"] = (
+            list(term_cfg.scale)
+            if isinstance(term_cfg.scale, tuple)
+            else term_cfg.scale
+        )
+    if term_cfg.clip is not None:
+        entry["clip"] = list(term_cfg.clip)
+    history = (
+        group_history_length
+        if (group_history_length or 0) > 0
+        else term_cfg.history_length
+    )
+    if history:
+        entry["history_length"] = history
+        if term_cfg.history_interleaved:
+            entry["history_interleaved"] = True
+    return entry
+
+
 def serialize_observation_term(
     name: str,
     term_cfg: ObservationTermCfg,
@@ -61,27 +126,35 @@ def serialize_observation_term(
             return None
         return term_cfg.to_dict()
 
-    export = trace_term(func, term_cfg.params, env, name=name)
+    native_entry = _native_observation_entry(name, func, term_cfg.params)
+    if native_entry is not None:
+        return _apply_observation_pipeline(native_entry, term_cfg, group_history_length)
+
+    try:
+        export = trace_term(func, term_cfg.params, env, name=name)
+    except ValueError:
+        # Not one of the two known native shapes above, and no
+        # `entity.data.<field>` reads at all -- genuinely constant-valued
+        # (e.g. a fixed-size placeholder/padding term with no env
+        # dependency). Bake the value directly from a real call against the
+        # live env; no graph needed. Re-raises if this isn't even a Tensor
+        # (fail loud on anything genuinely unexpected).
+        import torch
+
+        value = func(env, **term_cfg.params)
+        if not isinstance(value, torch.Tensor):
+            raise
+        entry = {
+            "name": name,
+            "native": "constant",
+            "value": value.detach().flatten().tolist(),
+        }
+        return _apply_observation_pipeline(entry, term_cfg, group_history_length)
     ref = _onnx_ref("obs", name)
     _write_onnx(out_dir, ref, export.onnx_bytes)
 
-    entry: dict[str, Any] = {"name": name, "onnx": ref}
-    if term_cfg.scale is not None:
-        entry["scale"] = (
-            list(term_cfg.scale)
-            if isinstance(term_cfg.scale, tuple)
-            else term_cfg.scale
-        )
-    if term_cfg.clip is not None:
-        entry["clip"] = list(term_cfg.clip)
-    history = (
-        group_history_length
-        if (group_history_length or 0) > 0
-        else term_cfg.history_length
-    )
-    if history:
-        entry["history_length"] = history
-    return entry
+    entry = {"name": name, "onnx": ref}
+    return _apply_observation_pipeline(entry, term_cfg, group_history_length)
 
 
 def serialize_observation_group(

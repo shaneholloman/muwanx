@@ -24,11 +24,13 @@ from myosuite.envs.myo import myochallenge  # noqa: E402, F401 - for env registr
 
 gym_logger.min_level = _prev_gym_level
 
+import torch  # noqa: E402
+from mjlab.envs.mdp import observations as obs_fns  # noqa: E402
+from mjlab.envs.mdp import terminations as term_fns  # noqa: E402
+from mjlab.managers.scene_entity_config import SceneEntityCfg  # noqa: E402
 from robot_descriptions._descriptions import DESCRIPTIONS  # noqa: E402
 
 import mjswan  # noqa: E402
-from mjswan.envs.mdp import observations as obs_fns  # noqa: E402
-from mjswan.envs.mdp import terminations as term_fns  # noqa: E402
 from mjswan.envs.mdp.actions import (  # noqa: E402
     JointEffortActionCfg,
     JointPositionActionCfg,
@@ -38,30 +40,35 @@ from mjswan.managers.observation_manager import (  # noqa: E402
     ObservationTermCfg,
 )
 from mjswan.managers.termination_manager import TerminationTermCfg  # noqa: E402
+from mjswan.trace_env import build_single_entity_trace_env  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Demo-specific declarative observations (ADR 0003).
+# Demo-specific observations (ADR 0005).
 #
-# These are used only by the demo's go2 policies, so they live here as DSL
-# builders rather than core built-ins (the core library carries only generic
-# terms).  Both are ts_src-free, so the demo stays declarative / Cloud-safe.
+# These scenes have no mjlab task, so ONNX tracing needs a live env of its own
+# (build_single_entity_trace_env, wired via SceneHandle.set_trace_env — see
+# each _add_*_scene below) and self-authored functions written against the
+# same live-env API as mjlab's own (mjlab.envs.mdp.observations, imported
+# above as obs_fns) — traced identically, no special-casing.
 # ---------------------------------------------------------------------------
 
 
-def velocity_command_with_oscillators(env, *, command_name: str = "velocity", **_):
-    """Velocity command (3) padded with zeros to 16 dims (oscillator slots)."""
-    del env
-    from mjswan.dsl import command_value, concat, const_vec
-
-    return concat([command_value(command_name), const_vec([0.0] * 13)])
+def joint_pos_abs(env, *, asset_cfg: SceneEntityCfg = SceneEntityCfg(name="robot")):
+    """Absolute joint positions (no default-pose subtraction)."""
+    asset = env.scene[asset_cfg.name]
+    return asset.data.joint_pos[:, asset_cfg.joint_ids]
 
 
 def impedance_command(env, **_):
-    """Impedance command placeholder: 27 zeros."""
+    """Impedance command placeholder: 27 zeros (no trained impedance head in this demo)."""
     del env
-    from mjswan.dsl import const_vec
+    return torch.zeros(1, 27)
 
-    return const_vec([0.0] * 27)
+
+def velocity_command_padding(env, **_):
+    """Zero-padding (13) to fill the oscillator command slots this policy expects."""
+    del env
+    return torch.zeros(1, 13)
 
 
 def _fix_unitree_mujoco_macos() -> None:
@@ -225,6 +232,11 @@ def _add_g1_scene(project) -> None:
             body_name="torso_link",
         )
     )
+    g1_scene.set_trace_env(
+        build_single_entity_trace_env(
+            lambda: mujoco.MjSpec.from_file("assets/unitree_g1/g1.xml")
+        )
+    )
     g1_scene.add_splat(
         name="Street",
         source="assets/unitree_g1/street.spz",
@@ -272,9 +284,7 @@ def _add_g1_scene(project) -> None:
                     "projected_gravity": ObservationTermCfg(
                         func=obs_fns.projected_gravity
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, params={"pos_steps": [0]}
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
                     "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
                     "last_action": ObservationTermCfg(func=obs_fns.last_action),
                     "velocity_cmd": ObservationTermCfg(
@@ -299,17 +309,13 @@ def _add_g1_scene(project) -> None:
                         func=obs_fns.base_ang_vel, history_length=1
                     ),
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity,
-                        history_length=1,
-                        params={"gravity": [0, 0, -1.0]},
+                        func=obs_fns.projected_gravity, history_length=1
                     ),
                     "joint_pos": ObservationTermCfg(
                         func=obs_fns.joint_pos_rel, history_length=1
                     ),
                     "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel,
-                        params={"joint_names": "isaac"},
-                        history_length=1,
+                        func=obs_fns.joint_vel_rel, history_length=1
                     ),
                     "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }
@@ -332,6 +338,11 @@ def _add_go2_scene(project) -> None:
             body_name="base",
         )
     )
+    go2_scene.set_trace_env(
+        build_single_entity_trace_env(
+            lambda: mujoco.MjSpec.from_file("assets/unitree_go2/go2.xml")
+        )
+    )
 
     go2_actions = {
         "joint_pos": JointPositionActionCfg(
@@ -350,22 +361,22 @@ def _add_go2_scene(project) -> None:
                     func=obs_fns.joint_pos_rel, history_length=3
                 ),
                 "joint_vel": ObservationTermCfg(
-                    func=obs_fns.joint_vel_rel,
-                    params={"joint_names": "isaac"},
-                    history_length=3,
+                    func=obs_fns.joint_vel_rel, history_length=3
                 ),
                 "prev_actions": ObservationTermCfg(
                     func=obs_fns.last_action,
                     history_length=3,
-                    params={"transpose": True},
+                    history_interleaved=True,
                 ),
             }
         ),
         "command_": ObservationGroupCfg(
             terms={
                 "velocity_cmd": ObservationTermCfg(
-                    func=velocity_command_with_oscillators
+                    func=obs_fns.generated_commands,
+                    params={"command_name": "velocity"},
                 ),
+                "velocity_cmd_pad": ObservationTermCfg(func=velocity_command_padding),
             }
         ),
     }
@@ -382,19 +393,15 @@ def _add_go2_scene(project) -> None:
                         func=obs_fns.projected_gravity, history_length=3
                     ),
                     "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel,
-                        history_length=3,
-                        params={"subtract_default": False},
+                        func=joint_pos_abs, history_length=3
                     ),
                     "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel,
-                        params={"joint_names": "isaac"},
-                        history_length=3,
+                        func=obs_fns.joint_vel_rel, history_length=3
                     ),
                     "prev_actions": ObservationTermCfg(
                         func=obs_fns.last_action,
                         history_length=3,
-                        params={"transpose": True},
+                        history_interleaved=True,
                     ),
                 }
             ),
@@ -438,6 +445,11 @@ def _add_go1_scene(project) -> None:
             azimuth=-45.0,
             origin_type=mjswan.ViewerConfig.OriginType.ASSET_BODY,
             body_name="trunk",
+        )
+    )
+    go1_scene.set_trace_env(
+        build_single_entity_trace_env(
+            lambda: mujoco.MjSpec.from_file("assets/unitree_go1/go1.xml")
         )
     )
 
@@ -484,7 +496,6 @@ def _add_go1_scene(project) -> None:
                     ),
                     "joint_vel": ObservationTermCfg(
                         func=obs_fns.joint_vel_rel,
-                        params={"joint_names": "isaac"},
                         scale=0.05,
                         history_length=1,
                     ),
@@ -496,11 +507,23 @@ def _add_go1_scene(project) -> None:
     )
 
 
+def _anymal_c_trace_spec() -> mujoco.MjSpec:
+    # scene.mjz was itself exported from a live mjlab Entity build, so it
+    # already carries an "init_state" keyframe; EntityCfg tries to add its
+    # own of the same name when wrapping it again, so drop the existing one.
+    spec = mujoco.MjSpec.from_zip("assets/anymal_c_velocity/scene.mjz")
+    for key in list(spec.keys):
+        if key.name == "init_state":
+            spec.delete(key)
+    return spec
+
+
 def _add_anymal_c_scene(project) -> None:
     anymal_c_scene = project.add_scene(
         name="ANYmal C Velocity",
         spec=mujoco.MjSpec.from_zip("assets/anymal_c_velocity/scene.mjz"),
     )
+    anymal_c_scene.set_trace_env(build_single_entity_trace_env(_anymal_c_trace_spec))
     anymal_c_scene.add_policy(
         name="velocity 3000 iters",
         policy=onnx.load(
@@ -522,9 +545,7 @@ def _add_anymal_c_scene(project) -> None:
                     "projected_gravity": ObservationTermCfg(
                         func=obs_fns.projected_gravity
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, params={"pos_steps": [0]}
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
                     "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
                     "last_action": ObservationTermCfg(func=obs_fns.last_action),
                     "velocity_cmd": ObservationTermCfg(
