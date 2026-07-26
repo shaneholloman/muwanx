@@ -9,15 +9,17 @@ slider in the viewer adjusts the target altitude live.
 import mujoco
 import numpy as np
 import onnx
+from mjlab.envs.mdp import observations as obs_fns
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 from onnx import TensorProto, helper, numpy_helper
 
 import mjswan
-from mjswan.envs.mdp import observations as obs_fns
 from mjswan.envs.mdp.actions import JointEffortActionCfg
 from mjswan.managers.observation_manager import (
     ObservationGroupCfg,
     ObservationTermCfg,
 )
+from mjswan.trace_env import build_single_entity_trace_env
 
 MASS = 0.1
 GRAVITY = 9.81
@@ -59,6 +61,14 @@ def build_policy() -> onnx.ModelProto:
     return model
 
 
+def joint_height(env, *, asset_cfg: SceneEntityCfg = SceneEntityCfg(name="robot")):
+    """Absolute joint position (no default-pose subtraction — a bare box on a
+    slide joint has no meaningful "default" to subtract; the PD policy wants
+    the raw height)."""
+    asset = env.scene[asset_cfg.name]
+    return asset.data.joint_pos[:, asset_cfg.joint_ids]
+
+
 def build_spec() -> mujoco.MjSpec:
     return mujoco.MjSpec.from_string(f"""
     <mujoco>
@@ -97,7 +107,7 @@ def main():
         ]
     )
 
-    project.add_scene(
+    scene = project.add_scene(
         spec=build_spec(),
         name="Hovering Box",
     ).set_viewer(
@@ -108,17 +118,16 @@ def main():
             azimuth=45.0,
             origin_type=mjswan.ViewerConfig.OriginType.WORLD,
         )
-    ).add_policy(
+    )
+    scene.set_trace_env(build_single_entity_trace_env(build_spec))
+    scene.add_policy(
         name="PD Hover",
         policy=build_policy(),
         policy_joint_names=["lift"],
         observations={
             "policy": ObservationGroupCfg(
                 terms={
-                    "height": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel,
-                        params={"subtract_default": False},
-                    ),
+                    "height": ObservationTermCfg(func=joint_height),
                     "velocity": ObservationTermCfg(func=obs_fns.joint_vel_rel),
                     "target": ObservationTermCfg(
                         func=obs_fns.generated_commands,

@@ -24,12 +24,14 @@ from urllib.request import urlretrieve
 
 import mujoco
 import onnx
+from mjlab.envs.mdp import observations as obs_fns
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 from onnx import TensorProto, helper
 
 import mjswan
-from mjswan.envs.mdp import observations as obs_fns
 from mjswan.envs.mdp.actions import MuscleActivationActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
+from mjswan.trace_env import build_single_entity_trace_env
 
 JOINT_NAMES = ("IFadb", "IFmcp", "IFpip", "IFdip")
 MUSCLE_NAMES = ("extn", "adabR", "adabL", "mflx", "dflx")
@@ -91,10 +93,22 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder(debug=True)
     project = builder.add_project(name="Muscle Actuator")
 
+    myofinger_path = str(_fetch_myofinger())
     scene = project.add_scene(
-        spec=mujoco.MjSpec.from_file(str(_fetch_myofinger())),
+        spec=mujoco.MjSpec.from_file(myofinger_path),
         name="MyoFinger",
     )
+    trace_env = build_single_entity_trace_env(
+        lambda: mujoco.MjSpec.from_file(myofinger_path)
+    )
+    scene.set_trace_env(trace_env)
+
+    # Resolve joint_names -> joint_ids against the trace env now: obs_fns.joint_pos_rel
+    # indexes by asset_cfg.joint_ids, not joint_names, and SceneEntityCfg only
+    # resolves that mapping when explicitly asked (mjlab's ObservationManager
+    # does this automatically; a bare, unattached SceneEntityCfg does not).
+    finger_joints = SceneEntityCfg(name="robot", joint_names=list(JOINT_NAMES))
+    finger_joints.resolve(trace_env.scene)
 
     scene.set_viewer(
         mjswan.ViewerConfig(
@@ -115,11 +129,11 @@ def setup_builder() -> mjswan.Builder:
                 terms={
                     "joint_pos": ObservationTermCfg(
                         func=obs_fns.joint_pos_rel,
-                        params={"joint_names": list(JOINT_NAMES)},
+                        params={"asset_cfg": finger_joints},
                     ),
                     "joint_vel": ObservationTermCfg(
                         func=obs_fns.joint_vel_rel,
-                        params={"joint_names": list(JOINT_NAMES)},
+                        params={"asset_cfg": finger_joints},
                     ),
                 }
             ),

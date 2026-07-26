@@ -12,13 +12,14 @@ from pathlib import Path
 
 import mujoco
 import onnx
+from mjlab.envs.mdp import observations as obs_fns
+from mjlab.envs.mdp import terminations as term_fns
 
 import mjswan
-from mjswan.envs.mdp import observations as obs_fns
-from mjswan.envs.mdp import terminations as term_fns
 from mjswan.envs.mdp.actions import JointPositionActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjswan.managers.termination_manager import TerminationTermCfg
+from mjswan.trace_env import build_single_entity_trace_env
 
 SPLAT_URLs = [
     "https://cdn.marble.worldlabs.ai/be100eec-f02e-491d-899e-d702652d424d/cb27e09c-e2ca-46c7-8abf-bcd24d2bf9ed_ceramic_500k.spz",
@@ -140,6 +141,11 @@ def setup_builder() -> mjswan.Builder:
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
         name="G1",
     )
+    scene.set_trace_env(
+        build_single_entity_trace_env(
+            lambda: mujoco.MjSpec.from_file("assets/unitree_g1/g1.xml")
+        )
+    )
 
     # G1 uses motor actuators (biastype=none) that need external PD control in
     # the browser runtime, so stiffness/damping are supplied via the action term.
@@ -172,17 +178,13 @@ def setup_builder() -> mjswan.Builder:
                         func=obs_fns.base_ang_vel, history_length=1
                     ),
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity,
-                        history_length=1,
-                        params={"gravity": [0, 0, -1.0]},
+                        func=obs_fns.projected_gravity, history_length=1
                     ),
                     "joint_pos": ObservationTermCfg(
                         func=obs_fns.joint_pos_rel, history_length=1
                     ),
                     "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel,
-                        params={"joint_names": "isaac"},
-                        history_length=1,
+                        func=obs_fns.joint_vel_rel, history_length=1
                     ),
                     "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }
@@ -204,9 +206,7 @@ def setup_builder() -> mjswan.Builder:
                     "projected_gravity": ObservationTermCfg(
                         func=obs_fns.projected_gravity
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, params={"pos_steps": [0]}
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
                     "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
                     "last_action": ObservationTermCfg(func=obs_fns.last_action),
                     "velocity_cmd": ObservationTermCfg(
