@@ -1,12 +1,10 @@
 /**
  * `entity_write`: apply an already-computed value to mjData (companion brief §3).
  *
- * This is deliberately *not* `DslEvent`'s machinery. `DslEvent` samples **and**
- * writes in one step (it draws its own `Math.random()` value and applies it
- * immediately); it has no "apply a value someone else computed" entry point. An
- * ONNX term body computes the value inside the graph, so the runtime needs the
- * missing half: take the graph's output tensor and write it to a named entity's
- * field.
+ * Apply-only by design: an ONNX term body samples and computes inside the graph
+ * (from the orchestrator's seeded `rand` input, ADR 0005 §2), so all the runtime
+ * owes it is taking the output tensor and writing it to a named entity's field.
+ * Nothing here draws a random number.
  *
  * The write kinds mirror what the Python tracer captures
  * (`mjswan.compile.tracer._WRITE_FIELDS`):

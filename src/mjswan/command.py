@@ -154,9 +154,11 @@ class CommandTermConfig:
     ui: CommandUiConfig | None = None
     pending_trace: PendingCommandTrace | None = None
     """When set, this term is not yet resolved — see :class:`PendingCommandTrace`."""
+    pending_reset_trace: PendingResetTrace | None = None
+    """A native term's reset-time graph, not yet traced — see :class:`PendingResetTrace`."""
 
     def to_dict(self) -> dict[str, Any]:
-        if self.pending_trace is not None:
+        if self.pending_trace is not None or self.pending_reset_trace is not None:
             raise TypeError(
                 f"CommandTermConfig({self.term_name!r}) is pending ONNX trace — "
                 "use mjswan._onnx_build.serialize_command(name, cfg, env, out_dir) "
@@ -169,6 +171,26 @@ class CommandTermConfig:
 
 
 @dataclass(frozen=True)
+class PendingResetTrace:
+    """A reset-time graph a *native* command term applies (ADR 0005 §3).
+
+    A permanently-native command can still have randomization that is term math
+    rather than a data lookup — ``MotionCommand``'s reference-state
+    initialization jitter is the case in hand: the clip lookup has to stay
+    native, but the jitter is mjlab ``sample_uniform`` over ``asset.data``, so it
+    traces exactly like a reset Event and the browser needs no hand-written
+    randomness for it. Traced at build time like everything else, since a live
+    env is required.
+    """
+
+    func: Callable[..., None]
+    """Event-shaped body, ``func(env, env_ids, **params) -> None``, ending in ``write_*_to_sim``."""
+
+    params: dict[str, Any]
+    """Resolved params for *func* (``SceneEntityCfg``s included)."""
+
+
+@dataclass(frozen=True)
 class CommandBinding:
     """Binding from an mjlab command-cfg class name to its browser command term.
 
@@ -176,7 +198,10 @@ class CommandBinding:
 
     - **Native**: ``ts_name`` names a permanently-native TS class (e.g.
       ``TrackingCommand`` for ``MotionCommandCfg``) — ``serializer`` builds its
-      params directly from the mjlab cfg, no tracing involved.
+      params directly from the mjlab cfg. Such a term may still declare
+      ``reset_trace``, a ``(mjlab_cfg) -> (func, params) | None`` hook naming one
+      reset-time body to trace (see :class:`PendingResetTrace`); the class stays
+      native, its randomization does not.
     - **ONNX-traced**: ``state_fields``/``command_field`` set — the mjlab cfg is
       built (``cfg.build(env)``) and traced to ONNX at build time (the shared
       ``OnnxCommand`` handler; ``ts_name``/``serializer`` are unused). Set
@@ -201,6 +226,9 @@ class CommandBinding:
     trace_override: Callable[[Any], None] | None = None
     ui: dict[str, Any] | Callable[[Any], dict[str, Any]] | None = None
     viz: dict[str, Any] | Callable[[Any], dict[str, Any]] | None = None
+    reset_trace: (
+        Callable[[Any], tuple[Callable[..., None], dict[str, Any]] | None] | None
+    ) = None
 
     @property
     def is_onnx_traced(self) -> bool:
@@ -297,6 +325,9 @@ register_command(
         serializer=_serialize_motion_command,
     ),
 )
+# The reference-state-initialization jitter is registered separately, by
+# `examples/mjlab/defaults/commands`: it needs mjlab's own `sample_uniform` /
+# `quat_from_euler_xyz`, and this module keeps mjlab a soft dependency.
 
 
 __all__ = [

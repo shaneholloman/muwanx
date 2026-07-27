@@ -34,7 +34,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..command import CommandTermConfig as MjswanCommandTermConfig
-from ..command import PendingCommandTrace
+from ..command import PendingCommandTrace, PendingResetTrace
 from ..command import _custom_registry as _custom_command_registry
 from ..envs.mdp import actions as _actions_module
 from ..envs.mdp.actions.actions import (
@@ -322,7 +322,18 @@ def _adapt_command_cfg(term: Any) -> MjswanCommandTermConfig:
 
     assert spec.serializer is not None
     serialized = dict(spec.serializer(term))
-    return MjswanCommandTermConfig(term_name=spec.ts_name, params=serialized)
+    # A native term may still own a reset-time graph (ADR 0005 §3): the class stays
+    # native, its randomization is traced. Resolved at build time, like every trace.
+    reset_trace = spec.reset_trace(term) if spec.reset_trace is not None else None
+    return MjswanCommandTermConfig(
+        term_name=spec.ts_name,
+        params=serialized,
+        pending_reset_trace=(
+            PendingResetTrace(func=reset_trace[0], params=reset_trace[1])
+            if reset_trace is not None
+            else None
+        ),
+    )
 
 
 def adapt_commands(

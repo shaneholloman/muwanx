@@ -1,5 +1,4 @@
 import { ObservationBase } from '../observation/ObservationBase';
-import { DslObservation } from '../observation/DslObservation';
 import {
   NativeObservation,
   isNativeObservationConfig,
@@ -10,7 +9,6 @@ import {
   type OnnxObservationConfig,
 } from '../observation/OnnxObservation';
 import type { OnnxSessionCache, SlotReader } from '../onnx/session';
-import type { DslNode } from '../dsl/types';
 import { type Bytes, resolveBytes } from '../utils/bytes';
 import { PolicyModule } from './PolicyModule';
 import type {
@@ -296,23 +294,6 @@ export class PolicyRunner {
       if (isNativeObservationConfig(entry)) {
         return new NativeObservation(this, entry);
       }
-      const dslEntry = entry as unknown as {
-        kind?: string;
-        nodes?: unknown[];
-        output?: string;
-        params?: Record<string, unknown>;
-      };
-      if (dslEntry.kind === 'observation' && Array.isArray(dslEntry.nodes)) {
-        return new DslObservation(this, {
-          name: 'DslObservation',
-          graph: {
-            kind: 'observation',
-            nodes: dslEntry.nodes as DslNode[],
-            output: dslEntry.output ?? '',
-          },
-          params: dslEntry.params,
-        });
-      }
       const ObsClass = registry[entry.name];
       if (!ObsClass) {
         throw new Error(`Unknown observation type: ${entry.name}`);
@@ -333,31 +314,12 @@ export class PolicyRunner {
           components?: ObservationConfigEntry[];
         };
         if (Array.isArray(configValue.components)) {
-          const obsList = configValue.components.map((entry) => {
-            const dslEntry = entry as unknown as {
-              kind?: string;
-              nodes?: unknown[];
-              output?: string;
-              params?: Record<string, unknown>;
-            };
-            if (dslEntry.kind === 'observation' && Array.isArray(dslEntry.nodes)) {
-              return new DslObservation(this, {
-                name: 'DslObservation',
-                graph: {
-                  kind: 'observation',
-                  nodes: dslEntry.nodes as DslNode[],
-                  output: dslEntry.output ?? '',
-                },
-                params: dslEntry.params,
-              });
-            }
-            const ObsClass = registry[entry.name];
-            if (!ObsClass) {
-              throw new Error(`Unknown observation type: ${entry.name}`);
-            }
-            const entryConfig = { ...entry, history_steps: 1 };
-            return new ObsClass(this, entryConfig);
-          });
+          // Group-level history owns the stacking here, so each component computes a
+          // single frame. Same builder as the array shape, so this group form gets
+          // ONNX/native terms too rather than only registry classes.
+          const obsList = configValue.components.map((entry) =>
+            buildObservation({ ...entry, history_steps: 1 }),
+          );
           const steps = Math.max(1, Math.floor(configValue.history_steps ?? 1));
           const interleaved = Boolean(configValue.interleaved);
           this.registerGroup(key, obsList, configValue.components, {

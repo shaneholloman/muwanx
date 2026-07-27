@@ -347,6 +347,7 @@ class _TermModule(nn.Module):
         params: dict[str, Any],
         dynamic_keys: list[SlotKey],
         constants: dict[SlotKey, torch.Tensor],
+        *,
         sensors: dict[str, Any] | None = None,
         commands: dict[str, Any] | None = None,
     ):
@@ -538,7 +539,7 @@ def trace_term(
     sensors = dict(recorder._sensors)  # noqa: SLF001 — internal proxy
     commands = dict(recorder._commands)  # noqa: SLF001 — internal proxy
     module = _TermModule(
-        func, params, dynamic_keys, constants, sensors, commands
+        func, params, dynamic_keys, constants, sensors=sensors, commands=commands
     ).eval()
     output_name = "value"
     buffer = io.BytesIO()

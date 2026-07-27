@@ -1,7 +1,7 @@
 /**
  * `CommandManager`: `OnnxCommand` registration (ADR 0005 §3).
  *
- * `OnnxCommand` bypasses the class registry the same way `DslEvent` bypasses
+ * `OnnxCommand` bypasses the class registry the same way `OnnxEvent` bypasses
  * `EventManager`'s — it needs a session + rng the registry's
  * `new Term(name, config, context)` shape has no room for. These tests pin
  * that bypass and its failure mode (missing session/rng warns and skips

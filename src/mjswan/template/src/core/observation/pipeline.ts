@@ -2,7 +2,7 @@
  * The native half of the observation pipeline (ADR 0005 §Decision table).
  *
  * mjlab's order is compute → noise → clip → scale → delay → history. Noise and
- * delay are training-only and dropped (ADR 0003 scope); history is owned by the
+ * delay are training-only and dropped (ADR 0005 §4); history is owned by the
  * surrounding group in `PolicyRunner`. What is left here is clip → scale, applied
  * identically to a term whose value came from an ONNX graph and to one the
  * runtime supplies natively, so the two can never drift.

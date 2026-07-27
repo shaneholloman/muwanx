@@ -3,7 +3,7 @@
  *
  * Previously `onReset()`-only; these tests pin the new behaviour: interval/
  * startup dispatch is genuinely new (not a port), reset stays backward
- * compatible for legacy DslEvent/registry terms, and a quiet frame never calls
+ * compatible for plugin-registered term classes, and a quiet frame never calls
  * `ort.run()` for a term whose trigger did not fire.
  */
 import { describe, expect, it, vi } from 'vitest';

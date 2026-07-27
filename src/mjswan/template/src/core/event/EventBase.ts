@@ -5,7 +5,7 @@ export type EventConfig = {
   params?: Record<string, unknown>;
   /**
    * ONNX-backed events (ADR 0005 §3/§4) carry these; a plain `EventConfig` (no
-   * `mode`/`onnx`) is a legacy reset-only registry/DslEvent term, unchanged.
+   * `mode`/`onnx`) is a reset-only plugin-registered term, unchanged.
    * See `OnnxEventConfig` in `./OnnxEvent` for the authoritative shape.
    */
   mode?: 'startup' | 'reset' | 'interval';

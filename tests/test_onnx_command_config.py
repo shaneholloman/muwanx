@@ -175,3 +175,96 @@ def test_write_command_artifact(tmp_path):
     assert written.read_bytes() == export.onnx_bytes
     assert cfg["onnx"] == "command/twist.onnx"
     assert validate_command_config(cfg) == []
+
+
+# ---------------------------------------------------------------------------
+# A native command's traced reset graph (ADR 0005 §3): `MotionCommand`'s
+# reference-state-initialization jitter. The motion player stays native — a clip
+# lookup is not term math — while the `sample_uniform` around it is traced, so the
+# browser needs no hand-written randomness for it.
+# ---------------------------------------------------------------------------
+
+
+def _write_capture_env():
+    """Minimal env satisfying the event tracer: `scene[name].data.<field>` + writes."""
+
+    class _Data:
+        def __init__(self, **fields):
+            for key, value in fields.items():
+                setattr(self, key, value)
+
+    class _Entity:
+        def __init__(self, data):
+            self.data = data
+
+        def write_joint_state_to_sim(self, position, velocity, **_):
+            pass
+
+    class _Scene:
+        def __init__(self, entities):
+            self._entities = entities
+            self.env_origins = torch.zeros((1, 3))
+
+        def __getitem__(self, name):
+            return self._entities[name]
+
+    class _Env:
+        def __init__(self, entities):
+            self.scene = _Scene(entities)
+
+    data = _Data(
+        joint_pos=torch.tensor([[0.1, 0.2]]),
+        joint_vel=torch.tensor([[0.0, 0.0]]),
+    )
+    return _Env({"robot": _Entity(data)})
+
+
+class _AssetCfg:
+    """Stands in for mjlab's SceneEntityCfg (only `.name` is read here)."""
+
+    def __init__(self, name):
+        self.name = name
+
+
+def test_native_command_emits_a_traced_reset_graph(tmp_path):
+    pytest.importorskip("mjlab")
+    from rsi_body_fixture import rsi_joint_offset
+
+    from mjswan._onnx_build import serialize_command
+    from mjswan.command import CommandTermConfig, PendingResetTrace
+
+    cfg = CommandTermConfig(
+        term_name="TrackingCommand",
+        params={"sampling_mode": "start"},
+        pending_reset_trace=PendingResetTrace(
+            func=rsi_joint_offset,
+            params={"asset_cfg": _AssetCfg("robot"), "offset": 0.1},
+        ),
+    )
+    entry = serialize_command("motion", cfg, _write_capture_env(), tmp_path)
+
+    # The native term's own params survive untouched...
+    assert entry["name"] == "TrackingCommand"
+    assert entry["sampling_mode"] == "start"
+    # ...and the graph rides alongside them in exactly the shape `OnnxEvent`
+    # consumes, so the runtime needs no second way to evaluate a graph that draws
+    # `rand` and emits entity writes.
+    graph = entry["reset_graph"]
+    assert graph["mode"] == "reset"
+    assert graph["onnx"] == "command/motion_reset.onnx"
+    assert graph["rand_dim"] == 2  # one draw per joint
+    assert [t["kind"] for t in graph["write_targets"]] == ["joint_state"]
+    assert [s["field"] for s in graph["input_slots"]] == ["joint_pos", "joint_vel"]
+    assert (tmp_path / graph["onnx"]).exists()
+
+
+def test_command_without_a_reset_trace_is_unchanged(tmp_path):
+    from mjswan._onnx_build import serialize_command
+    from mjswan.command import CommandTermConfig
+
+    cfg = CommandTermConfig(
+        term_name="TrackingCommand", params={"sampling_mode": "start"}
+    )
+    # No env is touched at all when there is nothing to trace.
+    entry = serialize_command("motion", cfg, object(), tmp_path)
+    assert entry == {"name": "TrackingCommand", "sampling_mode": "start"}

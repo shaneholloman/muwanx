@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { getPosition, getQuaternion } from '../scene/scene';
 import { type NpzEntry, loadNpz } from '../scene/npz';
 import { type Bytes, resolveBytes } from '../utils/bytes';
+import { OnnxEvent, isOnnxEventConfig } from '../event/OnnxEvent';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
 
 export type TrackingMotionConfig = {
@@ -30,9 +31,6 @@ type LoadedTrackingMotion = TrackingMotionConfig & {
   frameCount: number;
 };
 
-type ScalarRange = [number, number];
-type PoseRange = Partial<Record<'x' | 'y' | 'z' | 'roll' | 'pitch' | 'yaw', ScalarRange>>;
-
 function normalizeQuat(quat: ArrayLike<number>): Float32Array {
   const length = Math.hypot(quat[0] ?? 1, quat[1] ?? 0, quat[2] ?? 0, quat[3] ?? 0) || 1.0;
   return new Float32Array([
@@ -56,71 +54,6 @@ function splitFrames(entry: NpzEntry): Float32Array[] {
     frames.push(out);
   }
   return frames;
-}
-
-function normalizeScalarRange(value: unknown, fallback: ScalarRange): ScalarRange {
-  if (!Array.isArray(value) || value.length < 2) {
-    return fallback;
-  }
-  const lo = Number(value[0]);
-  const hi = Number(value[1]);
-  if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-    return fallback;
-  }
-  return [lo, hi];
-}
-
-function normalizeRangeMap(value: unknown): PoseRange {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return {};
-  }
-  const out: PoseRange = {};
-  for (const key of ['x', 'y', 'z', 'roll', 'pitch', 'yaw'] as const) {
-    const range = normalizeScalarRange((value as Record<string, unknown>)[key], [0.0, 0.0]);
-    if (range[0] !== 0.0 || range[1] !== 0.0) {
-      out[key] = range;
-    }
-  }
-  return out;
-}
-
-function sampleRangeValue(range: ScalarRange | undefined): number {
-  if (!range) {
-    return 0.0;
-  }
-  return range[0] + Math.random() * (range[1] - range[0]);
-}
-
-function quatMultiply(a: ArrayLike<number>, b: ArrayLike<number>): Float32Array {
-  const aw = a[0] ?? 1;
-  const ax = a[1] ?? 0;
-  const ay = a[2] ?? 0;
-  const az = a[3] ?? 0;
-  const bw = b[0] ?? 1;
-  const bx = b[1] ?? 0;
-  const by = b[2] ?? 0;
-  const bz = b[3] ?? 0;
-  return new Float32Array([
-    aw * bw - ax * bx - ay * by - az * bz,
-    aw * bx + ax * bw + ay * bz - az * by,
-    aw * by - ax * bz + ay * bw + az * bx,
-    aw * bz + ax * by - ay * bx + az * bw,
-  ]);
-}
-
-function quatFromEulerXYZ(roll: number, pitch: number, yaw: number): Float32Array {
-  const cr = Math.cos(roll * 0.5);
-  const sr = Math.sin(roll * 0.5);
-  const cp = Math.cos(pitch * 0.5);
-  const sp = Math.sin(pitch * 0.5);
-  const cy = Math.cos(yaw * 0.5);
-  const sy = Math.sin(yaw * 0.5);
-  return new Float32Array([
-    cr * cp * cy + sr * sp * sy,
-    sr * cp * cy - cr * sp * sy,
-    cr * sp * cy + sr * cp * sy,
-    cr * cp * sy - sr * sp * cy,
-  ]);
 }
 
 function setGhostMaterial(material: THREE.Material): THREE.Material {
@@ -171,9 +104,8 @@ export class TrackingCommand implements CommandTerm {
   private justReset: boolean;
   private referenceVisible: boolean;
   private readonly samplingMode: string;
-  private readonly poseRange: PoseRange;
-  private readonly velocityRange: PoseRange;
-  private readonly jointPositionRange: ScalarRange;
+  /** Traced reference-state-initialization jitter, or null when the task jitters nothing. */
+  private readonly resetJitter: OnnxEvent | null;
   refJointPos: Float32Array[];
   refRootPos: Float32Array[];
   refRootQuat: Float32Array[];
@@ -202,9 +134,7 @@ export class TrackingCommand implements CommandTerm {
     this.justReset = true;
     this.referenceVisible = true;
     this.samplingMode = typeof config.sampling_mode === 'string' ? config.sampling_mode : 'start';
-    this.poseRange = normalizeRangeMap(config.pose_range);
-    this.velocityRange = normalizeRangeMap(config.velocity_range);
-    this.jointPositionRange = normalizeScalarRange(config.joint_position_range, [0.0, 0.0]);
+    this.resetJitter = this.buildResetJitter(config.reset_graph);
     this.refJointPos = [];
     this.refRootPos = [];
     this.refRootQuat = [];
@@ -632,60 +562,78 @@ export class TrackingCommand implements CommandTerm {
     }
 
     this.context.mujoco.mj_forward(mjModel, mjData);
+    this.applyResetJitter();
+  }
+
+  /**
+   * Run the traced reference-state-initialization graph, if the build shipped one.
+   *
+   * mjlab perturbs the reference frame before writing it; this perturbs it after,
+   * reading it back off `asset.data`. Same numbers — the offsets land on the same
+   * values and the clip still follows the addition — and it keeps the clip out of
+   * the graph, so the jitter is ordinary term math (see the Python body,
+   * `motion_rsi_offset`). The `mj_forward` above is what makes the read valid:
+   * `root_link_*_vel_w` is `cvel`-derived, so it would otherwise be stale.
+   *
+   * Fire-and-forget, with a second forward once the writes land. `reset()` is
+   * synchronous (the `CommandTerm` interface) while ORT is not, so the jitter
+   * appears a frame late — the same accepted lag as every other async term
+   * (ADR 0005 §8), and a frame of un-jittered reference pose is harmless.
+   */
+  private applyResetJitter(): void {
+    const graph = this.resetJitter;
+    if (!graph) return;
+    void graph
+      .fire({
+        mjModel: this.context.mjModel,
+        mjData: this.context.mjData,
+        terrainData: null,
+      })
+      .then(() => {
+        const { mjModel, mjData } = this.context;
+        if (mjModel && mjData) this.context.mujoco.mj_forward(mjModel, mjData);
+      });
+  }
+
+  /**
+   * The RSI graph from `policy.json`, run through the shared `OnnxEvent` handler
+   * rather than a second way to evaluate a graph with `rand` and `entity_write`s.
+   * Warns and skips if the bytes or the seeded PRNG are missing: losing the jitter
+   * costs a slightly less varied start, not a working scene.
+   */
+  private buildResetJitter(config: unknown): OnnxEvent | null {
+    if (!isOnnxEventConfig(config)) return null;
+    const session = this.context.onnxSessions?.get(config.onnx);
+    const rng = this.context.rng;
+    if (!session || !rng) {
+      console.warn(
+        `[TrackingCommand] reset jitter needs the ONNX session "${config.onnx}" and a ` +
+          'seeded rng; starting from the unjittered reference frame.',
+      );
+      return null;
+    }
+    return new OnnxEvent(config, { session, rng, readSlot: this.context.readOnnxSlot });
   }
 
   private sampleRootPos(frameIndex: number): Float32Array | null {
-    const rootPos = this.refRootPos[frameIndex];
-    if (!rootPos) {
-      return null;
-    }
-    const sampled = rootPos.slice();
-    sampled[0] += sampleRangeValue(this.poseRange.x);
-    sampled[1] += sampleRangeValue(this.poseRange.y);
-    sampled[2] += sampleRangeValue(this.poseRange.z);
-    return sampled;
+    return this.refRootPos[frameIndex] ?? null;
   }
 
   private sampleRootQuat(frameIndex: number): Float32Array | null {
-    const rootQuat = this.refRootQuat[frameIndex];
-    if (!rootQuat) {
-      return null;
-    }
-    const roll = sampleRangeValue(this.poseRange.roll);
-    const pitch = sampleRangeValue(this.poseRange.pitch);
-    const yaw = sampleRangeValue(this.poseRange.yaw);
-    if (roll === 0.0 && pitch === 0.0 && yaw === 0.0) {
-      return rootQuat;
-    }
-    return normalizeQuat(quatMultiply(quatFromEulerXYZ(roll, pitch, yaw), rootQuat));
+    return this.refRootQuat[frameIndex] ?? null;
   }
 
   private sampleRootVelocity(frameIndex: number, source: Float32Array[]): Float32Array | null {
-    const rootVel = source[frameIndex]?.slice(
-      this.selectedRootBodyIndex * 3,
-      this.selectedRootBodyIndex * 3 + 3,
+    return (
+      source[frameIndex]?.slice(
+        this.selectedRootBodyIndex * 3,
+        this.selectedRootBodyIndex * 3 + 3,
+      ) ?? null
     );
-    if (!rootVel) {
-      return null;
-    }
-    rootVel[0] += sampleRangeValue(this.velocityRange.x);
-    rootVel[1] += sampleRangeValue(this.velocityRange.y);
-    rootVel[2] += sampleRangeValue(this.velocityRange.z);
-    return rootVel;
   }
 
   private sampleRootAngularVelocity(frameIndex: number): Float32Array | null {
-    const rootVel = this.refBodyAngVelW[frameIndex]?.slice(
-      this.selectedRootBodyIndex * 3,
-      this.selectedRootBodyIndex * 3 + 3,
-    );
-    if (!rootVel) {
-      return null;
-    }
-    rootVel[0] += sampleRangeValue(this.velocityRange.roll);
-    rootVel[1] += sampleRangeValue(this.velocityRange.pitch);
-    rootVel[2] += sampleRangeValue(this.velocityRange.yaw);
-    return rootVel;
+    return this.sampleRootVelocity(frameIndex, this.refBodyAngVelW);
   }
 
   private sampleInitialFrame(frameCount: number): number {
@@ -693,21 +641,22 @@ export class TrackingCommand implements CommandTerm {
       return 0;
     }
     if (this.samplingMode === 'uniform') {
-      return Math.floor(Math.random() * frameCount);
+      // A clip-frame index is a data lookup, not term math — nothing to trace, so
+      // it comes from the orchestrator's seeded PRNG (ADR 0005 §2) rather than
+      // `Math.random()`, which no recorded session could replay. mjlab's own
+      // `_uniform_sampling` is `torch.randint` over the same range.
+      const rng = this.context.rng;
+      if (!rng) {
+        console.warn('[TrackingCommand] no seeded rng in context; starting at frame 0.');
+        return 0;
+      }
+      return Math.min(frameCount - 1, Math.floor(rng.next() * frameCount));
     }
     return 0;
   }
 
   private sampleJointPos(frameIndex: number): Float32Array {
-    const jointPos = this.refJointPos[frameIndex] ?? new Float32Array(0);
-    if (this.jointPositionRange[0] === 0.0 && this.jointPositionRange[1] === 0.0) {
-      return jointPos;
-    }
-    const sampled = jointPos.slice();
-    for (let i = 0; i < sampled.length; i++) {
-      sampled[i] += sampleRangeValue(this.jointPositionRange);
-    }
-    return sampled;
+    return this.refJointPos[frameIndex] ?? new Float32Array(0);
   }
 
   private resolveQposAdr(jointNames: string[]): number[] {

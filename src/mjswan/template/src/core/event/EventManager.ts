@@ -3,20 +3,8 @@ import type { OnnxSessionCache } from '../onnx/session';
 import type { SlotReader } from '../onnx/session';
 import { EventBase, type EventConfig, type EventContext } from './EventBase';
 import type { EventConstructor } from './EventBase';
-import { DslEvent } from './DslEvent';
 import { OnnxEvent, isOnnxEventConfig } from './OnnxEvent';
 import { IntervalTrigger, ResetTrigger, StartupTrigger } from './triggers';
-
-function isDslEvent(config: EventConfig): config is EventConfig & {
-  kind: 'event';
-  mutations: unknown[];
-} {
-  return (
-    'kind' in config
-    && (config as { kind?: unknown }).kind === 'event'
-    && Array.isArray((config as { mutations?: unknown }).mutations)
-  );
-}
 
 /** Deps for constructing ONNX-backed event terms; omit if a scene has none. */
 export interface EventManagerDeps {
@@ -25,15 +13,16 @@ export interface EventManagerDeps {
   readSlot?: SlotReader;
 }
 
-type LegacyTerm = { kind: 'legacy'; term: EventBase; trigger: ResetTrigger };
+/** A plugin-supplied event class (ADR 0004 §10) — reset-only, no traced graph. */
+type PluginTerm = { kind: 'plugin'; term: EventBase; trigger: ResetTrigger };
 type OnnxResetTerm = { kind: 'onnx'; term: OnnxEvent; trigger: ResetTrigger };
-type ResetEntry = LegacyTerm | OnnxResetTerm;
+type ResetEntry = PluginTerm | OnnxResetTerm;
 
 /**
  * Native Event dispatch (ADR 0005 §5, companion brief §4).
  *
  * Previously reset-only (`onReset()`); now mode-aware. `mode="reset"` terms
- * (legacy `DslEvent`/registry classes, or `OnnxEvent`) fire on episode reset,
+ * (a traced `OnnxEvent`, or a plugin-registered class) fire on episode reset,
  * gated by a `ResetTrigger`; `mode="interval"` terms fire on the frames their
  * `IntervalTrigger` allows; `mode="startup"` terms fire once. Fusion (brief §4)
  * only changes how many graphs exist — dispatch here still gates *every* call,
@@ -92,16 +81,12 @@ export class EventManager {
         }
         continue;
       }
-      if (isDslEvent(config)) {
-        this.resetTerms.push({ kind: 'legacy', term: new DslEvent(config), trigger: new ResetTrigger() });
-        continue;
-      }
       const EventClass = registry[config.name];
       if (!EventClass) {
         console.warn(`[EventManager] Unknown event type: ${config.name}`);
         continue;
       }
-      this.resetTerms.push({ kind: 'legacy', term: new EventClass(config), trigger: new ResetTrigger() });
+      this.resetTerms.push({ kind: 'plugin', term: new EventClass(config), trigger: new ResetTrigger() });
     }
   }
 

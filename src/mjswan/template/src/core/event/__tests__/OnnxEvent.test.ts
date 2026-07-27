@@ -74,8 +74,8 @@ describe('isOnnxEventConfig', () => {
     expect(isOnnxEventConfig({ name: 'push_robot', mode: 'interval', onnx: 'x.onnx' })).toBe(true);
   });
 
-  it('rejects a DslEvent-shaped config', () => {
-    expect(isOnnxEventConfig({ kind: 'event', mutations: [] })).toBe(false);
+  it('rejects a config that names no graph', () => {
+    expect(isOnnxEventConfig({ name: 'randomize_terrain' })).toBe(false);
   });
 
   it('rejects configs missing onnx or mode', () => {

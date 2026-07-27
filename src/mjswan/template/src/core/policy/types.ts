@@ -10,7 +10,7 @@ export type PolicyRunnerContext = {
   mjModel: MjModel | null;
   mjData: MjData | null;
   scene?: Scene | null;
-  /** Instance-scoped command manager; DSL command primitives read it via the runner. */
+  /** Instance-scoped command manager; command-state input slots read it via the runner. */
   commandManager?: CommandManager;
 };
 
@@ -48,19 +48,11 @@ export type ActionConfigEntry = {
   [key: string]: unknown;
 };
 
-export type TerminationConfigEntry =
-  | {
-    name: string;
-    params?: Record<string, unknown>;
-    time_out?: boolean;
-  }
-  | {
-    kind: 'termination';
-    nodes: import('../dsl/types').DslNode[];
-    output: string;
-    params?: Record<string, unknown>;
-    time_out?: boolean;
-  };
+export type TerminationConfigEntry = {
+  name: string;
+  params?: Record<string, unknown>;
+  time_out?: boolean;
+};
 
 export type PolicyConfig = {
   policy_module?: string;

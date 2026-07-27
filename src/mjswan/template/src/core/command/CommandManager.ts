@@ -134,7 +134,7 @@ export class CommandManager {
   }
 
   /**
-   * `OnnxCommand` bypasses the class registry (like `DslEvent` does for
+   * `OnnxCommand` bypasses the class registry (like `OnnxEvent` does for
    * events): it is one shared handler, data-configured, needing a session +
    * rng the registry-based `new Term(name, config, context)` shape has no room
    * for. Warns and skips (rather than throwing) so one missing session doesn't

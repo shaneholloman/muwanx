@@ -18,9 +18,16 @@ import types
 from typing import Any
 
 import torch
-from mjlab.utils.lab_api.math import sample_uniform, wrap_to_pi
+from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.utils.lab_api.math import (
+    quat_from_euler_xyz,
+    quat_mul,
+    sample_uniform,
+    wrap_to_pi,
+)
 
 from mjswan import CommandBinding, register_command
+from mjswan.command import _serialize_motion_command
 
 # ---------------------------------------------------------------------------
 # LiftingCommand (Lift-Cube-Yam) — traces directly, no override needed.
@@ -159,5 +166,134 @@ register_command(
         command_field="vel_command_b",
         trace_override=_bind_trace_friendly_velocity_override,
         ui=_velocity_ui,
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# MotionCommand (tracking tasks) — the motion player stays native (the clip
+# lookup is a data lookup, not term math), but its *reference-state
+# initialization* randomization is term math and is traced.
+# ---------------------------------------------------------------------------
+
+_POSE_KEYS = ("x", "y", "z", "roll", "pitch", "yaw")
+
+
+def _range_tensor(
+    ranges: dict[str, tuple[float, float]] | None, device: Any
+) -> torch.Tensor:
+    """mjlab's `range_list` -> (6, 2) tensor, missing axes meaning no offset."""
+    ranges = ranges or {}
+    return torch.tensor(
+        [tuple(ranges.get(key, (0.0, 0.0))) for key in _POSE_KEYS],
+        dtype=torch.float,
+        device=device,
+    )
+
+
+def motion_rsi_offset(
+    env: Any,
+    env_ids: Any,
+    *,
+    asset_cfg: Any,
+    pose_range: dict[str, tuple[float, float]] | None = None,
+    velocity_range: dict[str, tuple[float, float]] | None = None,
+    joint_position_range: tuple[float, float] = (0.0, 0.0),
+) -> None:
+    """Reference-state-initialization jitter from ``MotionCommand._resample_command``.
+
+    mjlab perturbs the reference frame it is about to write; this reads the frame
+    *already written* and perturbs it in place. Numerically the same — the offsets
+    are added to the same values, and the clip still lands after the addition —
+    but it needs no access to the motion clip, so the whole thing is ordinary term
+    math over ``asset.data`` and traces to ONNX with the mechanisms Cartpole's
+    resets and Go1's ``push_robot``/``reset_base`` already use.
+
+    That is the point: the browser previously did this jitter in hand-written
+    TypeScript off ``Math.random()``, which is neither mjlab's function nor
+    replayable. Here it is mjlab's own ``sample_uniform``, so the draws become the
+    graph's ``rand`` input, fed from the orchestrator's seeded PRNG (ADR 0005 §2),
+    and the arithmetic is mjlab's rather than a paraphrase of it.
+
+    The draws are ordered pose -> velocity -> joint to match mjlab's own order, so
+    the two bodies read side by side.
+    """
+    asset = env.scene[asset_cfg.name]
+    device = asset.data.joint_pos.device
+
+    # Root pose: xyz offset, plus a roll/pitch/yaw delta applied as a quaternion.
+    pose_ranges = _range_tensor(pose_range, device)
+    pose_samples = sample_uniform(
+        pose_ranges[:, 0], pose_ranges[:, 1], (1, 6), device=device
+    )
+    root_pos = asset.data.root_link_pos_w + pose_samples[:, 0:3]
+    orientations_delta = quat_from_euler_xyz(
+        pose_samples[:, 3], pose_samples[:, 4], pose_samples[:, 5]
+    )
+    root_quat = quat_mul(orientations_delta, asset.data.root_link_quat_w)
+
+    # Root velocity: linear and angular offsets, no rotation involved.
+    velocity_ranges = _range_tensor(velocity_range, device)
+    velocity_samples = sample_uniform(
+        velocity_ranges[:, 0], velocity_ranges[:, 1], (1, 6), device=device
+    )
+    root_lin_vel = asset.data.root_link_lin_vel_w + velocity_samples[:, 0:3]
+    root_ang_vel = asset.data.root_link_ang_vel_w + velocity_samples[:, 3:6]
+
+    # Joint positions: one offset per joint, then mjlab's clip to the soft limits.
+    # The TypeScript this replaces omitted that clip, so a large enough jitter
+    # could seed the episode outside the robot's own limits.
+    joint_pos = asset.data.joint_pos + sample_uniform(
+        joint_position_range[0],
+        joint_position_range[1],
+        asset.data.joint_pos.shape,
+        device=device,
+    )
+    soft_limits = asset.data.soft_joint_pos_limits
+    joint_pos = torch.clip(joint_pos, soft_limits[:, :, 0], soft_limits[:, :, 1])
+
+    asset.write_joint_state_to_sim(joint_pos, asset.data.joint_vel, env_ids=env_ids)
+    asset.write_root_link_pose_to_sim(
+        torch.cat([root_pos, root_quat], dim=-1), env_ids=env_ids
+    )
+    asset.write_root_link_velocity_to_sim(
+        torch.cat([root_lin_vel, root_ang_vel], dim=-1), env_ids=env_ids
+    )
+
+
+def _motion_rsi_trace(cfg: Any) -> tuple[Any, dict[str, Any]] | None:
+    """The reset graph for a `MotionCommandCfg`, or None if it jitters nothing.
+
+    mjlab's own play-mode override clears `pose_range`/`velocity_range` and leaves
+    `joint_position_range` at (-0.1, 0.1), so a deployed tracking policy normally
+    gets exactly the joint jitter — but an author may keep any subset, and all
+    three go through the same graph.
+    """
+    pose_range = dict(getattr(cfg, "pose_range", None) or {})
+    velocity_range = dict(getattr(cfg, "velocity_range", None) or {})
+    joint_position_range = tuple(getattr(cfg, "joint_position_range", (0.0, 0.0)))
+    if not pose_range and not velocity_range and joint_position_range == (0.0, 0.0):
+        return None
+    return (
+        motion_rsi_offset,
+        {
+            "asset_cfg": SceneEntityCfg(getattr(cfg, "entity_name", None) or "robot"),
+            "pose_range": pose_range,
+            "velocity_range": velocity_range,
+            "joint_position_range": joint_position_range,
+        },
+    )
+
+
+# `MotionCommandCfg` is already bound to the native `TrackingCommand` in
+# `mjswan.command`; re-registering here adds the traced reset graph without
+# disturbing that. The motion player stays native — the clip lookup is a data
+# lookup — while the jitter around it becomes mjlab's own math in ONNX.
+register_command(
+    "MotionCommandCfg",
+    CommandBinding(
+        ts_name="TrackingCommand",
+        serializer=_serialize_motion_command,
+        reset_trace=_motion_rsi_trace,
     ),
 )

@@ -1,10 +1,10 @@
 /**
  * `entity_write` apply primitive (companion brief §3).
  *
- * The half `DslEvent` never had: take a value an ONNX graph already computed and
- * write it into mjData. The write kinds and the `"<kind>__<field>"` output naming
- * mirror the Python tracer's `_WRITE_FIELDS`, so these tests double as the
- * contract between the two sides.
+ * Take a value an ONNX graph already computed and write it into mjData — the
+ * graph owns the sampling, so this side only applies. The write kinds and the
+ * `"<kind>__<field>"` output naming mirror the Python tracer's `_WRITE_FIELDS`, so
+ * these tests double as the contract between the two sides.
  */
 import { describe, expect, it } from 'vitest';
 

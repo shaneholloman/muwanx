@@ -1,6 +1,5 @@
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
 import type { TerminationConstructor } from './terminations';
-import { DslTermination } from './DslTermination';
 import { OnnxTermination, type OnnxTerminationConfig } from './OnnxTermination';
 import { TimeOutTermination, type TimeOutTerminationConfig } from './TimeOutTermination';
 import type { OnnxSessionCache, SlotReader } from '../onnx/session';
@@ -22,12 +21,6 @@ export type TerminationManagerDeps = {
   onnxSessions?: OnnxSessionCache;
   readOnnxSlot?: SlotReader;
 };
-
-function isDslEntry(
-  entry: TerminationConfigEntry,
-): entry is Extract<TerminationConfigEntry, { kind: 'termination' }> {
-  return 'kind' in entry && entry.kind === 'termination';
-}
 
 /** Whether an entry names a traced-ONNX termination (ADR 0005). */
 function isOnnxEntry(entry: TerminationConfigEntry): entry is OnnxTerminationConfig {
@@ -68,20 +61,6 @@ export class TerminationManager {
         this.terms.push({
           name,
           term: new TimeOutTermination(runner, { ...entry, name }, () => this.elapsedS),
-          isTimeOut: entry.time_out ?? false,
-        });
-        continue;
-      }
-      if (isDslEntry(entry)) {
-        const termConfig = {
-          name,
-          params: entry.params,
-          time_out: entry.time_out,
-          graph: { kind: 'termination' as const, nodes: entry.nodes, output: entry.output },
-        };
-        this.terms.push({
-          name,
-          term: new DslTermination(runner, termConfig),
           isTimeOut: entry.time_out ?? false,
         });
         continue;

@@ -16,6 +16,7 @@ Called from :mod:`mjswan.builder`, once per scene, after that scene's live
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -346,12 +347,52 @@ def serialize_events(
 # ---------------------------------------------------------------------------
 
 
+def _serialize_reset_graph(
+    name: str, cmd_cfg: CommandTermConfig, env: Any, out_dir: Path
+) -> dict[str, Any] | None:
+    """Trace a native command's reset-time graph, or ``None`` if it has none.
+
+    The entry shape is deliberately an event entry (:func:`serialize_event`'s), so
+    the browser can run it through the same ``OnnxEvent`` handler instead of
+    growing a second way to evaluate a graph with ``rand`` and ``entity_write``s.
+    """
+    pending = cmd_cfg.pending_reset_trace
+    if pending is None:
+        return None
+    from .compile import trace_event_term
+    from .compile.tracer import slots_json
+
+    graph_name = f"{name}_reset"
+    export = trace_event_term(
+        pending.func,
+        _resolved_params(pending.params, env),
+        env,
+        name=graph_name,
+        mode="reset",
+    )
+    ref = _onnx_ref("command", graph_name)
+    _write_onnx(out_dir, ref, export.onnx_bytes)
+    return {
+        "name": graph_name,
+        "mode": "reset",
+        "onnx": ref,
+        "rand_dim": export.rand_dim,
+        "input_slots": slots_json(export),
+        "write_targets": export.write_targets,
+    }
+
+
 def serialize_command(
     name: str, cmd_cfg: CommandTermConfig, env: Any, out_dir: Path
 ) -> dict[str, Any]:
     """Serialize one command term, resolving a pending ONNX trace if needed."""
     if cmd_cfg.pending_trace is None:
-        return cmd_cfg.to_dict()
+        reset_graph = _serialize_reset_graph(name, cmd_cfg, env, out_dir)
+        if reset_graph is None:
+            return cmd_cfg.to_dict()
+        # `to_dict` refuses while a trace is pending; the graph is resolved now.
+        resolved = replace(cmd_cfg, pending_reset_trace=None)
+        return {**resolved.to_dict(), "reset_graph": reset_graph}
 
     from .compile import trace_command_term
     from .compile.serialize import write_command_artifact
