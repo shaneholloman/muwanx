@@ -268,3 +268,105 @@ def test_command_without_a_reset_trace_is_unchanged(tmp_path):
     # No env is touched at all when there is nothing to trace.
     entry = serialize_command("motion", cfg, object(), tmp_path)
     assert entry == {"name": "TrackingCommand", "sampling_mode": "start"}
+
+
+# ---------------------------------------------------------------------------
+# An observation term the tracer cannot follow must fail the build, not degrade.
+# Both degradations shipped a silently-wrong policy: dropping the term shortens
+# the vector the network was trained on, and baking a time-varying term freezes an
+# input. mjlab's `height_scan` hit the second one on both Velocity-Rough tasks —
+# 187 frozen terrain heights, fed forever, with nothing in the output saying so.
+# ---------------------------------------------------------------------------
+
+
+def _opaque_state_env():
+    """An env whose only readable state is not a tensor — mjlab's RayCastSensor shape."""
+
+    class _RayData:
+        """A dataclass-ish sensor reading: real state, but not a tensor field."""
+
+        def __init__(self):
+            self.distances = torch.tensor([[1.0, 2.0]])
+
+    class _Sensor:
+        def __init__(self):
+            self.data = _RayData()
+
+    class _Scene:
+        def __init__(self):
+            self.sensors = {"terrain_scan": _Sensor()}
+
+        def __getitem__(self, name):
+            return self.sensors[name]
+
+    class _Env:
+        def __init__(self):
+            self.scene = _Scene()
+
+    return _Env()
+
+
+def _reads_opaque_sensor(env, *, sensor_name="terrain_scan"):
+    """Stands in for `height_scan`: reads a sensor whose `.data` is not a tensor."""
+    return env.scene[sensor_name].data.distances * 2.0
+
+
+def _reads_nothing(env, *, width=3):
+    """A genuine constant — a fixed-size padding term with no env dependency."""
+    del env
+    return torch.zeros((1, width))
+
+
+def test_untraceable_observation_fails_the_build():
+    from mjswan.compile.tracer import UntraceableTerm, trace_term
+
+    with pytest.raises(UntraceableTerm) as excinfo:
+        trace_term(_reads_opaque_sensor, {}, _opaque_state_env(), name="height_scan")
+    # The message has to name what it could not follow, or nobody can act on it.
+    assert "height_scan" in str(excinfo.value)
+    assert "terrain_scan" in str(excinfo.value)
+    assert excinfo.value.touched == ["sensor:terrain_scan"]
+
+
+def test_term_reading_nothing_is_a_constant_not_untraceable():
+    from mjswan.compile.tracer import ConstantTerm, UntraceableTerm, trace_term
+
+    with pytest.raises(ConstantTerm) as excinfo:
+        trace_term(_reads_nothing, {}, _opaque_state_env(), name="padding")
+    # A `ConstantTerm` is safe to bake; an `UntraceableTerm` is not. They are
+    # indistinguishable from "no graph inputs" alone, hence two types.
+    assert not isinstance(excinfo.value, UntraceableTerm)
+
+
+def test_serializer_bakes_a_constant_but_refuses_an_untraceable_term(tmp_path):
+    from mjswan._onnx_build import serialize_observation_term
+    from mjswan.compile.tracer import UntraceableTerm
+    from mjswan.managers.observation_manager import ObservationTermCfg
+
+    env = _opaque_state_env()
+    baked = serialize_observation_term(
+        "padding", ObservationTermCfg(func=_reads_nothing), env, tmp_path, None
+    )
+    assert baked["native"] == "constant"
+    assert baked["size"] == 3
+
+    with pytest.raises(UntraceableTerm):
+        serialize_observation_term(
+            "height_scan",
+            ObservationTermCfg(func=_reads_opaque_sensor),
+            env,
+            tmp_path,
+            None,
+        )
+
+
+def test_unsupported_observation_binding_fails_rather_than_dropping():
+    from mjswan._onnx_build import serialize_observation_term
+    from mjswan.envs.mdp.observations import ObservationBinding
+    from mjswan.managers.observation_manager import ObservationTermCfg
+
+    term = ObservationTermCfg(
+        func=ObservationBinding(ts_name="", unsupported_reason="no RayCastSensor.")
+    )
+    with pytest.raises(ValueError, match="shorter observation vector"):
+        serialize_observation_term("height_scan", term, object(), None, None)

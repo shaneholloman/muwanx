@@ -161,14 +161,26 @@ def serialize_observation_term(
     out_dir: Path,
     group_history_length: int | None,
 ) -> dict[str, Any] | None:
-    """Serialize one observation term. Returns ``None`` for a dropped/unsupported term."""
+    """Serialize one observation term.
+
+    Raises rather than degrading. An observation is part of the policy's input
+    vector, so every way of *not* emitting a term correctly produces a silently
+    wrong policy: dropping it shortens the vector the network was trained on, and
+    baking a time-varying term freezes an input. Both used to happen here — see
+    :class:`~mjswan.compile.tracer.UntraceableTerm`.
+    """
     from .compile import trace_term
-    from .compile.tracer import slots_json
+    from .compile.tracer import ConstantTerm, slots_json
 
     func = term_cfg.func
     if isinstance(func, ObservationBinding):
         if func.unsupported_reason is not None:
-            return None
+            raise ValueError(
+                f"Observation term {name!r} cannot be exported: "
+                f"{func.unsupported_reason} Dropping it would hand the policy a "
+                "shorter observation vector than it was trained on, so the build "
+                "stops here rather than emitting one."
+            )
         return term_cfg.to_dict()
 
     params = _resolved_params(term_cfg.params, env)
@@ -179,13 +191,11 @@ def serialize_observation_term(
 
     try:
         export = trace_term(func, params, env, name=name)
-    except ValueError:
-        # Not one of the two known native shapes above, and no
-        # `entity.data.<field>` reads at all -- genuinely constant-valued
-        # (e.g. a fixed-size placeholder/padding term with no env
-        # dependency). Bake the value directly from a real call against the
-        # live env; no graph needed. Re-raises if this isn't even a Tensor
-        # (fail loud on anything genuinely unexpected).
+    except ConstantTerm:
+        # Read *nothing* off the env, so the value cannot vary — a fixed-size
+        # padding term. Bake it from a real call; no graph needed. `UntraceableTerm`
+        # deliberately does not land here: it means state was read that the tracer
+        # could not follow, and baking that freezes a live input.
         import torch
 
         value = func(env, **params)

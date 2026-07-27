@@ -376,6 +376,40 @@ class _TermModule(nn.Module):
 # ---------------------------------------------------------------------------
 
 
+class ConstantTerm(ValueError):
+    """A term that read no simulation state at all — its value is a constant.
+
+    Genuinely env-independent (a fixed-size padding term, say), so a caller may
+    safely bake the value. Distinct from :class:`UntraceableTerm` because the two
+    look identical from "no graph inputs" alone and must not be handled alike.
+    """
+
+
+class UntraceableTerm(ValueError):
+    """A term that read state the tracer could not follow into the graph.
+
+    The recording pass saw accesses but none yielded a tensor — e.g. mjlab's
+    ``height_scan`` reads a ``RayCastSensor`` whose ``.data`` is a dataclass of
+    ray hits, not a tensor field. Such a term is *time-varying*, so baking its
+    trace-time value freezes it: a policy would receive a fixed terrain profile
+    forever, with nothing in the build output saying so. ADR 0005's rule applies —
+    a term that fails to trace fails the build.
+    """
+
+    def __init__(self, term: str, touched: list[str]):
+        self.term = term
+        self.touched = touched
+        super().__init__(
+            f"Observation term {term!r} reads state the tracer cannot turn into a "
+            f"graph input: {', '.join(touched) or '(nothing usable)'}. Baking its "
+            "current value would freeze a time-varying input and silently feed the "
+            "policy stale numbers. Either supply a trace-friendly replacement via "
+            "register_observation(), or drop the term from the exported group and "
+            "retrain — a shorter observation vector is not interchangeable with the "
+            "one the policy was trained on."
+        )
+
+
 @dataclass
 class TermExport:
     """The result of tracing one term body to ONNX."""
@@ -526,9 +560,14 @@ def trace_term(
         bucket.setdefault(key, value)
 
     if not dynamic:
-        raise ValueError(
-            f"Term {name!r} reads no time-varying state; handle it as a native "
-            "term (e.g. time_out), not an ONNX graph (ADR 0005)."
+        if recorder._log:  # noqa: SLF001 — internal proxy
+            # State *was* read; the tracer just could not follow it into a tensor.
+            raise UntraceableTerm(
+                name, sorted({slot_label(k) for k, _ in recorder._log})
+            )  # noqa: SLF001
+        raise ConstantTerm(
+            f"Term {name!r} reads no simulation state at all; handle it as a native "
+            "term (e.g. time_out) or bake its value (ADR 0005)."
         )
 
     dynamic_keys = sorted(dynamic)
@@ -1259,4 +1298,268 @@ def trace_command_term(
         write_targets=write_targets,
         reference_rand=ref_rand.detach(),
         input_shapes=[list(dynamic[k].shape) for k in dynamic_keys],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Observation-group fusion (ADR 0005 §4, companion brief §4b)
+# ---------------------------------------------------------------------------
+
+
+NATIVE_OBSERVATION_FUNCS: dict[str, str] = {
+    # mjlab funcs that read env-level state rather than `entity.data`, so there is
+    # nothing to trace: the runtime already holds these values every frame.
+    "last_action": "prev_action",
+    "generated_commands": "command",
+}
+
+
+def _native_observation_kind(func: Callable[..., Any]) -> str | None:
+    return NATIVE_OBSERVATION_FUNCS.get(getattr(func, "__name__", ""))
+
+
+@dataclass
+class GroupTermSpec:
+    """One term inside a fused group, as :func:`trace_observation_group` needs it."""
+
+    name: str
+    func: Callable[..., torch.Tensor]
+    params: dict[str, Any]
+    clip: tuple[float, float] | None = None
+    scale: Any = None
+    """Per-term scale — a float, or a sequence broadcast over the term's width."""
+
+
+@dataclass
+class GroupExport:
+    """The result of fusing one observation group into a single ONNX graph."""
+
+    name: str
+    onnx_bytes: bytes
+    input_slots: list[SlotKey]
+    """Deduplicated union of every term's dynamic slots, in graph input order."""
+    input_names: list[str]
+    input_shapes: list[list[int]]
+    native_inputs: list[dict[str, Any]]
+    """Per native term: ``{name, native, input, size, ...}`` — fed by the runtime."""
+    layout: list[dict[str, Any]]
+    """``{name, size}`` per term, in concat order, for the runtime's group layout."""
+    output_name: str
+    reference_output: torch.Tensor
+    constant_slots: list[SlotKey] = field(default_factory=list)
+
+
+class _GroupModule(nn.Module):
+    """Runs a whole observation group: every term body, then clip/scale, then cat.
+
+    The single ``forward`` reproduces mjlab's ``compute_group`` for the terms it
+    owns — per-term ``clip`` *then* ``scale`` (that order is mjlab's), then
+    concatenation in declaration order. One replay env is built for all of them, so
+    a slot two terms share is read once rather than marshalled twice.
+
+    Native terms are graph *inputs* rather than bodies: ``last_action`` and
+    ``generated_commands`` read env-level state the runtime already holds, so
+    feeding the value in keeps the group's output the complete observation vector
+    instead of something the runtime must splice offsets into.
+    """
+
+    def __init__(
+        self,
+        terms: list[GroupTermSpec],
+        dynamic_keys: list[SlotKey],
+        constants: dict[SlotKey, torch.Tensor],
+        *,
+        sensors: dict[str, Any],
+        commands: dict[str, Any],
+        native_names: list[str],
+        baked: dict[str, torch.Tensor],
+    ):
+        super().__init__()
+        self._terms = terms
+        self._dynamic_keys = dynamic_keys
+        self._sensors = sensors
+        self._commands = commands
+        self._native_names = native_names
+        self._const_buffers: dict[SlotKey, str] = {}
+        for i, (key, value) in enumerate(constants.items()):
+            buffer_name = f"_const_{i}"
+            self.register_buffer(buffer_name, value.detach().clone())
+            self._const_buffers[key] = buffer_name
+        # Terms with no dynamic state at all (a fixed-size padding term, say) are
+        # values, not functions — bake them like any other constant.
+        self._baked_buffers: dict[str, str] = {}
+        for i, (term_name, value) in enumerate(baked.items()):
+            buffer_name = f"_baked_{i}"
+            self.register_buffer(buffer_name, value.detach().clone())
+            self._baked_buffers[term_name] = buffer_name
+
+    def forward(self, *args: torch.Tensor) -> torch.Tensor:
+        split = len(self._dynamic_keys)
+        slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, args[:split]))
+        for key, buffer_name in self._const_buffers.items():
+            slots[key] = getattr(self, buffer_name)
+        native = dict(zip(self._native_names, args[split:]))
+        env = _ReplayEnv(slots, self._sensors, self._commands)
+
+        pieces: list[torch.Tensor] = []
+        for term in self._terms:
+            if term.name in native:
+                value = native[term.name]
+            elif term.name in self._baked_buffers:
+                value = getattr(self, self._baked_buffers[term.name])
+            else:
+                value = term.func(env, **term.params)
+            # mjlab's order: clip, then scale (observation_manager.compute_group).
+            if term.clip is not None:
+                value = torch.clamp(value, min=term.clip[0], max=term.clip[1])
+            if term.scale is not None:
+                value = value * _scale_tensor(term.scale, value)
+            pieces.append(value.reshape(value.shape[0], -1))
+        return torch.cat(pieces, dim=-1)
+
+
+def _scale_tensor(scale: Any, like: torch.Tensor) -> torch.Tensor:
+    """A term's ``scale`` as a tensor broadcastable over its output."""
+    if isinstance(scale, torch.Tensor):
+        return scale.to(like.dtype)
+    if isinstance(scale, (list, tuple)):
+        return torch.tensor(list(scale), dtype=like.dtype, device=like.device)
+    return torch.tensor(float(scale), dtype=like.dtype, device=like.device)
+
+
+def trace_observation_group(
+    terms: list[GroupTermSpec],
+    env: Any,
+    *,
+    name: str,
+    opset: int = 17,
+) -> GroupExport:
+    """Fuse an observation group's terms into one ONNX graph (ADR 0005 §4).
+
+    One graph per group instead of one per term. The motivation is measured in the
+    companion brief §4b: a per-term graph can be a *single* node (three of G1's
+    five are `Identity`), so the fixed per-``ort.run()`` cost — the JS↔WASM
+    crossing, tensor marshalling, a promise round-trip — is the entire expense, and
+    slots two terms share get marshalled twice.
+
+    Inputs are the deduplicated union of the terms' dynamic slots, followed by one
+    input per native term. The output is the group's concatenated vector with each
+    term's clip/scale folded in — i.e. exactly what the policy consumes, minus
+    history (state across frames, which stays with the runtime's ring buffer).
+
+    Raises:
+        ValueError: if no term reads dynamic state (the whole group is constant, so
+            there is nothing to run per frame) or if tracing fails.
+    """
+    # 1. Discovery, per term: what does each read, and is it native?
+    dynamic: dict[SlotKey, torch.Tensor] = {}
+    constants: dict[SlotKey, torch.Tensor] = {}
+    sensors: dict[str, Any] = {}
+    commands: dict[str, Any] = {}
+    native_inputs: list[dict[str, Any]] = []
+    native_examples: list[torch.Tensor] = []
+    baked: dict[str, torch.Tensor] = {}
+    layout: list[dict[str, Any]] = []
+
+    for term in terms:
+        native_kind = _native_observation_kind(term.func)
+        if native_kind is not None:
+            value = term.func(env, **term.params).detach()
+            entry: dict[str, Any] = {
+                "name": term.name,
+                "native": native_kind,
+                "input": "native__" + re.sub(r"\W", "_", term.name),
+                "size": int(value.reshape(1, -1).shape[-1]),
+            }
+            if native_kind == "command":
+                entry["command_name"] = term.params["command_name"]
+            elif term.params.get("action_name") is not None:
+                entry["action_name"] = term.params["action_name"]
+            native_inputs.append(entry)
+            native_examples.append(value)
+            layout.append({"name": term.name, "size": entry["size"]})
+            continue
+
+        recorder = _RecordingEnv(env)
+        recorded = term.func(recorder, **term.params)
+        if not isinstance(recorded, torch.Tensor):
+            raise ValueError(
+                f"Observation term {term.name!r} returned "
+                f"{type(recorded).__name__}, not a Tensor."
+            )
+        term_dynamic = False
+        for key, value in recorder._log:  # noqa: SLF001 — internal proxy
+            if not isinstance(value, torch.Tensor):
+                continue
+            namespace, field_name = key
+            if namespace in (_SENSOR_NS, _COMMAND_NS) or _is_dynamic_field(field_name):
+                dynamic.setdefault(key, value)
+                term_dynamic = True
+            else:
+                constants.setdefault(key, value)
+        sensors.update(recorder._sensors)  # noqa: SLF001 — internal proxy
+        commands.update(recorder._commands)  # noqa: SLF001 — internal proxy
+        if not term_dynamic:
+            # Same discriminator as `trace_term`: nothing read at all means a
+            # genuine constant; reads the tracer could not follow mean a
+            # time-varying term that must not be frozen into the group's vector.
+            if recorder._log:  # noqa: SLF001 — internal proxy
+                raise UntraceableTerm(
+                    term.name,
+                    sorted({slot_label(k) for k, _ in recorder._log}),  # noqa: SLF001
+                )
+            baked[term.name] = recorded.detach()
+        layout.append(
+            {"name": term.name, "size": int(recorded.reshape(1, -1).shape[-1])}
+        )
+
+    if not dynamic:
+        raise ValueError(
+            f"Observation group {name!r} reads no time-varying state; every term is "
+            "native or constant, so there is no graph to run."
+        )
+
+    # 2. Fuse and export. Slot order is sorted for determinism; native inputs
+    #    follow, in declaration order.
+    dynamic_keys = sorted(dynamic)
+    slot_names = [_slot_input_name(k) for k in dynamic_keys]
+    native_names = [entry["name"] for entry in native_inputs]
+    input_names = [*slot_names, *(entry["input"] for entry in native_inputs)]
+    example_inputs = tuple(dynamic[k] for k in dynamic_keys) + tuple(native_examples)
+
+    module = _GroupModule(
+        terms,
+        dynamic_keys,
+        constants,
+        sensors=sensors,
+        commands=commands,
+        native_names=native_names,
+        baked=baked,
+    ).eval()
+    output_name = "obs"
+    buffer = io.BytesIO()
+    with torch.no_grad():
+        reference = module(*example_inputs).detach()
+        torch.onnx.export(
+            module,
+            example_inputs,
+            buffer,
+            input_names=input_names,
+            output_names=[output_name],
+            dynamic_axes={n: {0: "batch"} for n in [*input_names, output_name]},
+            opset_version=opset,
+            dynamo=False,
+        )
+
+    return GroupExport(
+        name=name,
+        onnx_bytes=buffer.getvalue(),
+        input_slots=dynamic_keys,
+        input_names=slot_names,
+        input_shapes=[list(dynamic[k].shape) for k in dynamic_keys],
+        native_inputs=native_inputs,
+        layout=layout,
+        output_name=output_name,
+        reference_output=reference,
+        constant_slots=sorted(constants),
     )
