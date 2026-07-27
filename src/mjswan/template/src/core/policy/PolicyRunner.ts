@@ -1,5 +1,10 @@
 import { ObservationBase } from '../observation/ObservationBase';
 import {
+  FusedObservation,
+  isFusedObservationConfig,
+  type FusedObservationConfig,
+} from '../observation/FusedObservation';
+import {
   NativeObservation,
   isNativeObservationConfig,
 } from '../observation/NativeObservation';
@@ -302,6 +307,13 @@ export class PolicyRunner {
     };
 
     for (const [key, value] of Object.entries(obsConfig)) {
+      // A fused group (ADR 0005 §4) is one graph for all its terms; the per-term
+      // list below is what a group that could not fuse still uses.
+      if (isFusedObservationConfig(value)) {
+        const fused = this.buildFusedObservation(key, value);
+        this.registerGroup(key, [fused], [{ name: key }], undefined, value.layout);
+        continue;
+      }
       if (Array.isArray(value)) {
         const obsList = value.map(buildObservation);
         this.registerGroup(key, obsList, value);
@@ -361,17 +373,42 @@ export class PolicyRunner {
     return new OnnxObservation(this, entry, { session, readSlot });
   }
 
+  /**
+   * Build the single handler for a fused group, or throw.
+   *
+   * Loud like the per-term case, and for the same reason: a group with no graph is
+   * a policy with no input vector, not a degraded one.
+   */
+  private buildFusedObservation(
+    key: string,
+    config: FusedObservationConfig
+  ): FusedObservation {
+    const session = this.options.onnxSessions?.get(config.fused);
+    const readSlot = this.options.readOnnxSlot;
+    if (!session || !readSlot) {
+      throw new Error(
+        `Observation group "${key}" needs the ONNX session "${config.fused}" and a ` +
+          'slot reader; pass onnxSessions/readOnnxSlot in PolicyRunnerOptions.'
+      );
+    }
+    return new FusedObservation(this, { ...config, name: key }, { session, readSlot });
+  }
+
   private registerGroup(
     key: string,
     obsList: ObservationBase[],
     configList: ObservationConfigEntry[],
-    history?: { steps: number; interleaved: boolean }
+    history?: { steps: number; interleaved: boolean },
+    /** Fused groups only: per-term widths, since one handler covers every term. */
+    fusedLayout?: Array<{ name: string; size: number }>
   ): void {
     this.obsGroups[key] = obsList;
-    this.obsLayouts[key] = obsList.map((obs, index) => ({
-      name: configList[index]?.name ?? `obs_${index}`,
-      size: obs.size,
-    }));
+    this.obsLayouts[key] = fusedLayout
+      ? fusedLayout.map((entry) => ({ ...entry }))
+      : obsList.map((obs, index) => ({
+          name: configList[index]?.name ?? `obs_${index}`,
+          size: obs.size,
+        }));
     const baseSize = this.obsLayouts[key].reduce((sum, entry) => sum + entry.size, 0);
     if (history && history.steps > 1) {
       this.historyConfig[key] = history;

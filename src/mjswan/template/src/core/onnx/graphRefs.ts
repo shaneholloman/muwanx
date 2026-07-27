@@ -28,10 +28,14 @@ function collectFrom(value: unknown, into: Set<string>): void {
   }
   if (typeof value !== 'object' || value === null) return;
   const record = value as Record<string, unknown>;
-  const ref = record.onnx;
-  // `onnx` is a path on a term entry, but an *object* at the policy top level
-  // (`{path, meta}` — the policy network itself, delivered as `PolicyInput.onnx`).
-  if (typeof ref === 'string') into.add(ref);
+  // `onnx` names a per-term graph; `fused` names a whole group's graph (ADR 0005
+  // §4). Both are paths relative to the config. `onnx` is also an *object* at the
+  // policy top level (`{path, meta}` — the policy network itself, which arrives as
+  // `PolicyInput.onnx`), hence the string check.
+  for (const key of ['onnx', 'fused'] as const) {
+    const ref = record[key];
+    if (typeof ref === 'string') into.add(ref);
+  }
   for (const nested of Object.values(record)) collectFrom(nested, into);
 }
 

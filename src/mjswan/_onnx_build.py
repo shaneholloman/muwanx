@@ -224,10 +224,81 @@ def serialize_observation_term(
     return _apply_observation_pipeline(entry, term_cfg, group_history_length)
 
 
+def _effective_history(group: ObservationGroupCfg, term_cfg: ObservationTermCfg) -> int:
+    """Stack depth applied to one term — group level wins, as in mjlab."""
+    return int(group.history_length or term_cfg.history_length or 0)
+
+
+def _group_is_fusable(group: ObservationGroupCfg) -> bool:
+    """Whether the whole group can become one graph (ADR §4, brief §4b).
+
+    Two things disqualify a group:
+
+    - **A legacy ``*Binding`` term.** It resolves to a hand-written TS class, whose
+      body exists only in the browser — there is nothing to trace into the graph.
+    - **Per-term history deeper than one frame.** mjlab stacks each term
+      *before* concatenating, so the group vector interleaves per-term histories;
+      a fused graph emits one concatenation and the runtime's group-level ring
+      buffer would stack the whole thing instead, giving step-major order where
+      mjlab gives term-major. A depth of 1 is a no-op and stays fusable.
+
+    Anything else — traced bodies, native markers, baked constants — fuses. An
+    untraceable term is not handled here: it fails the build either way.
+    """
+    for term_cfg in group.terms.values():
+        if isinstance(term_cfg.func, ObservationBinding):
+            return False
+        if _effective_history(group, term_cfg) > 1:
+            return False
+    return True
+
+
+def _fused_group_entry(
+    group: ObservationGroupCfg, env: Any, out_dir: Path, group_name: str
+) -> dict[str, Any]:
+    """Trace the group as one graph and return the fused config entry."""
+    from .compile.tracer import (
+        GroupTermSpec,
+        slots_json,
+        trace_observation_group,
+    )
+
+    specs = [
+        GroupTermSpec(
+            name=name,
+            func=term_cfg.func,
+            params=_resolved_params(term_cfg.params, env),
+            clip=tuple(term_cfg.clip) if term_cfg.clip else None,
+            scale=term_cfg.scale,
+        )
+        for name, term_cfg in group.terms.items()
+    ]
+    export = trace_observation_group(specs, env, name=group_name)
+    ref = _onnx_ref("obs", group_name)
+    _write_onnx(out_dir, ref, export.onnx_bytes)
+    return {
+        "fused": ref,
+        "input_slots": slots_json(export),
+        "native_inputs": export.native_inputs,
+        # Per-term widths in concat order: the runtime needs them for its group
+        # layout (the debug overlay names each slice) even though it runs one graph.
+        "layout": export.layout,
+        "size": _tensor_width(export.reference_output),
+    }
+
+
 def serialize_observation_group(
-    group: ObservationGroupCfg, env: Any, out_dir: Path
-) -> list[dict[str, Any]]:
-    """Serialize every term in an observation group to a JSON-ready list."""
+    group: ObservationGroupCfg, env: Any, out_dir: Path, group_name: str = "policy"
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """Serialize an observation group — one fused graph where possible, else per term.
+
+    Fusion is ADR §4's mandatory-for-v1 optimization: a per-term graph can be a
+    single node (three of G1's five are ``Identity``), so the fixed per-``ort.run()``
+    cost is the entire expense, and a slot two terms share gets marshalled twice.
+    See the companion brief §4b for the measurements.
+    """
+    if _group_is_fusable(group):
+        return _fused_group_entry(group, env, out_dir, group_name)
     result = []
     for name, term_cfg in group.terms.items():
         entry = serialize_observation_term(

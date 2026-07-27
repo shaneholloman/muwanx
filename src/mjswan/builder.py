@@ -498,8 +498,10 @@ class Builder:
                 target_key = key
                 if target_key in obs_config:
                     target_key = f"{key}_monitor"
+                # `target_key` names the fused graph too, so two groups in one
+                # policy cannot overwrite each other's `obs/<group>.onnx`.
                 obs_config[target_key] = serialize_observation_group(
-                    group, env, scene_dir
+                    group, env, scene_dir, target_key
                 )
             data["observations"] = obs_config
         if policy.actions:

@@ -809,10 +809,46 @@ class TestSaveWebPolicyJson:
 
         out = self._run(builder, tmp_path)
         data = self._policy_json(out, "Policy")
-        joint_pos = data["observations"]["policy"][0]
-        assert joint_pos["onnx"] == "obs/joint_pos.onnx"
-        assert joint_pos["scale"] == 0.5
-        assert (out / "main" / "assets" / "s" / joint_pos["onnx"]).exists()
+        # The group fuses (ADR 0005 §4): one graph named for the group, not one per
+        # term, and `scale` is folded into it rather than shipped for the runtime.
+        group = data["observations"]["policy"]
+        assert group["fused"] == "obs/policy.onnx"
+        assert group["layout"] == [{"name": "joint_pos", "size": 2}]
+        assert group["size"] == 2
+        assert "scale" not in group
+        assert (out / "main" / "assets" / "s" / group["fused"]).exists()
+
+    def test_per_term_observations_when_the_group_cannot_fuse(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        # A term stacking its own history keeps the per-term path: mjlab stacks
+        # before concatenating, so one fused output would order the group's history
+        # differently (see `_group_is_fusable`).
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={
+                        "joint_pos": ObservationTermCfg(
+                            func=_fake_joint_pos_rel, scale=0.5, history_length=3
+                        ),
+                    }
+                ),
+            },
+        )
+
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
+        terms = data["observations"]["policy"]
+        assert isinstance(terms, list)
+        assert terms[0]["onnx"] == "obs/joint_pos.onnx"
+        assert terms[0]["scale"] == 0.5
+        assert terms[0]["history_length"] == 3
 
     # -----------------------------------------------------------------------
     # config_path branch

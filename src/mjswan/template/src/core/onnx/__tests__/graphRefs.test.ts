@@ -78,3 +78,20 @@ describe('eventGraphRefs', () => {
     expect(eventGraphRefs([])).toEqual([]);
   });
 });
+
+describe('policyGraphRefs — fused groups', () => {
+  it('collects a fused group graph, named by `fused` rather than `onnx`', () => {
+    // The whole group is one graph (ADR 0005 §4). A collector that only looked at
+    // `onnx` would deliver no bytes at all for such a policy.
+    expect(
+      policyGraphRefs({
+        onnx: { path: 'walk.onnx' },
+        observations: {
+          policy: { fused: 'obs/policy.onnx', size: 99, layout: [] },
+          critic: { fused: 'obs/critic.onnx', size: 12, layout: [] },
+        },
+        terminations: { fell_over: { onnx: 'term/fell_over.onnx' } },
+      }),
+    ).toEqual(['obs/critic.onnx', 'obs/policy.onnx', 'term/fell_over.onnx']);
+  });
+});

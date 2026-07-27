@@ -113,9 +113,14 @@ def test_serialized_observation_widths_match_mjlab(task_id, tmp_path):
 
     groups = adapt_observations({"policy": cfg.observations["actor"]})
     assert groups is not None
-    entries = serialize_observation_group(groups["policy"], env, tmp_path)
+    entries = serialize_observation_group(groups["policy"], env, tmp_path, "policy")
 
-    actual = {e["name"]: e.get("size") for e in entries}
+    # These groups all fuse (ADR 0005 §4), so the per-term widths live in the
+    # group's `layout` — the runtime still needs them to name each slice of the one
+    # vector the graph emits.
+    assert isinstance(entries, dict), "expected a fused group"
+    actual = {term["name"]: term["size"] for term in entries["layout"]}
     assert actual == expected
+    assert entries["size"] == sum(expected.values())
     # And the concatenated group width the policy network sees.
     assert sum(actual.values()) == sum(expected.values())
