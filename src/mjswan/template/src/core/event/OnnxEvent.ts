@@ -28,6 +28,7 @@
  */
 
 import { SeededRng } from '../rng';
+import { slotInputName } from '../onnx/session';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from './entityWrite';
 import type { EventContext } from './EventBase';
@@ -92,7 +93,7 @@ export class OnnxEvent {
       for (const slot of this.config.input_slots ?? []) {
         const value = this.deps.readSlot?.(slot) ?? null;
         if (!value) continue;
-        feeds[`${slot.entity ?? 'entity'}__${slot.field}`] = { data: value, dims: [1, value.length] };
+        feeds[slotInputName(slot)] = { data: value, dims: [1, value.length] };
       }
       feeds.rand = {
         data: this.deps.rng.randVector(this.config.rand_dim, this.config.rand_ranges),

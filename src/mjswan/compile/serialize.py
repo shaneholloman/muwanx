@@ -24,7 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .tracer import CommandExport
+from .tracer import CommandExport, slot_to_json
 
 # Authoritative JSON Schema for one OnnxCommand config entry. The TS runtime
 # validates the manifest against this at load time (brief §6); the Python emitter
@@ -68,15 +68,24 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
                 },
             },
         },
+        # Two slot shapes (mjswan.compile.tracer.slot_to_json): an ``Entity.data``
+        # read carries entity+field; a whole-sensor read carries sensor. Both
+        # carry ``input``, the graph input name to feed the value as.
         "input_slots": {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["entity", "field"],
+                "required": ["input"],
                 "additionalProperties": False,
+                "oneOf": [
+                    {"required": ["entity", "field"]},
+                    {"required": ["sensor"]},
+                ],
                 "properties": {
                     "entity": {"type": ["string", "null"]},
                     "field": {"type": "string"},
+                    "sensor": {"type": "string"},
+                    "input": {"type": "string"},
                 },
             },
         },
@@ -152,7 +161,7 @@ def command_config(
         "command_field": export.command_field,
         "rand_dim": export.rand_dim,
         "state_fields": export.state_fields,
-        "input_slots": [{"entity": e, "field": f} for e, f in export.input_slots],
+        "input_slots": [slot_to_json(k) for k in export.input_slots],
         "write_targets": export.write_targets,
         "debug_vis": bool(debug_vis),
     }
@@ -227,8 +236,10 @@ def validate_command_config(cfg: dict[str, Any]) -> list[str]:
         )
 
     for slot in cfg.get("input_slots", []):
-        if not isinstance(slot, dict) or "field" not in slot:
-            errors.append(f"input_slot must have 'field': {slot!r}")
+        if not isinstance(slot, dict) or "input" not in slot:
+            errors.append(f"input_slot must have 'input': {slot!r}")
+        elif "sensor" not in slot and "field" not in slot:
+            errors.append(f"input_slot must have 'sensor' or 'field': {slot!r}")
 
     rtr = cfg.get("resampling_time_range")
     if rtr is not None and (not isinstance(rtr, list) or len(rtr) != 2):

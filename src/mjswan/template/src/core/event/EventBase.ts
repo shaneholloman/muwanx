@@ -1,3 +1,5 @@
+import type { OnnxInputSlot } from '../onnx/session';
+
 export type EventConfig = {
   name: string;
   params?: Record<string, unknown>;
@@ -9,7 +11,7 @@ export type EventConfig = {
   mode?: 'startup' | 'reset' | 'interval';
   onnx?: string;
   rand_dim?: number;
-  input_slots?: Array<{ entity?: string | null; field: string }>;
+  input_slots?: OnnxInputSlot[];
   write_targets?: unknown[];
   rand_ranges?: Array<[number, number]>;
   interval_range_s?: [number, number];

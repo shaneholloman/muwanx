@@ -135,6 +135,32 @@ describe('OnnxCommand: state threading and command output', () => {
     await cmd.step(true);
     expect(values(session.calls[0].robot__heading_w)).toEqual([1.25]);
   });
+
+  it('feeds a sensor slot under its build-supplied input name', async () => {
+    // A sensor slot has no `field`; its graph input name is only knowable from
+    // the build-supplied `input` (the MJCF path is folded to an identifier).
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand(
+      'twist',
+      {
+        ...VELOCITY_CFG,
+        input_slots: [
+          { sensor: 'robot/imu_ang_vel', input: 'sensor__robot_imu_ang_vel' },
+        ],
+      },
+      null,
+      {
+        session,
+        rng: new SeededRng(1),
+        readSlot: slot =>
+          slot.sensor === 'robot/imu_ang_vel' ? new Float32Array([0.1, 0.2, 0.3]) : null,
+      },
+    );
+    await cmd.step(true);
+    expect(values(session.calls[0].sensor__robot_imu_ang_vel)).toEqual(
+      [0.1, 0.2, 0.3].map(v => Math.fround(v)),
+    );
+  });
 });
 
 describe('OnnxCommand: resample timer (scalar, ADR §5)', () => {

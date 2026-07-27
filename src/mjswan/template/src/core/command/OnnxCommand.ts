@@ -38,6 +38,7 @@
 import * as THREE from 'three';
 import { SeededRng } from '../rng';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from '../event/entityWrite';
+import { slotInputName } from '../onnx/session';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import { mjcToThreeCoordinate } from '../scene/coordinate';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
@@ -207,10 +208,7 @@ export class OnnxCommand implements CommandTerm {
     for (const slot of this.cfg.input_slots ?? []) {
       const value = this.deps.readSlot?.(slot) ?? null;
       if (!value) continue;
-      feeds[`${slot.entity ?? 'entity'}__${slot.field}`] = {
-        data: value,
-        dims: [1, value.length],
-      };
+      feeds[slotInputName(slot)] = { data: value, dims: [1, value.length] };
     }
     feeds.resample_mask = { data: new Uint8Array([resample ? 1 : 0]), dims: [1] };
     feeds.rand = {

@@ -220,6 +220,7 @@ def serialize_event(
 ) -> dict[str, Any] | None:
     """Serialize one event term (any mode). Returns ``None`` if genuinely nothing to emit."""
     from .compile import trace_event_term
+    from .compile.tracer import slot_to_json
 
     func = term_cfg.func
     if isinstance(func, EventBinding):
@@ -243,7 +244,7 @@ def serialize_event(
         "mode": term_cfg.mode,
         "onnx": ref,
         "rand_dim": export.rand_dim,
-        "input_slots": [{"entity": e, "field": f} for e, f in export.input_slots],
+        "input_slots": [slot_to_json(k) for k in export.input_slots],
         "write_targets": export.write_targets,
     }
     if term_cfg.mode == "interval":

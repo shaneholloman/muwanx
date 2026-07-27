@@ -19,10 +19,31 @@ export interface OnnxTensorLike {
   dims: readonly number[];
 }
 
-/** A dynamic runtime read a command/event term's graph declares as an input. */
+/**
+ * A dynamic runtime read a term's graph declares as an input.
+ *
+ * Two shapes, distinguished by which field is set (mirroring
+ * `mjswan.compile.tracer.slot_to_json`):
+ * - `entity` + `field` — one `Entity.data.<field>` tensor.
+ * - `sensor` — a whole MuJoCo sensor's value (mjlab's `builtin_sensor`).
+ *
+ * `input` is the graph input name to feed this slot's value as. Prefer it over
+ * re-deriving a name from `entity`/`field`: sensor names carry MJCF paths that
+ * the build folds to identifiers, so the mapping is not reproducible here.
+ * Optional only for backward compatibility with configs emitted before it
+ * existed — see `slotInputName`.
+ */
 export interface OnnxInputSlot {
   entity?: string | null;
-  field: string;
+  field?: string;
+  sensor?: string;
+  input?: string;
+}
+
+/** The graph input name for a slot: the build-supplied one, else the legacy scheme. */
+export function slotInputName(slot: OnnxInputSlot): string {
+  if (slot.input) return slot.input;
+  return `${slot.entity ?? 'entity'}__${slot.field ?? ''}`;
 }
 
 /** Reads the dynamic runtime state an `OnnxInputSlot` declares, or null if absent. */

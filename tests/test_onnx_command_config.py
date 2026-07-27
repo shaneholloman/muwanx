@@ -21,7 +21,7 @@ from mjswan.compile import (  # noqa: E402
     validate_command_config,
     write_command_artifact,
 )
-from mjswan.compile.tracer import CommandExport  # noqa: E402
+from mjswan.compile.tracer import _SENSOR_NS, CommandExport, slot_to_json  # noqa: E402
 
 
 def _make_export() -> CommandExport:
@@ -59,8 +59,13 @@ def test_command_config_shape():
     assert cfg["command_field"] == "vel_command_b"
     assert cfg["rand_dim"] == 6
     assert cfg["resampling_time_range"] == [3.0, 8.0]
-    # dynamic runtime read threaded as a declared input slot
-    assert {"entity": "robot", "field": "heading_w"} in cfg["input_slots"]
+    # dynamic runtime read threaded as a declared input slot; `input` names the
+    # graph input to feed it as, so the runtime never re-derives it
+    assert {
+        "entity": "robot",
+        "field": "heading_w",
+        "input": "robot__heading_w",
+    } in cfg["input_slots"]
     # every state field carries a shape + dtype (brief §3a)
     for sf in cfg["state_fields"]:
         assert set(sf) == {"name", "shape", "dtype"}
@@ -102,6 +107,40 @@ def test_validate_catches_bad_command_field():
     cfg["command_field"] = "not_a_state_field"
     errors = validate_command_config(cfg)
     assert any("command_field" in e for e in errors)
+
+
+def test_slot_to_json_entity_data():
+    assert slot_to_json(("robot", "joint_pos")) == {
+        "entity": "robot",
+        "field": "joint_pos",
+        "input": "robot__joint_pos",
+    }
+
+
+def test_slot_to_json_sensor():
+    # A whole-sensor read (mjlab's builtin_sensor) is its own slot shape, and the
+    # MJCF path in the name is folded to an identifier for the graph input.
+    assert slot_to_json((_SENSOR_NS, "robot/imu_lin_vel")) == {
+        "sensor": "robot/imu_lin_vel",
+        "input": "sensor__robot_imu_lin_vel",
+    }
+
+
+def test_command_config_accepts_a_sensor_slot():
+    export = _make_export()
+    export.input_slots = [(_SENSOR_NS, "robot/imu_ang_vel")]
+    cfg = command_config(export, onnx_ref="command/twist.onnx")
+    assert cfg["input_slots"] == [
+        {"sensor": "robot/imu_ang_vel", "input": "sensor__robot_imu_ang_vel"}
+    ]
+    assert validate_command_config(cfg) == []
+
+
+def test_validate_catches_slot_without_input_name():
+    export = _make_export()
+    cfg = command_config(export, onnx_ref="command/twist.onnx")
+    del cfg["input_slots"][0]["input"]
+    assert any("input" in e for e in validate_command_config(cfg))
 
 
 def test_write_command_artifact(tmp_path):

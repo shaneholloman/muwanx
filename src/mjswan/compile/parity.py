@@ -30,6 +30,7 @@ from .tracer import (
     _EventCaptureEnv,
     _flatten_captures,
     read_slot,
+    slot_label,
     trace_event_term,
     trace_term,
 )
@@ -181,7 +182,7 @@ def run_parity(
                 name=term_name,
                 kind="observation",
                 representation="onnx",
-                input_slots=[f"{e}.{f}" for e, f in export.input_slots],
+                input_slots=[slot_label(k) for k in export.input_slots],
                 constant_slots=[f"{e}.{f}" for e, f in export.constant_slots],
             )
         )
@@ -235,7 +236,7 @@ def run_parity(
                 tr.note = f"{type(exc).__name__}: {str(exc).splitlines()[0][:80]}"
                 continue
             tr.rand_dim = export.rand_dim
-            tr.input_slots = [f"{e}.{f}" for e, f in export.input_slots]
+            tr.input_slots = [slot_label(k) for k in export.input_slots]
             tr.constant_slots = list(export.constant_slots)
             session = ort.InferenceSession(
                 export.onnx_bytes, providers=["CPUExecutionProvider"]
@@ -296,7 +297,7 @@ def run_command_parity(
         term, state_fields, name=name, command_field=command_field
     )
     tr.rand_dim = export.rand_dim
-    tr.input_slots = [f"{e}.{f}" for e, f in export.input_slots]
+    tr.input_slots = [slot_label(k) for k in export.input_slots]
     tr.note = f"state={[s['name'] for s in export.state_fields]} cmd={command_field}"
     session = ort.InferenceSession(
         export.onnx_bytes, providers=["CPUExecutionProvider"]

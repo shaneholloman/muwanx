@@ -29,6 +29,7 @@ free — exactly as ADR 0005 §Consequences requires.
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -64,8 +65,45 @@ _DYNAMIC_DATA_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-# A slot key identifies one tensor read off the env: (entity_name, data_field).
+# A slot key identifies one tensor read off the env, as ``(namespace, name)``:
+#   (entity_name, data_field)  -> env.scene[entity].data.<field>
+#   (_SENSOR_NS, sensor_name)  -> env.scene[sensor].data  (a whole BuiltinSensor read)
 SlotKey = tuple[str, str]
+
+_SENSOR_NS = "__sensor__"
+"""Namespace marking a :class:`SlotKey` as a sensor read rather than entity data.
+
+mjlab's scene indexes sensors and entities in one ``scene[name]`` namespace, so the
+slot key needs its own marker to stay unambiguous. Not a legal mjlab entity name in
+practice (mjlab names come from MJCF bodies/sites)."""
+
+
+def _sensor_proxy(real: Any, get_data: Callable[[], Any]) -> Any:
+    """A stand-in for a live mjlab ``Sensor`` whose ``.data`` comes from ``get_data``.
+
+    Sensor-reading terms assert on the concrete class (``builtin_sensor`` does
+    ``assert isinstance(sensor, BuiltinSensor)``), so a duck-typed proxy like the
+    entity ones is rejected outright. Subclassing the *real* sensor's own class and
+    sharing its ``__dict__`` keeps that check true — and keeps every other sensor
+    attribute (``cfg``, ``num_frames``, …) working — while overriding only ``data``.
+    """
+    cls = type(real)
+    proxy_cls = type(
+        f"_Proxy{cls.__name__}", (cls,), {"data": property(lambda _self: get_data())}
+    )
+    proxy = object.__new__(proxy_cls)
+    proxy.__dict__ = real.__dict__
+    return proxy
+
+
+def _is_sensor(scene: Any, name: str) -> bool:
+    """Whether ``scene[name]`` resolves to a sensor rather than an entity.
+
+    Asks the real scene's own ``sensors`` mapping rather than sniffing the object,
+    so it matches mjlab's own ``Scene.__getitem__`` resolution order exactly.
+    """
+    sensors = getattr(scene, "sensors", None)
+    return bool(sensors) and name in sensors
 
 
 # ---------------------------------------------------------------------------
@@ -97,21 +135,40 @@ class _RecordingEntity:
 
 
 class _RecordingScene:
-    def __init__(self, real: Any, log: list[tuple[SlotKey, Any]]):
+    def __init__(
+        self,
+        real: Any,
+        log: list[tuple[SlotKey, Any]],
+        sensors: dict[str, Any],
+    ):
         self._real = real
         self._log = log
+        self._sensors = sensors
 
-    def __getitem__(self, name: str) -> _RecordingEntity:
-        return _RecordingEntity(self._real[name], name, self._log)
+    def __getitem__(self, name: str) -> Any:
+        real = self._real[name]
+        if _is_sensor(self._real, name):
+            # Keep the real sensor so the replay pass can subclass its class.
+            self._sensors[name] = real
+            return _sensor_proxy(real, lambda: self._read_sensor(name, real))
+        return _RecordingEntity(real, name, self._log)
+
+    def _read_sensor(self, name: str, real: Any) -> Any:
+        value = real.data
+        self._log.append(((_SENSOR_NS, name), value))
+        return value
 
 
 class _RecordingEnv:
-    """Proxy env that records which ``scene[name].data.<field>`` a term reads."""
+    """Proxy env recording which ``scene[...]`` reads (entity data / sensors) a term makes."""
 
     def __init__(self, real: Any):
         object.__setattr__(self, "_real", real)
         object.__setattr__(self, "_log", [])
-        object.__setattr__(self, "scene", _RecordingScene(real.scene, self._log))
+        object.__setattr__(self, "_sensors", {})
+        object.__setattr__(
+            self, "scene", _RecordingScene(real.scene, self._log, self._sensors)
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._real, name)
@@ -145,16 +202,28 @@ class _ReplayEntity:
 
 
 class _ReplayScene:
-    def __init__(self, slots: dict[SlotKey, torch.Tensor]):
+    def __init__(
+        self,
+        slots: dict[SlotKey, torch.Tensor],
+        sensors: dict[str, Any] | None = None,
+    ):
         self._slots = slots
+        self._sensors = sensors or {}
 
-    def __getitem__(self, name: str) -> _ReplayEntity:
+    def __getitem__(self, name: str) -> Any:
+        real = self._sensors.get(name)
+        if real is not None:
+            return _sensor_proxy(real, lambda: self._slots[(_SENSOR_NS, name)])
         return _ReplayEntity(name, self._slots)
 
 
 class _ReplayEnv:
-    def __init__(self, slots: dict[SlotKey, torch.Tensor]):
-        self.scene = _ReplayScene(slots)
+    def __init__(
+        self,
+        slots: dict[SlotKey, torch.Tensor],
+        sensors: dict[str, Any] | None = None,
+    ):
+        self.scene = _ReplayScene(slots, sensors)
 
 
 class _TermModule(nn.Module):
@@ -171,11 +240,13 @@ class _TermModule(nn.Module):
         params: dict[str, Any],
         dynamic_keys: list[SlotKey],
         constants: dict[SlotKey, torch.Tensor],
+        sensors: dict[str, Any] | None = None,
     ):
         super().__init__()
         self._func = func
         self._params = params
         self._dynamic_keys = dynamic_keys
+        self._sensors = sensors or {}
         self._const_buffers: dict[SlotKey, str] = {}
         for i, (key, value) in enumerate(constants.items()):
             buffer_name = f"_const_{i}"
@@ -186,7 +257,7 @@ class _TermModule(nn.Module):
         slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
         for key, buffer_name in self._const_buffers.items():
             slots[key] = getattr(self, buffer_name)
-        return self._func(_ReplayEnv(slots), **self._params)
+        return self._func(_ReplayEnv(slots, self._sensors), **self._params)
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +285,39 @@ class TermExport:
 
 
 def _slot_input_name(key: SlotKey) -> str:
-    entity, field_name = key
-    return f"{entity}__{field_name}"
+    """The ONNX graph input name for a slot.
+
+    Sensor names carry MJCF paths (``robot/imu_lin_vel``), so non-identifier
+    characters are folded to ``_``. The authoritative name always travels to the
+    runtime in the slot's own ``input`` field (:func:`slot_to_json`) rather than
+    being recomputed there, so this scheme stays a build-time detail.
+    """
+    namespace, name_part = key
+    if namespace == _SENSOR_NS:
+        return "sensor__" + re.sub(r"\W", "_", name_part)
+    return f"{namespace}__{name_part}"
+
+
+def slot_label(key: SlotKey) -> str:
+    """Human-readable slot name for diagnostics (parity reports, logs)."""
+    namespace, name_part = key
+    if namespace == _SENSOR_NS:
+        return f"sensor:{name_part}"
+    return f"{namespace}.{name_part}"
+
+
+def slot_to_json(key: SlotKey) -> dict[str, Any]:
+    """Serialize one input slot for ``policy.json`` / ``config.json``.
+
+    Two shapes, distinguished by which keys are present: ``{"entity", "field"}``
+    for an ``Entity.data`` read and ``{"sensor"}`` for a whole-sensor read. Both
+    carry ``input`` — the graph input name to feed this slot's value as — so the
+    runtime never has to re-derive it from the naming scheme.
+    """
+    namespace, name_part = key
+    if namespace == _SENSOR_NS:
+        return {"sensor": name_part, "input": _slot_input_name(key)}
+    return {"entity": namespace, "field": name_part, "input": _slot_input_name(key)}
 
 
 def trace_term(
@@ -259,8 +361,11 @@ def trace_term(
     for key, value in recorder._log:  # noqa: SLF001 — internal proxy
         if not isinstance(value, torch.Tensor):
             continue  # non-tensor attribute access, not a graph slot
-        _, field_name = key
-        bucket = dynamic if field_name in _DYNAMIC_DATA_FIELDS else constants
+        namespace, field_name = key
+        # A sensor read is live sim state by definition; entity data fields are
+        # dynamic only if the registry says so.
+        is_dynamic = namespace == _SENSOR_NS or field_name in _DYNAMIC_DATA_FIELDS
+        bucket = dynamic if is_dynamic else constants
         bucket.setdefault(key, value)
 
     if not dynamic:
@@ -274,7 +379,8 @@ def trace_term(
     example_inputs = tuple(dynamic[k] for k in dynamic_keys)
 
     # 3. Trace to ONNX.
-    module = _TermModule(func, params, dynamic_keys, constants).eval()
+    sensors = dict(recorder._sensors)  # noqa: SLF001 — internal proxy
+    module = _TermModule(func, params, dynamic_keys, constants, sensors).eval()
     output_name = "value"
     buffer = io.BytesIO()
     # The legacy TorchScript tracer records the concrete tensor ops the term runs
@@ -305,9 +411,11 @@ def trace_term(
 
 
 def read_slot(env: Any, key: SlotKey) -> torch.Tensor:
-    """Read the current value of an input slot ``(entity, field)`` from ``env``."""
-    entity, field_name = key
-    return getattr(env.scene[entity].data, field_name)
+    """Read an input slot's current value from ``env`` (entity data or a sensor)."""
+    namespace, name_part = key
+    if namespace == _SENSOR_NS:
+        return env.scene[name_part].data
+    return getattr(env.scene[namespace].data, name_part)
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +518,17 @@ class _EvRecScene:
         self._captures = captures
 
     def __getitem__(self, name: str) -> _EvRecEntity:
+        if _is_sensor(self._real, name):
+            # The observation tracer threads sensor reads as slots (`_SENSOR_NS`);
+            # the event/command tagged-key path has no equivalent yet, and letting
+            # it through would surface as mjlab's own bare `assert isinstance(...)`
+            # deep inside the term. Fail here instead, naming the cause.
+            raise ValueError(
+                f"Event/command term read sensor {name!r}; sensor slots are only "
+                "supported for observation/termination terms so far. Extend the "
+                "tagged-key proxies (_EvRecScene/_EvReplayScene) the same way "
+                "_RecordingScene does, or handle this term natively."
+            )
         return _EvRecEntity(self._real[name], name, self._log, self._captures)
 
     def __getattr__(self, name: str) -> Any:
