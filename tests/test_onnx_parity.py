@@ -69,3 +69,53 @@ def test_reset_events_are_onnx_and_match(cartpole_report):
         assert ev.rand_dim == 2
         assert ev.steps_checked > 0
         assert ev.max_abs_diff <= cartpole_report.atol
+
+
+# ---------------------------------------------------------------------------
+# The Builder path serializes from the *task config*, while the parity harness
+# above reads the env's own prepared managers. Those are two different sources
+# for the same terms, and they diverged once already: an unresolved
+# `SceneEntityCfg` made the Builder trace all of an entity's sites instead of
+# the one the task names, silently widening `ee_to_cube` from 3 to 6. These
+# tests pin the two paths together on the width mjlab itself computes.
+# ---------------------------------------------------------------------------
+
+_SIZE_TASKS = [
+    "Mjlab-Cartpole-Balance",
+    "Mjlab-Lift-Cube-Yam",
+    "Mjlab-Velocity-Flat-Unitree-G1",
+]
+
+
+def _mjlab_observation_widths(env, group: str) -> dict[str, int]:
+    """Per-term output width as mjlab's own resolved manager computes it."""
+    om = env.observation_manager
+    widths = {}
+    for term_name in om.active_terms[group]:
+        cfg = om.get_term_cfg(group, term_name)
+        value = cfg.func(env, **cfg.params)
+        widths[term_name] = int(value.reshape(1, -1).shape[-1])
+    return widths
+
+
+@pytest.mark.parametrize("task_id", _SIZE_TASKS)
+def test_serialized_observation_widths_match_mjlab(task_id, tmp_path):
+    from mjlab.envs import ManagerBasedRlEnv
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjswan._onnx_build import serialize_observation_group
+    from mjswan.adapters.mjlab_adapter import adapt_observations
+
+    cfg = load_env_cfg(task_id, play=True)
+    env = ManagerBasedRlEnv(cfg, device="cpu")
+    env.reset()
+    expected = _mjlab_observation_widths(env, "actor")
+
+    groups = adapt_observations({"policy": cfg.observations["actor"]})
+    assert groups is not None
+    entries = serialize_observation_group(groups["policy"], env, tmp_path)
+
+    actual = {e["name"]: e.get("size") for e in entries}
+    assert actual == expected
+    # And the concatenated group width the policy network sees.
+    assert sum(actual.values()) == sum(expected.values())

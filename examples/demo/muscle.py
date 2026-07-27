@@ -103,12 +103,9 @@ def setup_builder() -> mjswan.Builder:
     )
     scene.set_trace_env(trace_env)
 
-    # Resolve joint_names -> joint_ids against the trace env now: obs_fns.joint_pos_rel
-    # indexes by asset_cfg.joint_ids, not joint_names, and SceneEntityCfg only
-    # resolves that mapping when explicitly asked (mjlab's ObservationManager
-    # does this automatically; a bare, unattached SceneEntityCfg does not).
+    # joint_names -> joint_ids is resolved against the trace env by the build
+    # (mjswan._onnx_build), the same way mjlab's own managers resolve it.
     finger_joints = SceneEntityCfg(name="robot", joint_names=list(JOINT_NAMES))
-    finger_joints.resolve(trace_env.scene)
 
     scene.set_viewer(
         mjswan.ViewerConfig(

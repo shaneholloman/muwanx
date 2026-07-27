@@ -15,6 +15,7 @@ Called from :mod:`mjswan.builder`, once per scene, after that scene's live
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -45,8 +46,38 @@ def _write_onnx(out_dir: Path, ref: str, onnx_bytes: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _tensor_width(value: Any) -> int:
+    """Per-env element count of a term's output (batch axis folded away)."""
+    return int(value.detach().reshape(1, -1).shape[-1])
+
+
+def _resolved_params(params: dict[str, Any], env: Any) -> dict[str, Any]:
+    """Resolve every ``SceneEntityCfg`` in *params* against the live scene.
+
+    mjlab's managers do this once at ``_prepare_terms``, turning name patterns
+    into concrete indices (``site_names=('grasp_site',)`` → ``site_ids=[1]``);
+    the term bodies then index with those ids. The Builder serializes from the
+    *task config*, whose ``SceneEntityCfg``s are still unresolved
+    (``site_ids=slice(None)`` — i.e. *every* site), so tracing without this step
+    bakes a different function than mjlab actually runs. Lift-Cube-Yam's
+    ``ee_to_cube`` returned all 2 sites (6 values) instead of the grasp site
+    (3), which would have fed 6 wrong numbers to a policy trained on 3.
+
+    Resolution mutates the cfg, so a copy is resolved and the caller's config is
+    left untouched. Duck-typed rather than ``isinstance``-checked to keep mjlab a
+    soft dependency.
+    """
+    resolved = dict(params)
+    for key, value in params.items():
+        if callable(getattr(value, "resolve", None)) and hasattr(value, "name"):
+            entity_cfg = copy.deepcopy(value)
+            entity_cfg.resolve(env.scene)
+            resolved[key] = entity_cfg
+    return resolved
+
+
 def _native_observation_entry(
-    name: str, func: Any, params: dict[str, Any]
+    name: str, func: Any, params: dict[str, Any], env: Any
 ) -> dict[str, Any] | None:
     """Classify a known non-``entity.data`` observation func into a native marker.
 
@@ -65,6 +96,12 @@ def _native_observation_entry(
     command's current value), so no ONNX graph is needed — the observation
     pipeline substitutes the live value directly. Returns ``None`` if *func*
     isn't one of these two — the caller should attempt tracing as normal.
+
+    ``size`` is attached when the live env can supply it, since the runtime sizes
+    its observation buffers before the first step. It is best-effort here: a scene
+    may pair ``generated_commands`` with a command that only exists browser-side
+    (a native ``UiCommand``), in which case mjlab's own lookup raises and the
+    runtime resolves the width from the command itself instead.
     """
     func_name = getattr(func, "__name__", None)
     if func_name == "last_action":
@@ -72,14 +109,20 @@ def _native_observation_entry(
         action_name = params.get("action_name")
         if action_name is not None:
             entry["action_name"] = action_name
-        return entry
-    if func_name == "generated_commands":
-        return {
+    elif func_name == "generated_commands":
+        entry = {
             "name": name,
             "native": "command",
             "command_name": params["command_name"],
         }
-    return None
+    else:
+        return None
+
+    try:
+        entry["size"] = _tensor_width(func(env, **params))
+    except Exception:  # noqa: BLE001 — best-effort; runtime resolves it instead
+        pass
+    return entry
 
 
 def _apply_observation_pipeline(
@@ -119,6 +162,7 @@ def serialize_observation_term(
 ) -> dict[str, Any] | None:
     """Serialize one observation term. Returns ``None`` for a dropped/unsupported term."""
     from .compile import trace_term
+    from .compile.tracer import slot_to_json
 
     func = term_cfg.func
     if isinstance(func, ObservationBinding):
@@ -126,12 +170,14 @@ def serialize_observation_term(
             return None
         return term_cfg.to_dict()
 
-    native_entry = _native_observation_entry(name, func, term_cfg.params)
+    params = _resolved_params(term_cfg.params, env)
+
+    native_entry = _native_observation_entry(name, func, params, env)
     if native_entry is not None:
         return _apply_observation_pipeline(native_entry, term_cfg, group_history_length)
 
     try:
-        export = trace_term(func, term_cfg.params, env, name=name)
+        export = trace_term(func, params, env, name=name)
     except ValueError:
         # Not one of the two known native shapes above, and no
         # `entity.data.<field>` reads at all -- genuinely constant-valued
@@ -141,19 +187,29 @@ def serialize_observation_term(
         # (fail loud on anything genuinely unexpected).
         import torch
 
-        value = func(env, **term_cfg.params)
+        value = func(env, **params)
         if not isinstance(value, torch.Tensor):
             raise
+        values = value.detach().flatten().tolist()
         entry = {
             "name": name,
             "native": "constant",
-            "value": value.detach().flatten().tolist(),
+            "value": values,
+            "size": len(values),
         }
         return _apply_observation_pipeline(entry, term_cfg, group_history_length)
     ref = _onnx_ref("obs", name)
     _write_onnx(out_dir, ref, export.onnx_bytes)
 
-    entry = {"name": name, "onnx": ref}
+    # `size` lets the runtime size its observation buffers before the first
+    # step; it cannot infer this itself, since ORT inference is async while the
+    # group layout is needed synchronously at load.
+    entry = {
+        "name": name,
+        "onnx": ref,
+        "size": _tensor_width(export.reference_output),
+        "input_slots": [slot_to_json(k) for k in export.input_slots],
+    }
     return _apply_observation_pipeline(entry, term_cfg, group_history_length)
 
 
@@ -189,7 +245,9 @@ def serialize_termination(
         return term_cfg.to_dict()
 
     try:
-        export = trace_term(func, term_cfg.params, env, name=name)
+        export = trace_term(
+            func, _resolved_params(term_cfg.params, env), env, name=name
+        )
     except ValueError:
         # No time-varying state read (e.g. mjlab's `time_out`, which compares
         # env-level step counters, not entity data) -- this is the one
@@ -228,7 +286,11 @@ def serialize_event(
 
     try:
         export = trace_event_term(
-            func, term_cfg.params, env, name=name, mode=term_cfg.mode
+            func,
+            _resolved_params(term_cfg.params, env),
+            env,
+            name=name,
+            mode=term_cfg.mode,
         )
     except ValueError as exc:
         # A model-field write (e.g. geom_friction/encoder_bias/body_com_offset
