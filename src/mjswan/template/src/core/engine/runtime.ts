@@ -611,7 +611,7 @@ export class mjswanRuntime {
         this.mujoco.mj_forward(this.mjModel, this.mjData);
         if (this.policyRunner && this.policyStateBuilder) {
           const state = this.policyStateBuilder.build();
-          const obs = this.policyRunner.collectObservationsByKey(state);
+          const obs = await this.policyRunner.collectObservationsByKey(state);
           await this.runOnnxInference(obs);
         }
         this.executeSimulationSteps();

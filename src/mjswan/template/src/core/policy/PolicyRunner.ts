@@ -1,5 +1,15 @@
 import { ObservationBase } from '../observation/ObservationBase';
 import { DslObservation } from '../observation/DslObservation';
+import {
+  NativeObservation,
+  isNativeObservationConfig,
+} from '../observation/NativeObservation';
+import {
+  OnnxObservation,
+  isOnnxObservationConfig,
+  type OnnxObservationConfig,
+} from '../observation/OnnxObservation';
+import type { OnnxSessionCache, SlotReader } from '../onnx/session';
 import type { DslNode } from '../dsl/types';
 import { type Bytes, resolveBytes } from '../utils/bytes';
 import { PolicyModule } from './PolicyModule';
@@ -21,6 +31,14 @@ export type PolicyRunnerOptions = {
   observations?: Record<string, ObservationConstructor>;
   /** App-supplied motion clips (name → bytes), exposed to terms via getMotionData. */
   motions?: Array<{ name: string; data: Bytes }>;
+  /**
+   * Deps for ONNX-backed observation terms (ADR 0005): the loaded `.onnx`
+   * sessions keyed by the path each entry's `onnx` field names, and the reader
+   * for the dynamic state slots those graphs declare. Absent for a policy with
+   * no traced observations.
+   */
+  onnxSessions?: OnnxSessionCache;
+  readOnnxSlot?: SlotReader;
 };
 
 export class PolicyRunner {
@@ -32,6 +50,8 @@ export class PolicyRunner {
   private obsSizes: Record<string, number>;
   private historyConfig: Record<string, { steps: number; interleaved: boolean }>;
   private historyBuffers: Record<string, Float32Array>;
+  /** Groups whose history must be filled with the next frame (set by `reset()`). */
+  private historyNeedsPrime: Record<string, boolean> = {};
   private defaultObsKey: string | null;
   private context: PolicyRunnerContext | null;
   private policyJointNames: string[];
@@ -50,6 +70,7 @@ export class PolicyRunner {
     this.obsSizes = {};
     this.historyConfig = {};
     this.historyBuffers = {};
+    this.historyNeedsPrime = {};
     this.defaultObsKey = null;
     this.context = null;
 
@@ -85,14 +106,13 @@ export class PolicyRunner {
       }
     }
     if (state) {
+      // Priming a history buffer means computing a frame, which is async once a
+      // term is ONNX-backed (ADR 0005) — while `reset()` is called from the
+      // engine's synchronous public `resetSimulation()`. So flag it and prime on
+      // the next collect instead, filling every slot with the frame that is
+      // actually about to be used rather than a separately-computed one.
       for (const [key, config] of Object.entries(this.historyConfig)) {
-        if (config.steps > 1) {
-          const frame = this.buildFrame(this.obsGroups[key] ?? [], state);
-          const buffer = this.historyBuffers[key];
-          for (let i = 0; i < config.steps; i++) {
-            buffer.set(frame, i * frame.length);
-          }
-        }
+        if (config.steps > 1) this.historyNeedsPrime[key] = true;
       }
     }
   }
@@ -108,29 +128,37 @@ export class PolicyRunner {
     }
   }
 
-  collectObservationsByKey(state: PolicyState): Record<string, Float32Array> {
+  /** Async because ONNX-backed terms run ORT inference (ADR 0005 §8). */
+  async collectObservationsByKey(state: PolicyState): Promise<Record<string, Float32Array>> {
     this.update(state);
     const outputs: Record<string, Float32Array> = {};
 
     for (const [key, obsList] of Object.entries(this.obsGroups)) {
       const history = this.historyConfig[key];
       if (history && history.steps > 1) {
-        const frame = this.buildFrame(obsList, state);
+        const frame = await this.buildFrame(obsList, state);
         const buffer = this.historyBuffers[key];
-        for (let i = buffer.length - 1; i >= frame.length; i--) {
-          buffer[i] = buffer[i - frame.length];
+        if (this.historyNeedsPrime[key]) {
+          // First frame after a reset: every slot is this frame, so the policy
+          // never sees a history of zeros it was not trained on.
+          for (let i = 0; i < history.steps; i++) buffer.set(frame, i * frame.length);
+          delete this.historyNeedsPrime[key];
+        } else {
+          for (let i = buffer.length - 1; i >= frame.length; i--) {
+            buffer[i] = buffer[i - frame.length];
+          }
+          buffer.set(frame, 0);
         }
-        buffer.set(frame, 0);
         outputs[key] = new Float32Array(buffer);
       } else {
-        outputs[key] = this.buildFrame(obsList, state);
+        outputs[key] = await this.buildFrame(obsList, state);
       }
     }
     return outputs;
   }
 
-  collectObservations(state: PolicyState): Float32Array {
-    const outputs = this.collectObservationsByKey(state);
+  async collectObservations(state: PolicyState): Promise<Float32Array> {
+    const outputs = await this.collectObservationsByKey(state);
     if (this.defaultObsKey && outputs[this.defaultObsKey]) {
       return outputs[this.defaultObsKey];
     }
@@ -255,9 +283,19 @@ export class PolicyRunner {
     this.obsSizes = {};
     this.historyConfig = {};
     this.historyBuffers = {};
+    this.historyNeedsPrime = {};
     this.defaultObsKey = null;
 
     const buildObservation = (entry: ObservationConfigEntry): ObservationBase => {
+      // ONNX-traced and natively-computed terms (ADR 0005) bypass the class
+      // registry: they are one generic handler each, configured entirely by data,
+      // so `entry.name` is the term's own identity rather than a class to look up.
+      if (isOnnxObservationConfig(entry)) {
+        return this.buildOnnxObservation(entry);
+      }
+      if (isNativeObservationConfig(entry)) {
+        return new NativeObservation(this, entry);
+      }
       const dslEntry = entry as unknown as {
         kind?: string;
         nodes?: unknown[];
@@ -341,6 +379,26 @@ export class PolicyRunner {
     }
   }
 
+  /**
+   * Build a traced-ONNX observation term, or throw if its deps are missing.
+   *
+   * Unlike `OnnxCommand`/`OnnxEvent` — which warn and skip, so one absent session
+   * cannot take down a whole scene — an observation is part of the policy's input
+   * vector. Dropping it would silently shift every later term's offset and feed
+   * the network a differently-shaped observation, so this fails loudly instead.
+   */
+  private buildOnnxObservation(entry: OnnxObservationConfig): OnnxObservation {
+    const session = this.options.onnxSessions?.get(entry.onnx);
+    const readSlot = this.options.readOnnxSlot;
+    if (!session || !readSlot) {
+      throw new Error(
+        `Observation "${entry.name}" needs the ONNX session "${entry.onnx}" and a ` +
+          'slot reader; pass onnxSessions/readOnnxSlot in PolicyRunnerOptions.'
+      );
+    }
+    return new OnnxObservation(this, entry, { session, readSlot });
+  }
+
   private registerGroup(
     key: string,
     obsList: ObservationBase[],
@@ -362,22 +420,31 @@ export class PolicyRunner {
     }
   }
 
-  private buildFrame(obsList: ObservationBase[], state: PolicyState): Float32Array {
+  private async buildFrame(
+    obsList: ObservationBase[],
+    state: PolicyState
+  ): Promise<Float32Array> {
     // Compute every term first, then size the buffer from the actual arrays, so
     // an observation whose output length changes between frames can never
     // overflow `set()` (a term's `size` getter may lag its output — e.g. it is
     // cached from the previous frame). The guard keeps a clear error for a
     // genuine size mismatch.
-    const arrays = obsList.map((obs) => {
-      const value = obs.compute(state);
-      const array = value instanceof Float32Array ? value : Float32Array.from(value);
-      if (array.length !== obs.size) {
-        throw new Error(
-          `Observation size mismatch: expected ${obs.size}, got ${array.length}`
-        );
-      }
-      return array;
-    });
+    //
+    // Terms are kicked off together and awaited as a batch: an ONNX-backed term
+    // (ADR 0005) runs async ORT inference, and awaiting them one at a time would
+    // serialize the group's graphs for no reason.
+    const arrays = await Promise.all(
+      obsList.map(async (obs) => {
+        const value = await obs.compute(state);
+        const array = value instanceof Float32Array ? value : Float32Array.from(value);
+        if (array.length !== obs.size) {
+          throw new Error(
+            `Observation size mismatch: expected ${obs.size}, got ${array.length}`
+          );
+        }
+        return array;
+      })
+    );
     const total = arrays.reduce((sum, array) => sum + array.length, 0);
     const output = new Float32Array(total);
     let offset = 0;
