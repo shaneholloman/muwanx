@@ -38,11 +38,43 @@ import { CommandManager, type CommandTermContext, type CommandsConfig } from '..
 import { EventManager } from '../event/EventManager';
 import { Events } from '../event/events';
 import type { EventConfig, TerrainData } from '../event/EventBase';
+import { OnnxSessionCache, type SlotReader } from '../onnx/session';
+import { createSlotReader } from '../onnx/slotReader';
+import { SeededRng } from '../rng';
+
+/**
+ * Seed for the term PRNG (ADR 0005 §2). Fixed rather than time-derived so a plain
+ * page load is reproducible; a "share this run" feature overrides it per session.
+ */
+const DEFAULT_TERM_SEED = 0x5eed;
+
+/**
+ * Encoder bias by joint name, for the slot reader's `joint_pos_biased`.
+ *
+ * mjlab randomizes `encoder_bias` per episode and `joint_pos_biased` is what a
+ * trained policy observed; the export captures the bias into `policy.json`
+ * aligned to `policy_joint_names`. Keyed by name because the reader needs it in
+ * *entity*-joint order, which is not the action order this array is in. Empty
+ * when the config carries no bias — mjlab's own zero-bias default, under which
+ * `joint_pos_biased` is just `joint_pos`.
+ */
+function buildJointBias(config: PolicyConfig): Map<string, number> {
+  const bias = new Map<string, number>();
+  const values = config.encoder_bias;
+  const names = config.policy_joint_names;
+  if (!Array.isArray(values) || !Array.isArray(names)) return bias;
+  for (let i = 0; i < names.length && i < values.length; i++) {
+    if (values[i]) bias.set(names[i], values[i]);
+  }
+  return bias;
+}
 
 /** A policy with its ONNX weights resolved to bytes; motion data stays lazy. */
 export type ResolvedPolicy = {
   config: PolicyConfig;
   onnx: ArrayBuffer;
+  /** Traced term graphs, keyed by the config-relative path (ADR 0005 §4). */
+  graphs?: Array<{ name: string; data: ArrayBuffer }>;
   motions: Array<{ name: string; data: Bytes; default?: boolean }>;
   /** Policy-scoped custom terms (observations / terminations / commands). */
   plugins?: EnginePlugins;
@@ -63,6 +95,8 @@ export type ResolvedScene = {
   viewer?: ViewerConfig | null;
   events?: EventConfig[] | null;
   terrainData?: TerrainData | null;
+  /** Traced event-term graphs, keyed by the model-relative path (ADR 0005 §4). */
+  graphs?: Array<{ name: string; data: ArrayBuffer }>;
   /** Scene-scoped custom terms (events). */
   plugins?: EnginePlugins;
 };
@@ -177,6 +211,22 @@ export class mjswanRuntime {
   // (observations / terminations / commands). No module-global registries.
   private scenePlugins: EnginePlugins;
   private policyPlugins: EnginePlugins;
+  /**
+   * Traced term-body graphs (ADR 0005 §4), split by lifetime: event graphs belong
+   * to the scene, everything else to the policy, so `setPolicy` replaces one
+   * without disturbing the other.
+   */
+  private policyGraphs: OnnxSessionCache;
+  private sceneGraphs: OnnxSessionCache;
+  /**
+   * The single seeded PRNG every ONNX term draws `rand` from (ADR 0005 §2), so a
+   * session replays bit-for-bit. Scene-lifetime: reseeded per `loadEnvironment`.
+   */
+  private termRng: SeededRng;
+  /** Reads the dynamic state a traced graph declares as inputs (ADR 0005 §6). */
+  private readonly readOnnxSlot: SlotReader;
+  /** Encoder bias by joint name, from the active policy config; see `SlotReaderOptions`. */
+  private jointBias = new Map<string, number>();
 
   constructor(mujoco: MainModule, container: HTMLElement) {
     this.mujoco = mujoco;
@@ -184,6 +234,19 @@ export class mjswanRuntime {
     this.commandManager = new CommandManager();
     this.scenePlugins = {};
     this.policyPlugins = {};
+    this.policyGraphs = new OnnxSessionCache();
+    this.sceneGraphs = new OnnxSessionCache();
+    this.termRng = new SeededRng(DEFAULT_TERM_SEED);
+    // Reads `this.mjModel`/`this.mjData` per call rather than capturing them, so a
+    // scene rebuild is picked up without rewiring every manager.
+    this.readOnnxSlot = createSlotReader(
+      () => ({
+        mjModel: this.mjModel,
+        mjData: this.mjData,
+        commandManager: this.commandManager,
+      }),
+      { jointBias: (name) => this.jointBias.get(name) ?? 0 },
+    );
 
     const workingPath = '/working';
     try {
@@ -289,9 +352,25 @@ export class mjswanRuntime {
   async loadEnvironment(scene: ResolvedScene): Promise<void> {
     this.scenePlugins = scene.plugins ?? {};
     this.terrainData = scene.terrainData ?? null;
+    // A fresh scene is a fresh run: reseed so two loads of the same scene draw the
+    // same randomness (ADR 0005 §2).
+    this.termRng = new SeededRng(DEFAULT_TERM_SEED);
+    this.sceneGraphs.clear();
+    await this.sceneGraphs.load(scene.graphs ?? []);
     if (scene.events && scene.events.length > 0) {
-      this.eventManager = new EventManager(scene.events, { ...Events, ...this.scenePlugins.events });
-      console.log(`[EventManager] ${this.eventManager.size} reset event(s) loaded`);
+      this.eventManager = new EventManager(
+        scene.events,
+        { ...Events, ...this.scenePlugins.events },
+        {
+          sessions: this.sceneGraphs,
+          rng: this.termRng,
+          readSlot: this.readOnnxSlot,
+        },
+      );
+      console.log(
+        `[EventManager] ${this.eventManager.size} event term(s) loaded ` +
+          `(${this.sceneGraphs.size} traced graph(s))`,
+      );
     } else {
       this.eventManager = null;
     }
@@ -657,7 +736,10 @@ export class mjswanRuntime {
     this.onnxInferencing = false;
     this.onnxTimeStep = 0;
     this.terminationManager = null;
-    // Note: eventManager and terrainData are scene-level state set in loadEnvironment; do not clear here.
+    this.policyGraphs.clear();
+    this.jointBias.clear();
+    // Note: eventManager, sceneGraphs and terrainData are scene-level state set in
+    // loadEnvironment; do not clear here.
 
     // Clear existing commands when switching policies
     this.commandManager.clear();
@@ -673,6 +755,8 @@ export class mjswanRuntime {
 
     try {
       const config = policy.config;
+      await this.policyGraphs.load(policy.graphs ?? []);
+      this.jointBias = buildJointBias(config);
       // Motion metadata lives in policy.json; the app supplies the bytes as
       // MotionInput[]. Merge the bytes onto each motion entry by name.
       if (Array.isArray(config.motions)) {
@@ -704,6 +788,10 @@ export class mjswanRuntime {
           bodies: this.bodies,
           mujocoRoot: this.mujocoRoot,
           requestReset: () => this.resetSimulation(),
+          // Traced commands (ADR 0005 §3) run a graph per frame off these.
+          rng: this.termRng,
+          onnxSessions: this.policyGraphs,
+          readOnnxSlot: this.readOnnxSlot,
         });
         this.commandManager.resetTerms();
         const motionTerm = this.commandManager.getTerm('motion');
@@ -735,6 +823,9 @@ export class mjswanRuntime {
         // Expose the app-supplied clips to custom terms (they read bytes via
         // runner.getMotionData instead of fetching — ADR 0004 §4/§10).
         motions: policy.motions,
+        // Traced observation terms (ADR 0005 §4): a graph each, fed from the sim.
+        onnxSessions: this.policyGraphs,
+        readOnnxSlot: this.readOnnxSlot,
       });
 
       await runner.init({
@@ -791,9 +882,7 @@ export class mjswanRuntime {
           config.terminations,
           { ...Terminations, ...this.policyPlugins.terminations },
           runner,
-          // Same deferred seam as commands/events: the ONNX-backed terms need
-          // loaded sessions + a slot reader, which nothing supplies yet.
-          {}
+          { onnxSessions: this.policyGraphs, readOnnxSlot: this.readOnnxSlot }
         );
         console.log(`[TerminationManager] ${this.terminationManager.size} termination term(s) loaded`);
       }

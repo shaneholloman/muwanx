@@ -32,6 +32,18 @@ export interface PolicyInput {
   /** Parsed policy.json; opaque to the app, interpreted by the engine. */
   config: object;
   onnx: Bytes;
+  /**
+   * Traced term-body graphs, keyed by the path the config refers to them by
+   * (`"obs/joint_pos.onnx"`, `"term/fell_over.onnx"`, `"command/twist.onnx"`).
+   *
+   * ADR 0005 gives every traced observation / termination / command term its own
+   * small graph alongside the policy network, and the engine never fetches, so
+   * the app delivers their bytes here. `mjswan/manifest` fills this in from
+   * `policy.json`; a hand-assembled `PolicyInput` can use
+   * `policyGraphRefs(config)` to enumerate what to load. A missing entry does not
+   * fail the load — the manager that wanted it warns and skips that one term.
+   */
+  graphs?: Record<string, Bytes>;
   motions?: MotionInput[];
   /** Policy-scoped custom terms (observations / terminations / commands). */
   plugins?: EnginePlugins;
@@ -45,6 +57,8 @@ export interface SceneInput {
   /** Declarative reset events (e.g. terrain randomization) + their terrain data. */
   events?: EventConfig[];
   terrainData?: TerrainData;
+  /** Traced event-term graphs (`"event/push_robot.onnx"`), as {@link PolicyInput.graphs}. */
+  graphs?: Record<string, Bytes>;
   /** Scene-scoped custom terms (events). */
   plugins?: EnginePlugins;
 }

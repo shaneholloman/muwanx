@@ -7,7 +7,7 @@
  * snapshot for `subscribe`. No React, no catalog, no config.json, no fetch.
  */
 import { mjswanRuntime, type ResolvedPolicy, type ResolvedScene, type ResolvedSplat } from '../core/engine/runtime';
-import { resolveBytes } from '../core/utils/bytes';
+import { type Bytes, resolveBytes } from '../core/utils/bytes';
 import type { CommandDefinition, CommandEventListener } from '../core/command';
 import type { PolicyConfig } from '../core/policy/types';
 import type {
@@ -31,10 +31,27 @@ function toDescriptor(def: CommandDefinition): CommandDescriptor {
     : base;
 }
 
+/**
+ * Resolve traced term graphs to bytes, in parallel.
+ *
+ * Eager, unlike motions: a term's graph is needed the moment its manager is
+ * constructed (a missing session means the term is dropped for the whole
+ * session), and they are small — one per term, versus the policy network.
+ */
+async function resolveGraphs(
+  graphs: Record<string, Bytes> | undefined,
+): Promise<Array<{ name: string; data: ArrayBuffer }>> {
+  const entries = Object.entries(graphs ?? {});
+  return Promise.all(
+    entries.map(async ([name, bytes]) => ({ name, data: await resolveBytes(bytes) })),
+  );
+}
+
 async function resolvePolicy(input: PolicyInput): Promise<ResolvedPolicy> {
   return {
     config: input.config as PolicyConfig,
     onnx: await resolveBytes(input.onnx),
+    graphs: await resolveGraphs(input.graphs),
     // Motion bytes stay lazy — loaded on demand when a motion is selected.
     motions: (input.motions ?? []).map((m) => ({ name: m.name, data: m.data, default: m.default })),
     plugins: input.plugins,
@@ -117,6 +134,7 @@ class Engine implements MjswanEngine {
         viewer: input.viewer ?? null,
         events: input.events ?? null,
         terrainData: input.terrainData ?? null,
+        graphs: await resolveGraphs(input.graphs),
         plugins: input.plugins,
       };
       await this.runtime.loadEnvironment(scene);
