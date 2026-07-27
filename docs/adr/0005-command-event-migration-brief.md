@@ -27,18 +27,19 @@
 | §4 `entity_write` apply primitive (TS) | **done** — `core/event/entityWrite.ts` (joint_state/root_pose/root_velocity) |
 | §3 generic `OnnxCommand` handler (TS) | **done** — `core/command/OnnxCommand.ts` (timer, state, rand, UI override, writes) |
 | §4 generic `OnnxEvent` handler (TS) | **done** — `core/event/OnnxEvent.ts`, no persistent state (traced events are stateless), same async in-flight guard as `OnnxCommand` |
-| §4 mode-aware `EventManager` dispatch | **done** — `startup()`/`tick()`/async `onReset()`, backward compatible with legacy `DslEvent`/registry reset terms |
-| §4 `OnnxCommand` registered in `CommandManager` | **done** — registry-bypass special case, mirrors `DslEvent`'s bypass in `EventManager` |
+| §4 mode-aware `EventManager` dispatch | **done** — `startup()`/`tick()`/async `onReset()`, backward compatible with plugin-registered reset term classes |
+| §4 `OnnxCommand` registered in `CommandManager` | **done** — registry-bypass special case, mirrors `OnnxEvent`'s bypass in `EventManager` |
 | Builder-side artifact integration (Python) | **done** — `mjswan._onnx_build` bridges cfg objects to the tracer; `Builder._save_web` writes real `.onnx` bytes + traced `policy.json`/`config.json`. `mjlab_adapter` no longer does name-based mirror resolution for obs/term/event — mjlab's own functions (or an author's, same treatment) are traced directly against the scene's live env. Verified against a real `Mjlab-Cartpole-Balance` build (real `obs/*.onnx`, `event/reset_*.onnx`, native `time_out`). |
 | §3 Command wiring via `cfg.build(env)` | **done** — `LiftingCommandCfg` (`target_pos`, no override) and `UniformVelocityCommandCfg` (trace-friendly override + per-task joystick `ui` resolved from `cfg.ranges`) registered in `examples/mjlab/defaults/commands`; both verified end-to-end (real `.onnx` + schema-valid `policy.json` entry) against Lift-Cube-Yam and a Go1 velocity task. `LiftingCommand.ts` retired. |
 | Remove `src/mjswan/dsl/` + `scripts/verify_dsl_migration.py` (Python) | **done** — `src/mjswan/dsl/` and the script deleted; `envs/mdp/{observations,terminations,events}.py` gutted to only the `*Binding`/`register_*`/`_custom_registry` escape hatch, all DSL-builder function bodies removed |
 | §3 ONNX **observation** runtime (TS) | **done** — `core/observation/OnnxObservation.ts` (per-term session, declared input slots, clip→scale) + `NativeObservation.ts` (`prev_action`/`command`/`constant` markers), both registry-bypassing like `OnnxCommand`. `size` comes from the build because `PolicyRunner` needs the group layout synchronously at load while ORT inference is async. The observation path is now async end-to-end (ADR §8's `await ortObs.run(...)`): `collectObservationsByKey` awaits a group's terms in parallel; the one runtime call site was already inside an `async` fn. `reset()` stays synchronous — it flags history for priming on the next collect rather than computing a frame — so the engine's public `resetSimulation()` keeps its signature |
-| Observation **fusion** (ADR §4, mandatory for v1) | **not started** — the build emits one `.onnx` per term and the runtime runs one session per term. Purely a build-time optimization; the runtime contract above is unaffected by it landing |
+| Observation/Termination **fusion** (ADR §4, mandatory for v1) | **not started, now specified** — see §4b for the measured case and the exact fusion plan. The short version: G1's five observation graphs are *one node each* (three are `Identity`), so five ORT sessions and five promise round-trips per control step perform three copies and two subtractions; Cartpole and Lift each marshal two slots twice. Purely build-time — the runtime contract is unaffected, except that a fused group's `onnx`/`input_slots` move from the term to the group |
 | Remove TS-side DSL (`core/dsl/`, `DslObservation.ts`, `DslTermination.ts`, `DslEvent.ts`) | **done** — all seven files deleted (~1,170 lines) along with the `kind: 'observation'`/`'termination'`/`'event'` dispatch branches in `PolicyRunner`/`TerminationManager`/`EventManager` and the DSL variant of `TerminationConfigEntry`. Nothing outside `core/dsl/` imported it. Two things the removal cleaned up on the way: the legacy `{history_steps, components}` observation-group shape now goes through the same `buildObservation` as the array shape, so it gets ONNX/native terms instead of registry classes only; and `EventManager`'s `kind: 'legacy'` reset entry is renamed `'plugin'`, which is all it ever was once `DslEvent` was gone (ADR 0004 §10 custom event classes) |
 | §3 ONNX **termination** runtime (TS) | **done** — `core/termination/OnnxTermination.ts` (session + declared slots; skip-if-in-flight like `OnnxCommand`, since `evaluate()` is synchronous and a one-frame-late reset is the accepted lag) + `TimeOutTermination.ts` for the native marker, evaluated against episode time the manager accumulates from the control `dt`. The build now ships `episode_length_s` with that marker — it previously named a comparison the runtime had no threshold for |
 | §6 slot reader (TS) | **done** — `core/onnx/slotReader.ts` serves all three slot shapes from `mjModel`/`mjData`: 14 `Entity.data` fields, a sensor's `sensordata` window (prefix-tolerant), and a live `OnnxCommand`'s state field, with the float64→Float32Array conversion at the read site. State collection is native by design, so the Python parity harness cannot reach it — `__tests__/slotReaderParity.test.ts` compares every field against mjlab's own `env.scene[entity].data.<field>` on two live stepped tasks (fixture from `scripts/dump_slot_fixture.py`). That check found two bugs: falling back to the whole model on an empty prefix match answered `terrain.joint_pos` with the robot's joints, and the hardcoded `dims: [1, n]` feed made rank-3 `site_pos_w` and rank-1 `heading_w` unfeedable — the traced shape now travels with the slot (`slot_to_json`'s `shape`, via the shared `slots_json`) and `slotDims` rebuilds the rank. Known limit: mjlab attaches `terrain` with `prefix=""`, so a terrain slot reads as unavailable rather than guessing (no traced term reads terrain state) |
 | §4 byte delivery for observation/termination sessions | **done** — `PolicyInput.graphs`/`SceneInput.graphs` carry the traced graphs keyed by the config-relative path; `mjswan/manifest` fills both in (policy graphs relative to `policy.json`, event graphs relative to the model, matching where the Builder writes each), and the exported `policyGraphRefs`/`eventGraphRefs` derive the list for a caller assembling inputs without the manifest. The runtime holds two session caches split by lifetime (scene-scoped events vs policy-scoped everything else), one `SeededRng` reseeded per scene load, and one slot reader, wired into all four managers. Verified every slot's emitted shape against its real graph's declared input shape |
 | §4 Event dispatch wired into the loop | **done** — `EventManager.startup()`/`tick()` existed but nothing called them, so `mode="startup"`/`"interval"` terms loaded and then never fired. `startup()` now runs once at the end of `loadEnvironment` (after the model *and* policy exist, so its writes are not clobbered by the policy load's reset) and `tick(dt)` runs each control step beside `commandManager.update`. `onReset()` stays un-awaited: `resetSimulation()` is synchronous out through the engine API, so a traced reset term's write lands a frame late — the same accepted lag as the rest of the async boundary (§8) |
+| `TrackingCommand` RSI jitter traced; no `Math.random()` left | **done** — mjlab's play cfg for the tracking task clears `pose_range`/`velocity_range` and sets `sampling_mode="start"` but leaves `joint_position_range=(-0.1, 0.1)`, so exactly one of the three TS sampling sites was live — and it also omitted mjlab's clip to `soft_joint_pos_limits`, so a large enough jitter could seed an episode outside the robot's own limits. All three are now mjlab's own `sample_uniform`/`quat_from_euler_xyz`/`quat_mul` in a traced graph (`motion_rsi_offset`): mjlab perturbs the reference frame before writing it, this perturbs it after and reads it back off `asset.data` — numerically the same, and it keeps the motion clip out of the graph, so no new tracer feature was needed. `rand_dim=41` (6+6+29), all three `entity_write` kinds, `max|Δ|=0` over 16 replayed draws, verified end-to-end from the real `Mjlab-Tracking-Flat-Unitree-G1` play cfg. The seam is `CommandBinding.reset_trace`: a *native* command keeps its TS class (a motion-clip lookup is a data lookup, not term math) while its randomization is traced, emitted in `serialize_event`'s entry shape so the browser runs it through the existing `OnnxEvent`. The one draw that stays native is the uniform initial-frame index — a clip index — now from the seeded PRNG so a session replays |
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Non-mjlab-task scenes (`add_scene()` + custom obs/term/event) | **done** — `mjswan.trace_env.build_single_entity_trace_env()` builds a minimal live env from a single entity's spec (reusing mjlab's own `Entity`/`Scene`, no reimplemented kinematics), attached via `SceneHandle.set_trace_env()`. `examples/demo/{main,splat,muscle}.py` and `examples/tutorial/minimum_policy.py` all migrated onto mjlab's real functions + a few self-authored ones and verified against real traces |
 | Sensor input slots (`builtin_sensor`, `projected_gravity_from_sensor`) | **done** — a whole-sensor read is its own slot namespace (`_SENSOR_NS`), served through a proxy that subclasses the real sensor's class so mjlab's `assert isinstance(sensor, BuiltinSensor)` still holds. Unblocked all four Velocity-Flat/Rough G1/Go1 tasks (previously failed to serialize at all); full 16-step numeric parity, max\|Δ\|=0 |
@@ -238,6 +239,90 @@ lifting-specific engine code:
   `base_com`); Lift-Cube-Yam uses `mode="startup"`. `startup` runs once at init (no
   timer); `interval` needs the countdown-timer trigger (scalar `time_left` per ADR §5,
   not tensors).
+
+## 4b. Observation/Termination fusion — why, and exactly what fuses
+
+ADR §4 calls fusion mandatory for v1 without saying what it buys. Now that the
+build emits real graphs, here is the measured answer.
+
+### Why
+
+Per-`ort.run()` cost is fixed — a JS→WASM crossing, input tensor marshalling,
+output copy-out, and a promise round-trip — and it does not shrink with the graph.
+What the graphs actually contain, from real builds:
+
+| task | obs graphs | nodes per graph | total bytes |
+|---|---|---|---|
+| Velocity-Flat-G1 | 5 | **1 each** — `Identity`, `Identity`, `Identity`, `Sub`, `Sub` | 1.1 KiB |
+| Cartpole-Balance | 4 | 3, 5, 3, 3 (`Gather`/`Sub`, one `Cos`+`Sin`) | 1.4 KiB |
+| Lift-Cube-Yam | 4 | 1, 1, **132**, **128** (quaternion math) | 19.8 KiB |
+
+G1's observation group is five separate ORT sessions, five `run()` calls and five
+promise round-trips per control step, to perform three tensor copies and two
+subtractions. At a 50 Hz control rate that is 250 `run()` calls per second whose
+combined arithmetic is 58 float subtractions and 9 copied floats. Three of the
+five graphs are a single `Identity`: the term body is `sensor.data`, so the
+"graph" is a pass-through whose only cost *is* the call overhead.
+
+Lift-Cube-Yam shows the other end and why fusion is not only about tiny graphs —
+its two frame-transform terms are 132 and 128 nodes, and they share two of their
+three slots, so today the same cube position and robot quaternion are marshalled
+into two sessions and the same quaternion inverse is computed twice per frame.
+
+Fusion also removes duplicated slot work. A slot feeding two terms is read,
+converted to float32, and marshalled twice today:
+
+| task | distinct slots | slot feeds | fed twice |
+|---|---|---|---|
+| Cartpole-Balance | 2 | 4 | `cartpole__joint_pos`, `cartpole__joint_vel` |
+| Lift-Cube-Yam | 6 | 8 | `cube__root_link_pos_w`, `robot__root_link_quat_w` |
+
+And it removes the per-frame `Promise.all` fan-out in
+`PolicyRunner.collectObservationsByKey`: N awaited inferences per group become
+one, which also removes N-1 chances for a term to be a frame out of step with its
+siblings.
+
+### What fuses, concretely
+
+**Observation group → one graph per group.** Inputs are the *union* of the group's
+declared slots (deduplicated — Cartpole's 4 feeds become 2), plus one input per
+native term, since `prev_action` and a generated command are tensors the runtime
+already holds and feeding them in is cheaper than splicing their offsets afterwards.
+`native: "constant"` terms bake in as initializers. The single output is the group
+vector the policy consumes, with each term's `scale`/`clip` folded in as graph ops
+(they are per-term constants), in group order. Build side: a `_GroupModule` whose
+`forward(*dynamic)` builds one replay env, calls each term body in declaration
+order, applies that term's pipeline, and `torch.cat`s — exported once, exactly as
+`_TermModule` is today.
+
+History stays native. It is state across frames, and a stateless graph cannot hold
+it; the runtime's existing ring buffer already does, and it sits *after* the
+concatenation anyway.
+
+The wire entry becomes one fused record per group rather than a list of per-term
+records — so `size` per term is still needed for `getObservationLayout()` (the
+debug overlay names each slice), but `onnx`/`input_slots` move to the group.
+
+**Termination → one graph.** Inputs are the union of the terms' slots; the output
+is one bool vector of width N, one lane per term, so `TerminationManager` keeps
+per-term `reasons` and its terminated-vs-truncated split. `time_out` stays out of
+it — it is native by construction (it reads no entity state).
+
+**Events → one graph per `mode`.** The `rand` input is the concatenation of the
+terms' `rand_dim`s and the write targets are their union. Calls stay gated exactly
+as now: fusing changes how many graphs exist, never how often a trigger fires, so
+a quiet frame still costs no `run()`. One ordering caveat to settle when this
+lands: two fused events writing the same field need a defined precedence, where
+today the sequential `onReset()` gives them dict order for free.
+
+**Commands do not fuse.** A traced command is already one graph, and it is
+stateful — its `prev_*`/`next_*` state I/O is per-term by construction.
+
+### Why not fuse observation into `policy.onnx`
+
+It would collapse obs+policy to a single `run()`, and ADR §4 rules it out: it
+breaks "`policy.onnx` is the trained artifact, shipped unmodified" and it puts the
+joystick/command injection point inside the graph.
 
 ## 5. Acceptance criteria
 
@@ -527,8 +612,6 @@ traced graphs (per ADR 0004 §4 — additive, no fetch, mirroring `motions: Moti
 `TerminationManagerDeps` / `CommandTermContext` / `EventManagerDeps`.
 `eventManager.startup()`/`tick()` are now called.
 
-**Next:** sweep the remaining `Math.random()` sites in `DslEvent`/`TrackingCommand` into the
-seeded PRNG (a recorded session does not replay bit-for-bit while they stand), then
-observation fusion. A separate track: model-field-write startup-DR events
-(`geom_friction`/`encoder_bias`/`body_com_offset`) — currently native-fallback, needed for
-Velocity/Lift `mode="startup"` parity.
+**Next:** observation/termination fusion (§4b — measured case and plan). A separate track:
+model-field-write startup-DR events (`geom_friction`/`encoder_bias`/`body_com_offset`) —
+currently native-fallback, needed for Velocity/Lift `mode="startup"` parity.
