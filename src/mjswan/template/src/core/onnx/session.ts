@@ -35,6 +35,9 @@ export interface OnnxTensorLike {
  * paths/dots that the build folds to identifiers, so the mapping is not
  * reproducible here. Optional only for backward compatibility with configs
  * emitted before it existed — see `slotInputName`.
+ *
+ * `shape` is the traced tensor's shape, batch axis included. A slot reader hands
+ * back a flat array, so the rank has to travel with the slot — see `slotDims`.
  */
 export interface OnnxInputSlot {
   entity?: string | null;
@@ -42,12 +45,32 @@ export interface OnnxInputSlot {
   sensor?: string;
   command?: string;
   input?: string;
+  shape?: number[];
 }
 
 /** The graph input name for a slot: the build-supplied one, else the legacy scheme. */
 export function slotInputName(slot: OnnxInputSlot): string {
   if (slot.input) return slot.input;
   return `${slot.entity ?? 'entity'}__${slot.field ?? ''}`;
+}
+
+/**
+ * The dims to feed a slot's flat value as.
+ *
+ * Not every `Entity.data` field is rank 2: `site_pos_w` is
+ * `(batch, num_sites, 3)` and `heading_w` is `(batch,)`, and ORT rejects a rank
+ * mismatch outright rather than reshaping. So the traced shape is authoritative,
+ * with the batch axis pinned to 1 (the browser runs a single env). `[1, length]`
+ * is the fallback for a slot from a build that predates `shape`, and also the
+ * repair when the declared element count no longer matches what the model
+ * actually has — feeding the declared shape there would be a lie about the data.
+ */
+export function slotDims(slot: OnnxInputSlot, length: number): number[] {
+  const shape = slot.shape;
+  if (!shape || shape.length === 0) return [1, length];
+  const declared = shape.slice(1).reduce((a, b) => a * b, 1);
+  if (declared !== length) return [1, length];
+  return [1, ...shape.slice(1)];
 }
 
 /** Reads the dynamic runtime state an `OnnxInputSlot` declares, or null if absent. */

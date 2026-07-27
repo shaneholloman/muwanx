@@ -32,7 +32,7 @@ from __future__ import annotations
 import io
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import torch
 from torch import nn
@@ -388,6 +388,8 @@ class TermExport:
     reference_output: torch.Tensor
     """The term's output on the discovery step (for a trace-time sanity check)."""
     constant_slots: list[SlotKey] = field(default_factory=list)
+    input_shapes: list[list[int]] = field(default_factory=list)
+    """Traced shape of each input slot, parallel to ``input_slots`` (see :func:`slots_json`)."""
 
     @property
     def is_dynamic_only(self) -> bool:
@@ -421,7 +423,7 @@ def slot_label(key: SlotKey) -> str:
     return f"{namespace}.{name_part}"
 
 
-def slot_to_json(key: SlotKey) -> dict[str, Any]:
+def slot_to_json(key: SlotKey, shape: Sequence[int] | None = None) -> dict[str, Any]:
     """Serialize one input slot for ``policy.json`` / ``config.json``.
 
     Three shapes, distinguished by which keys are present: ``{"entity", "field"}``
@@ -429,18 +431,47 @@ def slot_to_json(key: SlotKey) -> dict[str, Any]:
     ``{"command", "field"}`` for another command term's state. All carry
     ``input`` — the graph input name to feed this slot's value as — so the
     runtime never has to re-derive it from the naming scheme.
+
+    ``shape`` is the traced tensor's shape, batch axis included. The runtime feeds
+    a flat value array, so without it there is nothing to reconstruct the rank
+    from and it can only guess ``(batch, n)`` — which ORT rejects outright for the
+    fields that aren't rank 2: ``site_pos_w`` is ``(batch, num_sites, 3)`` and
+    ``heading_w`` is ``(batch,)``.
     """
     namespace, name_part = key
     if namespace == _SENSOR_NS:
-        return {"sensor": name_part, "input": _slot_input_name(key)}
-    if namespace == _COMMAND_NS:
+        entry = {"sensor": name_part, "input": _slot_input_name(key)}
+    elif namespace == _COMMAND_NS:
         command_name, _, attr = name_part.partition(".")
-        return {
+        entry = {
             "command": command_name,
             "field": attr,
             "input": _slot_input_name(key),
         }
-    return {"entity": namespace, "field": name_part, "input": _slot_input_name(key)}
+    else:
+        entry = {
+            "entity": namespace,
+            "field": name_part,
+            "input": _slot_input_name(key),
+        }
+    if shape is not None:
+        entry["shape"] = [int(d) for d in shape]
+    return entry
+
+
+def slots_json(export: Any) -> list[dict[str, Any]]:
+    """Serialize every input slot of a term/event/command export, shapes included.
+
+    Shared by all three export kinds so the wire format can only be described in
+    one place. ``input_shapes`` is positionally parallel to ``input_slots``; a
+    short or absent list degrades to shape-less entries rather than raising, which
+    keeps hand-built exports in tests usable.
+    """
+    shapes = getattr(export, "input_shapes", None) or []
+    return [
+        slot_to_json(key, shapes[i] if i < len(shapes) else None)
+        for i, key in enumerate(export.input_slots)
+    ]
 
 
 def trace_term(
@@ -535,6 +566,7 @@ def trace_term(
         output_name=output_name,
         reference_output=recorded.detach(),
         constant_slots=sorted(constants),
+        input_shapes=[list(t.shape) for t in example_inputs],
     )
 
 
@@ -798,6 +830,8 @@ class EventExport:
     reference_outputs: tuple[torch.Tensor, ...]
     reference_rand: torch.Tensor
     constant_slots: list[str] = field(default_factory=list)
+    input_shapes: list[list[int]] = field(default_factory=list)
+    """Traced shape of each input slot, parallel to ``input_slots`` (see :func:`slots_json`)."""
 
 
 def trace_event_term(
@@ -905,6 +939,7 @@ def trace_event_term(
         reference_outputs=tuple(t.detach() for t in ref_tensors),
         reference_rand=ref_rand.detach(),
         constant_slots=[":".join(str(p) for p in k) for k in sorted(tensor_consts)],
+        input_shapes=[list(dynamic[k].shape) for k in dynamic_keys],
     )
 
 
@@ -1105,6 +1140,8 @@ class CommandExport:
     output_names: list[str]
     write_targets: list[dict[str, Any]]
     reference_rand: torch.Tensor
+    input_shapes: list[list[int]] = field(default_factory=list)
+    """Traced shape of each input slot, parallel to ``input_slots`` (see :func:`slots_json`)."""
 
 
 def trace_command_term(
@@ -1220,4 +1257,5 @@ def trace_command_term(
         output_names=output_names,
         write_targets=write_targets,
         reference_rand=ref_rand.detach(),
+        input_shapes=[list(dynamic[k].shape) for k in dynamic_keys],
     )

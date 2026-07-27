@@ -17,7 +17,7 @@
 
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
-import { slotInputName } from '../onnx/session';
+import { slotDims, slotInputName } from '../onnx/session';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 import type { PolicyState } from '../policy/types';
 
@@ -75,7 +75,7 @@ export class OnnxTermination extends TerminationBase {
         );
         return;
       }
-      feeds[slotInputName(slot)] = { data: value, dims: [1, value.length] };
+      feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
     }
     const outputs = await this.deps.session.run(feeds);
     const first = Object.values(outputs)[0];

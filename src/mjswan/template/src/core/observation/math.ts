@@ -41,6 +41,24 @@ export function quatInverse(quat: ArrayLike<number>): number[] {
   return [w * inv, -x * inv, -y * inv, -z * inv];
 }
 
+/** Rotate `vec` by `quat` (w, x, y, z) — mjlab's `quat_apply`. */
+export function quatApply(quat: ArrayLike<number>, vec: ArrayLike<number>): number[] {
+  const w = quat[0] ?? 1;
+  const x = quat[1] ?? 0;
+  const y = quat[2] ?? 0;
+  const z = quat[3] ?? 0;
+  const vx = vec[0] ?? 0;
+  const vy = vec[1] ?? 0;
+  const vz = vec[2] ?? 0;
+  const tx = 2.0 * (y * vz - z * vy);
+  const ty = 2.0 * (z * vx - x * vz);
+  const tz = 2.0 * (x * vy - y * vx);
+  const cx = y * tz - z * ty;
+  const cy = z * tx - x * tz;
+  const cz = x * ty - y * tx;
+  return [vx + w * tx + cx, vy + w * ty + cy, vz + w * tz + cz];
+}
+
 export function quatApplyInv(quat: ArrayLike<number>, vec: ArrayLike<number>): number[] {
   const w = quat[0] ?? 1;
   const x = quat[1] ?? 0;

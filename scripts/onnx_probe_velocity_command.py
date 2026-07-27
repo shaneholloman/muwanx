@@ -31,7 +31,6 @@ _STATE_FIELDS = [
 
 def main() -> int:
     import torch
-
     from mjlab.envs import ManagerBasedRlEnv
     from mjlab.tasks.velocity.config.go1.env_cfgs import unitree_go1_flat_env_cfg
 

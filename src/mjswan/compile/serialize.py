@@ -24,7 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .tracer import CommandExport, slot_to_json
+from .tracer import CommandExport, slots_json
 
 # Authoritative JSON Schema for one OnnxCommand config entry. The TS runtime
 # validates the manifest against this at load time (brief §6); the Python emitter
@@ -68,9 +68,11 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
                 },
             },
         },
-        # Two slot shapes (mjswan.compile.tracer.slot_to_json): an ``Entity.data``
-        # read carries entity+field; a whole-sensor read carries sensor. Both
-        # carry ``input``, the graph input name to feed the value as.
+        # Three slot shapes (mjswan.compile.tracer.slot_to_json): an ``Entity.data``
+        # read carries entity+field; a whole-sensor read carries sensor; another
+        # command term's state carries command+field. All carry ``input`` (the graph
+        # input name to feed the value as) and ``shape`` (the traced rank, which the
+        # runtime cannot recover from a flat value array).
         "input_slots": {
             "type": "array",
             "items": {
@@ -80,12 +82,15 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
                 "oneOf": [
                     {"required": ["entity", "field"]},
                     {"required": ["sensor"]},
+                    {"required": ["command", "field"]},
                 ],
                 "properties": {
                     "entity": {"type": ["string", "null"]},
                     "field": {"type": "string"},
                     "sensor": {"type": "string"},
+                    "command": {"type": "string"},
                     "input": {"type": "string"},
+                    "shape": {"type": "array", "items": {"type": "integer"}},
                 },
             },
         },
@@ -161,7 +166,7 @@ def command_config(
         "command_field": export.command_field,
         "rand_dim": export.rand_dim,
         "state_fields": export.state_fields,
-        "input_slots": [slot_to_json(k) for k in export.input_slots],
+        "input_slots": slots_json(export),
         "write_targets": export.write_targets,
         "debug_vis": bool(debug_vis),
     }

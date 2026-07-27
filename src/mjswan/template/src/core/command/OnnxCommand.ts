@@ -38,7 +38,7 @@
 import * as THREE from 'three';
 import { SeededRng } from '../rng';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from '../event/entityWrite';
-import { slotInputName } from '../onnx/session';
+import { slotDims, slotInputName } from '../onnx/session';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import { mjcToThreeCoordinate } from '../scene/coordinate';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
@@ -140,6 +140,23 @@ export class OnnxCommand implements CommandTerm {
     return this.cfg.ui ?? null;
   }
 
+  /**
+   * One of this command's traced state fields, for a `{command, field}` input
+   * slot on another term's graph (mjlab's `object_to_goal_distance` measures
+   * against the lift command's `target_pos`). Null for an undeclared field.
+   *
+   * Deliberately the raw state, not `getCommand()`: the UI override applies to
+   * the command vector a policy consumes, while a slot has to mirror what mjlab
+   * reads off the command term itself.
+   */
+  getStateField(field: string): Float32Array | null {
+    const tensor = this.state.get(field);
+    // Copied: `toFloat32` passes a Float32Array straight through, and this is the
+    // tensor the graph is fed next frame — a caller scaling it in place would
+    // corrupt the command's own state.
+    return tensor ? Float32Array.from(toFloat32(tensor.data)) : null;
+  }
+
   /** Advance the timer and kick off inference; never blocks (see class docs). */
   update(dt: number): void {
     this.timeLeft -= dt;
@@ -208,7 +225,7 @@ export class OnnxCommand implements CommandTerm {
     for (const slot of this.cfg.input_slots ?? []) {
       const value = this.deps.readSlot?.(slot) ?? null;
       if (!value) continue;
-      feeds[slotInputName(slot)] = { data: value, dims: [1, value.length] };
+      feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
     }
     feeds.resample_mask = { data: new Uint8Array([resample ? 1 : 0]), dims: [1] };
     feeds.rand = {

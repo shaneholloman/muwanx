@@ -162,7 +162,7 @@ def serialize_observation_term(
 ) -> dict[str, Any] | None:
     """Serialize one observation term. Returns ``None`` for a dropped/unsupported term."""
     from .compile import trace_term
-    from .compile.tracer import slot_to_json
+    from .compile.tracer import slots_json
 
     func = term_cfg.func
     if isinstance(func, ObservationBinding):
@@ -208,7 +208,7 @@ def serialize_observation_term(
         "name": name,
         "onnx": ref,
         "size": _tensor_width(export.reference_output),
-        "input_slots": [slot_to_json(k) for k in export.input_slots],
+        "input_slots": slots_json(export),
     }
     return _apply_observation_pipeline(entry, term_cfg, group_history_length)
 
@@ -237,7 +237,7 @@ def serialize_termination(
 ) -> dict[str, Any] | None:
     """Serialize one termination term. Returns ``None`` for an unsupported legacy term."""
     from .compile import trace_term
-    from .compile.tracer import slot_to_json
+    from .compile.tracer import slots_json
 
     func = term_cfg.func
     if isinstance(func, TerminationBinding):
@@ -269,7 +269,7 @@ def serialize_termination(
     entry = {
         "name": name,
         "onnx": ref,
-        "input_slots": [slot_to_json(k) for k in export.input_slots],
+        "input_slots": slots_json(export),
     }
     if term_cfg.time_out:
         entry["time_out"] = True
@@ -286,7 +286,7 @@ def serialize_event(
 ) -> dict[str, Any] | None:
     """Serialize one event term (any mode). Returns ``None`` if genuinely nothing to emit."""
     from .compile import trace_event_term
-    from .compile.tracer import slot_to_json
+    from .compile.tracer import slots_json
 
     func = term_cfg.func
     if isinstance(func, EventBinding):
@@ -314,7 +314,7 @@ def serialize_event(
         "mode": term_cfg.mode,
         "onnx": ref,
         "rand_dim": export.rand_dim,
-        "input_slots": [slot_to_json(k) for k in export.input_slots],
+        "input_slots": slots_json(export),
         "write_targets": export.write_targets,
     }
     if term_cfg.mode == "interval":
