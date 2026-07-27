@@ -22,21 +22,25 @@ export interface OnnxTensorLike {
 /**
  * A dynamic runtime read a term's graph declares as an input.
  *
- * Two shapes, distinguished by which field is set (mirroring
+ * Three shapes, distinguished by which field is set (mirroring
  * `mjswan.compile.tracer.slot_to_json`):
  * - `entity` + `field` — one `Entity.data.<field>` tensor.
  * - `sensor` — a whole MuJoCo sensor's value (mjlab's `builtin_sensor`).
+ * - `command` + `field` — another command term's current state, e.g. a goal
+ *   position an observation measures distance to (mjlab's
+ *   `object_to_goal_distance`).
  *
  * `input` is the graph input name to feed this slot's value as. Prefer it over
- * re-deriving a name from `entity`/`field`: sensor names carry MJCF paths that
- * the build folds to identifiers, so the mapping is not reproducible here.
- * Optional only for backward compatibility with configs emitted before it
- * existed — see `slotInputName`.
+ * re-deriving a name from `entity`/`field`: sensor and command names carry
+ * paths/dots that the build folds to identifiers, so the mapping is not
+ * reproducible here. Optional only for backward compatibility with configs
+ * emitted before it existed — see `slotInputName`.
  */
 export interface OnnxInputSlot {
   entity?: string | null;
   field?: string;
   sensor?: string;
+  command?: string;
   input?: string;
 }
 

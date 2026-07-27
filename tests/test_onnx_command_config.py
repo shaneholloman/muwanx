@@ -21,7 +21,13 @@ from mjswan.compile import (  # noqa: E402
     validate_command_config,
     write_command_artifact,
 )
-from mjswan.compile.tracer import _SENSOR_NS, CommandExport, slot_to_json  # noqa: E402
+from mjswan.compile.tracer import (  # noqa: E402
+    _COMMAND_NS,
+    _SENSOR_NS,
+    CommandExport,
+    _is_dynamic_field,
+    slot_to_json,
+)
 
 
 def _make_export() -> CommandExport:
@@ -124,6 +130,25 @@ def test_slot_to_json_sensor():
         "sensor": "robot/imu_lin_vel",
         "input": "sensor__robot_imu_lin_vel",
     }
+
+
+def test_slot_to_json_command_state():
+    # A read of another command's state (mjlab's object_to_goal_distance).
+    assert slot_to_json((_COMMAND_NS, "lift_height.target_pos")) == {
+        "command": "lift_height",
+        "field": "target_pos",
+        "input": "command__lift_height_target_pos",
+    }
+
+
+def test_unknown_data_fields_default_to_dynamic():
+    # Baking a field that actually varies is silent corruption, so only the
+    # model-derived constants are listed and anything else errs toward dynamic.
+    # (`site_pos_w` was silently frozen while the allowlist ran the other way.)
+    assert _is_dynamic_field("site_pos_w")
+    assert _is_dynamic_field("some_future_mjlab_field")
+    assert not _is_dynamic_field("default_joint_pos")
+    assert not _is_dynamic_field("soft_joint_pos_limits")
 
 
 def test_command_config_accepts_a_sensor_slot():

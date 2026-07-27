@@ -14,9 +14,10 @@ fields off ``env`` (e.g. ``env.scene["robot"].data.joint_pos``). To trace it wit
 1. **Discover** which ``env.scene[name].data.<field>`` tensors the function reads,
    by running it once against a recording proxy that wraps the *real* env.
 2. **Classify** each accessed field as either time-varying simulation state (an
-   ONNX graph input) or a constant (baked into the graph at trace time). The
-   split is a small field-name registry — far cheaper than reimplementing the
-   term's math, and it is the only knowledge this layer carries.
+   ONNX graph input) or a model-derived constant (baked into the graph at trace
+   time). The split is a small allowlist of the *constants* — everything else is
+   dynamic, so an unrecognized field errs toward a graph input rather than being
+   silently frozen. This is the only mjlab knowledge this layer carries.
 3. **Wrap** the function in an ``nn.Module`` whose ``forward`` takes only the
    dynamic tensors, serves the constants from registered buffers, and calls the
    real ``func``. ``torch.onnx.export`` then records the actual torch ops.
@@ -41,33 +42,46 @@ from .rng import DrawRecorder, ReplayRng
 # ---------------------------------------------------------------------------
 # Field classification — the only mjlab knowledge this layer carries.
 #
-# A field read off ``Entity.data`` is a **graph input** if it is time-varying
-# simulation state, otherwise it is **baked as a constant** at trace time. Keep
-# this in sync with the browser runtime's state-collection (`collectRawState`,
-# ADR 0005 §6) as new mjlab data fields are exercised.
+# A field read off ``Entity.data`` is either **baked as a constant** at trace time
+# or threaded as a **graph input**. Only the model-derived constants are listed;
+# everything else is treated as time-varying.
+#
+# The allowlist is deliberately this way round. Baking a field that actually varies
+# is *silent* corruption — the graph returns trace-time values forever, and nothing
+# downstream can tell. Threading a field that is actually constant costs an extra
+# graph input the runtime must supply, which fails loudly and immediately. So an
+# unrecognized field defaults to dynamic. (This list started as its inverse, which
+# silently froze the end-effector position in Lift-Cube-Yam's `ee_to_cube`; the
+# parity harness caught it at max|Δ|≈4e-2.)
 # ---------------------------------------------------------------------------
 
-_DYNAMIC_DATA_FIELDS: frozenset[str] = frozenset(
+_STATIC_DATA_FIELDS: frozenset[str] = frozenset(
     {
-        "joint_pos",
-        "joint_pos_biased",
-        "joint_vel",
-        "root_link_pos_w",
-        "root_link_quat_w",
-        "root_link_lin_vel_b",
-        "root_link_ang_vel_b",
-        "root_ang_vel_b",
-        "root_link_vel_w",
-        "root_link_lin_vel_w",
-        "root_link_ang_vel_w",
-        "projected_gravity_b",
-        "heading_w",
+        # Model default pose/velocity, and the limits derived from the MJCF.
+        "default_joint_pos",
+        "default_joint_vel",
+        "default_root_state",
+        "default_mass",
+        "default_inertia",
+        "joint_pos_limits",
+        "soft_joint_pos_limits",
+        "joint_vel_limits",
+        "soft_joint_vel_limits",
+        "joint_effort_limits",
+        "soft_joint_effort_limits",
     }
 )
 
+
+def _is_dynamic_field(field_name: str) -> bool:
+    """Whether an ``Entity.data`` field must be threaded as a graph input."""
+    return field_name not in _STATIC_DATA_FIELDS
+
+
 # A slot key identifies one tensor read off the env, as ``(namespace, name)``:
-#   (entity_name, data_field)  -> env.scene[entity].data.<field>
-#   (_SENSOR_NS, sensor_name)  -> env.scene[sensor].data  (a whole BuiltinSensor read)
+#   (entity_name, data_field)        -> env.scene[entity].data.<field>
+#   (_SENSOR_NS, sensor_name)        -> env.scene[sensor].data (a whole BuiltinSensor)
+#   (_COMMAND_NS, "cmd.attr")        -> env.command_manager.get_term(cmd).<attr>
 SlotKey = tuple[str, str]
 
 _SENSOR_NS = "__sensor__"
@@ -77,23 +91,53 @@ mjlab's scene indexes sensors and entities in one ``scene[name]`` namespace, so 
 slot key needs its own marker to stay unambiguous. Not a legal mjlab entity name in
 practice (mjlab names come from MJCF bodies/sites)."""
 
+_COMMAND_NS = "__command__"
+"""Namespace marking a :class:`SlotKey` as a read of another command term's state.
 
-def _sensor_proxy(real: Any, get_data: Callable[[], Any]) -> Any:
-    """A stand-in for a live mjlab ``Sensor`` whose ``.data`` comes from ``get_data``.
+An observation may depend on a command's current value (mjlab's
+``object_to_goal_distance`` reads ``command_manager.get_term(name).target_pos``).
+The name part is ``"{command_name}.{attr}"``."""
 
-    Sensor-reading terms assert on the concrete class (``builtin_sensor`` does
-    ``assert isinstance(sensor, BuiltinSensor)``), so a duck-typed proxy like the
-    entity ones is rejected outright. Subclassing the *real* sensor's own class and
-    sharing its ``__dict__`` keeps that check true — and keeps every other sensor
-    attribute (``cfg``, ``num_frames``, …) working — while overriding only ``data``.
+
+def _class_proxy(real: Any, overrides: dict[str, Any]) -> Any:
+    """A stand-in for a live mjlab object that still satisfies ``isinstance`` checks.
+
+    Terms assert on concrete classes (``builtin_sensor`` does
+    ``assert isinstance(sensor, BuiltinSensor)``; ``object_to_goal_distance`` does
+    the same for ``LiftingCommand``), so the duck-typed proxies used for entities
+    are rejected outright. Subclassing the *real* object's own class and sharing
+    its ``__dict__`` keeps those checks true — and keeps every unrelated attribute
+    working — while replacing only what ``overrides`` names.
     """
     cls = type(real)
-    proxy_cls = type(
-        f"_Proxy{cls.__name__}", (cls,), {"data": property(lambda _self: get_data())}
-    )
+    proxy_cls = type(f"_Proxy{cls.__name__}", (cls,), overrides)
     proxy = object.__new__(proxy_cls)
     proxy.__dict__ = real.__dict__
     return proxy
+
+
+def _sensor_proxy(real: Any, get_data: Callable[[], Any]) -> Any:
+    """A sensor stand-in whose ``.data`` comes from ``get_data``."""
+    return _class_proxy(real, {"data": property(lambda _self: get_data())})
+
+
+def _command_proxy(real: Any, on_tensor: Callable[[str, Any], Any]) -> Any:
+    """A command-term stand-in routing every tensor attribute through ``on_tensor``.
+
+    Unlike sensors (one ``data`` property) a command's state is a set of plain
+    instance attributes (``target_pos``, ``vel_command_b``, …) living in
+    ``__dict__``, so ``__getattr__`` never fires for them and ``__getattribute__``
+    is the only hook that sees the read. Non-tensor attributes pass through
+    untouched, so methods and cfg still behave normally.
+    """
+
+    def __getattribute__(self: Any, attr: str) -> Any:  # noqa: N807
+        value = object.__getattribute__(self, attr)
+        if isinstance(value, torch.Tensor):
+            return on_tensor(attr, value)
+        return value
+
+    return _class_proxy(real, {"__getattribute__": __getattribute__})
 
 
 def _is_sensor(scene: Any, name: str) -> bool:
@@ -159,18 +203,56 @@ class _RecordingScene:
         return value
 
 
+class _RecordingCommandManager:
+    """Wraps the real ``CommandManager``, logging command-state tensor reads."""
+
+    def __init__(
+        self,
+        real: Any,
+        log: list[tuple[SlotKey, Any]],
+        commands: dict[str, Any],
+    ):
+        self._real = real
+        self._log = log
+        self._commands = commands
+
+    def get_term(self, name: str) -> Any:
+        real = self._real.get_term(name)
+        # Keep the real term so the replay pass can subclass its class.
+        self._commands[name] = real
+
+        def on_tensor(attr: str, value: Any) -> Any:
+            self._log.append(((_COMMAND_NS, f"{name}.{attr}"), value))
+            return value
+
+        return _command_proxy(real, on_tensor)
+
+    def get_command(self, name: str) -> Any:
+        value = self._real.get_command(name)
+        self._log.append(((_COMMAND_NS, f"{name}.command"), value))
+        return value
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
 class _RecordingEnv:
-    """Proxy env recording which ``scene[...]`` reads (entity data / sensors) a term makes."""
+    """Proxy env recording the reads a term makes (entity data, sensors, commands)."""
 
     def __init__(self, real: Any):
         object.__setattr__(self, "_real", real)
         object.__setattr__(self, "_log", [])
         object.__setattr__(self, "_sensors", {})
+        object.__setattr__(self, "_commands", {})
         object.__setattr__(
             self, "scene", _RecordingScene(real.scene, self._log, self._sensors)
         )
 
     def __getattr__(self, name: str) -> Any:
+        if name == "command_manager":
+            return _RecordingCommandManager(
+                self._real.command_manager, self._log, self._commands
+            )
         return getattr(self._real, name)
 
 
@@ -217,13 +299,38 @@ class _ReplayScene:
         return _ReplayEntity(name, self._slots)
 
 
+class _ReplayCommandManager:
+    """Serves recorded command-state slots back during tracing."""
+
+    def __init__(self, slots: dict[SlotKey, torch.Tensor], commands: dict[str, Any]):
+        self._slots = slots
+        self._commands = commands
+
+    def get_term(self, name: str) -> Any:
+        real = self._commands.get(name)
+        if real is None:
+            raise AttributeError(
+                f"Term read command {name!r} during tracing that the discovery pass "
+                "never saw — the term's control flow is input-dependent, which is "
+                "not traceable (ADR 0005 §Consequences)."
+            )
+        return _command_proxy(
+            real, lambda attr, _v: self._slots[(_COMMAND_NS, f"{name}.{attr}")]
+        )
+
+    def get_command(self, name: str) -> torch.Tensor:
+        return self._slots[(_COMMAND_NS, f"{name}.command")]
+
+
 class _ReplayEnv:
     def __init__(
         self,
         slots: dict[SlotKey, torch.Tensor],
         sensors: dict[str, Any] | None = None,
+        commands: dict[str, Any] | None = None,
     ):
         self.scene = _ReplayScene(slots, sensors)
+        self.command_manager = _ReplayCommandManager(slots, commands or {})
 
 
 class _TermModule(nn.Module):
@@ -241,12 +348,14 @@ class _TermModule(nn.Module):
         dynamic_keys: list[SlotKey],
         constants: dict[SlotKey, torch.Tensor],
         sensors: dict[str, Any] | None = None,
+        commands: dict[str, Any] | None = None,
     ):
         super().__init__()
         self._func = func
         self._params = params
         self._dynamic_keys = dynamic_keys
         self._sensors = sensors or {}
+        self._commands = commands or {}
         self._const_buffers: dict[SlotKey, str] = {}
         for i, (key, value) in enumerate(constants.items()):
             buffer_name = f"_const_{i}"
@@ -257,7 +366,8 @@ class _TermModule(nn.Module):
         slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
         for key, buffer_name in self._const_buffers.items():
             slots[key] = getattr(self, buffer_name)
-        return self._func(_ReplayEnv(slots, self._sensors), **self._params)
+        env = _ReplayEnv(slots, self._sensors, self._commands)
+        return self._func(env, **self._params)
 
 
 # ---------------------------------------------------------------------------
@@ -287,14 +397,17 @@ class TermExport:
 def _slot_input_name(key: SlotKey) -> str:
     """The ONNX graph input name for a slot.
 
-    Sensor names carry MJCF paths (``robot/imu_lin_vel``), so non-identifier
-    characters are folded to ``_``. The authoritative name always travels to the
-    runtime in the slot's own ``input`` field (:func:`slot_to_json`) rather than
-    being recomputed there, so this scheme stays a build-time detail.
+    Sensor names carry MJCF paths (``robot/imu_lin_vel``) and command slots embed a
+    dotted ``cmd.attr``, so non-identifier characters are folded to ``_``. The
+    authoritative name always travels to the runtime in the slot's own ``input``
+    field (:func:`slot_to_json`) rather than being recomputed there, so this scheme
+    stays a build-time detail.
     """
     namespace, name_part = key
     if namespace == _SENSOR_NS:
         return "sensor__" + re.sub(r"\W", "_", name_part)
+    if namespace == _COMMAND_NS:
+        return "command__" + re.sub(r"\W", "_", name_part)
     return f"{namespace}__{name_part}"
 
 
@@ -303,20 +416,30 @@ def slot_label(key: SlotKey) -> str:
     namespace, name_part = key
     if namespace == _SENSOR_NS:
         return f"sensor:{name_part}"
+    if namespace == _COMMAND_NS:
+        return f"command:{name_part}"
     return f"{namespace}.{name_part}"
 
 
 def slot_to_json(key: SlotKey) -> dict[str, Any]:
     """Serialize one input slot for ``policy.json`` / ``config.json``.
 
-    Two shapes, distinguished by which keys are present: ``{"entity", "field"}``
-    for an ``Entity.data`` read and ``{"sensor"}`` for a whole-sensor read. Both
-    carry ``input`` — the graph input name to feed this slot's value as — so the
+    Three shapes, distinguished by which keys are present: ``{"entity", "field"}``
+    for an ``Entity.data`` read, ``{"sensor"}`` for a whole-sensor read, and
+    ``{"command", "field"}`` for another command term's state. All carry
+    ``input`` — the graph input name to feed this slot's value as — so the
     runtime never has to re-derive it from the naming scheme.
     """
     namespace, name_part = key
     if namespace == _SENSOR_NS:
         return {"sensor": name_part, "input": _slot_input_name(key)}
+    if namespace == _COMMAND_NS:
+        command_name, _, attr = name_part.partition(".")
+        return {
+            "command": command_name,
+            "field": attr,
+            "input": _slot_input_name(key),
+        }
     return {"entity": namespace, "field": name_part, "input": _slot_input_name(key)}
 
 
@@ -362,9 +485,11 @@ def trace_term(
         if not isinstance(value, torch.Tensor):
             continue  # non-tensor attribute access, not a graph slot
         namespace, field_name = key
-        # A sensor read is live sim state by definition; entity data fields are
-        # dynamic only if the registry says so.
-        is_dynamic = namespace == _SENSOR_NS or field_name in _DYNAMIC_DATA_FIELDS
+        # Sensor and command-state reads are live state by definition; entity data
+        # fields are dynamic unless they are model-derived constants.
+        is_dynamic = namespace in (_SENSOR_NS, _COMMAND_NS) or _is_dynamic_field(
+            field_name
+        )
         bucket = dynamic if is_dynamic else constants
         bucket.setdefault(key, value)
 
@@ -380,7 +505,10 @@ def trace_term(
 
     # 3. Trace to ONNX.
     sensors = dict(recorder._sensors)  # noqa: SLF001 — internal proxy
-    module = _TermModule(func, params, dynamic_keys, constants, sensors).eval()
+    commands = dict(recorder._commands)  # noqa: SLF001 — internal proxy
+    module = _TermModule(
+        func, params, dynamic_keys, constants, sensors, commands
+    ).eval()
     output_name = "value"
     buffer = io.BytesIO()
     # The legacy TorchScript tracer records the concrete tensor ops the term runs
@@ -411,10 +539,17 @@ def trace_term(
 
 
 def read_slot(env: Any, key: SlotKey) -> torch.Tensor:
-    """Read an input slot's current value from ``env`` (entity data or a sensor)."""
+    """Read an input slot's current value from ``env``.
+
+    Handles all three slot namespaces: entity data, a whole sensor, and another
+    command term's state.
+    """
     namespace, name_part = key
     if namespace == _SENSOR_NS:
         return env.scene[name_part].data
+    if namespace == _COMMAND_NS:
+        command_name, _, attr = name_part.partition(".")
+        return getattr(env.command_manager.get_term(command_name), attr)
     return getattr(env.scene[namespace].data, name_part)
 
 
@@ -709,7 +844,7 @@ def trace_event_term(
     for key, value in log:
         is_dynamic = (
             key[0] == "data"
-            and key[2] in _DYNAMIC_DATA_FIELDS
+            and _is_dynamic_field(key[2])
             and isinstance(value, torch.Tensor)
         )
         if is_dynamic:
@@ -1018,7 +1153,7 @@ def trace_command_term(
     for key, value in log:
         is_dynamic = (
             key[0] == "data"
-            and key[2] in _DYNAMIC_DATA_FIELDS
+            and _is_dynamic_field(key[2])
             and isinstance(value, torch.Tensor)
         )
         if is_dynamic:

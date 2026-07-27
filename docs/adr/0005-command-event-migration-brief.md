@@ -36,7 +36,9 @@
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Non-mjlab-task scenes (`add_scene()` + custom obs/term/event) | **done** — `mjswan.trace_env.build_single_entity_trace_env()` builds a minimal live env from a single entity's spec (reusing mjlab's own `Entity`/`Scene`, no reimplemented kinematics), attached via `SceneHandle.set_trace_env()`. `examples/demo/{main,splat,muscle}.py` and `examples/tutorial/minimum_policy.py` all migrated onto mjlab's real functions + a few self-authored ones and verified against real traces |
 | Sensor input slots (`builtin_sensor`, `projected_gravity_from_sensor`) | **done** — a whole-sensor read is its own slot namespace (`_SENSOR_NS`), served through a proxy that subclasses the real sensor's class so mjlab's `assert isinstance(sensor, BuiltinSensor)` still holds. Unblocked all four Velocity-Flat/Rough G1/Go1 tasks (previously failed to serialize at all); full 16-step numeric parity, max\|Δ\|=0 |
-| Command-state input slots (`object_to_goal_distance`) | **known gap** — Lift-Cube-Yam's `cube_to_goal` reads a *command's* state (`env.command_manager.get_term(name).target_pos`), which the replay env has no stand-in for. Needs a `_COMMAND_NS` slot mirroring the sensor one (same dynamic-subclass proxy, but `__getattribute__` since command state lives in the instance `__dict__`) |
+| Command-state input slots (`object_to_goal_distance`) | **done** — `_COMMAND_NS` slot mirroring the sensor one (same class-subclassing proxy, via `__getattribute__` since command state lives in the instance `__dict__`). Unblocked Lift-Cube-Yam's `cube_to_goal` |
+| Dynamic-vs-constant field classification | **inverted (correctness fix)** — the allowlist named the *dynamic* fields, so any unlisted field was silently baked as a constant. That froze `site_pos_w` in Lift-Cube-Yam's `ee_to_cube` (parity caught it at max\|Δ\|≈4e-2). Now only the model-derived constants are listed (`_STATIC_DATA_FIELDS`) and anything unrecognized errs toward a graph input — a missing runtime input fails loudly instead of returning stale values forever |
+| **Numeric parity across every mjlab example task** | **PASS** — all 7 (`Cartpole-Balance/-Swingup`, `Lift-Cube-Yam`, `Velocity-Flat/Rough × G1/Go1`), 73 terms total, worst max\|Δ\|=8.9e-08 over 12 steps with reset events replayed |
 | `OnnxCommand` debug-vis marker | **done** — generic `viz` descriptor (`{field, shape, radius, color}`) on any traced command's config; `OnnxCommand.updateDebugVisuals()`/`dispose()` render/clean up a sphere at the named `state_fields` entry. `LiftingCommandCfg` supplies it from `cfg.viz.target_color` (`examples/mjlab/defaults/commands`) — no per-command TS class needed |
 
 **Sequencing (dependency order, not a schedule):** RNG harness (§2b) → tracer on
@@ -235,8 +237,10 @@ lifting-specific engine code:
 
 - [ ] RNG spy/replay harness (§2b) in place and used for every term with internal
       randomness before any Command/Event parity claim is trusted. **(done for reset)**
-- [ ] Every `examples/mjlab/*` task: N-step rollout matches the mjlab reference within
-      tolerance on observations and termination flags.
+- [x] Every `examples/mjlab/*` task: N-step rollout matches the mjlab reference within
+      tolerance on observations and termination flags. **(Python side: all 7 default
+      tasks PASS, 73 terms, worst max|Δ|=8.9e-08. The carved-out Tracking/Mimic
+      tasks are still out of scope, and the in-browser rollout is Phase 2/3.)**
 - [ ] Velocity-Flat/Rough: `fell_over`/`out_of_terrain_bounds` termination tracing;
       `mode="startup"` + `mode="interval"` dispatch (native timer, §4); the
       `UniformVelocityCommand` ONNX body + declarative GUI override (§3a; GUI override

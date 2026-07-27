@@ -24,6 +24,16 @@ describe('slotInputName', () => {
     ).toBe('sensor__robot_imu_lin_vel');
   });
 
+  it('uses the build-supplied input name for a command-state slot', () => {
+    expect(
+      slotInputName({
+        command: 'lift_height',
+        field: 'target_pos',
+        input: 'command__lift_height_target_pos',
+      }),
+    ).toBe('command__lift_height_target_pos');
+  });
+
   it('falls back to the legacy entity__field scheme when input is absent', () => {
     expect(slotInputName({ entity: 'robot', field: 'joint_pos' })).toBe('robot__joint_pos');
   });
