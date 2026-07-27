@@ -237,6 +237,7 @@ def serialize_termination(
 ) -> dict[str, Any] | None:
     """Serialize one termination term. Returns ``None`` for an unsupported legacy term."""
     from .compile import trace_term
+    from .compile.tracer import slot_to_json
 
     func = term_cfg.func
     if isinstance(func, TerminationBinding):
@@ -251,10 +252,13 @@ def serialize_termination(
     except ValueError:
         # No time-varying state read (e.g. mjlab's `time_out`, which compares
         # env-level step counters, not entity data) -- this is the one
-        # legitimately-native termination shape ADR 0005 §2 documents.
+        # legitimately-native termination shape ADR 0005 §2 documents. The
+        # threshold travels with it so the runtime can actually evaluate the
+        # comparison the marker names.
         entry: dict[str, Any] = {
             "name": name,
             "native": "elapsed_s >= episode_length_s",
+            "episode_length_s": float(getattr(env, "max_episode_length_s", 0.0)),
         }
         if term_cfg.time_out:
             entry["time_out"] = True
@@ -262,7 +266,11 @@ def serialize_termination(
 
     ref = _onnx_ref("term", name)
     _write_onnx(out_dir, ref, export.onnx_bytes)
-    entry = {"name": name, "onnx": ref}
+    entry = {
+        "name": name,
+        "onnx": ref,
+        "input_slots": [slot_to_json(k) for k in export.input_slots],
+    }
     if term_cfg.time_out:
         entry["time_out"] = True
     return entry

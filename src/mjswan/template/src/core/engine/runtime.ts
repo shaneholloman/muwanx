@@ -620,7 +620,7 @@ export class mjswanRuntime {
         // Evaluate termination conditions after simulation step
         if (this.terminationManager && this.policyStateBuilder) {
           const postState = this.policyStateBuilder.build();
-          const result = this.terminationManager.evaluate(postState);
+          const result = this.terminationManager.evaluate(postState, target);
           if (result.done) {
             this.resetSimulationState();
             this.terminationManager.reset();
@@ -790,7 +790,10 @@ export class mjswanRuntime {
         this.terminationManager = new TerminationManager(
           config.terminations,
           { ...Terminations, ...this.policyPlugins.terminations },
-          runner
+          runner,
+          // Same deferred seam as commands/events: the ONNX-backed terms need
+          // loaded sessions + a slot reader, which nothing supplies yet.
+          {}
         );
         console.log(`[TerminationManager] ${this.terminationManager.size} termination term(s) loaded`);
       }
