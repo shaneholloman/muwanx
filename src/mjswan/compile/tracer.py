@@ -199,7 +199,28 @@ class _RecordingScene:
 
     def _read_sensor(self, name: str, real: Any) -> Any:
         value = real.data
-        self._log.append(((_SENSOR_NS, name), value))
+        if isinstance(value, torch.Tensor):
+            # A builtin sensor is one `sensordata` window — one slot.
+            self._log.append(((_SENSOR_NS, name), value))
+            return value
+        # A structured sensor (mjlab's `RayCastSensor`: distances, hit_pos_w, …)
+        # has no single tensor to be. Log the *fields* the term actually touches,
+        # so each becomes its own slot instead of the term looking untraceable.
+        return _RecordingSensorData(value, name, self._log)
+
+
+class _RecordingSensorData:
+    """Wraps a structured sensor's ``.data``, logging each tensor field read."""
+
+    def __init__(self, real: Any, sensor: str, log: list[tuple[SlotKey, Any]]):
+        object.__setattr__(self, "_real", real)
+        object.__setattr__(self, "_sensor", sensor)
+        object.__setattr__(self, "_log", log)
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._real, name)
+        if isinstance(value, torch.Tensor):
+            self._log.append(((_SENSOR_NS, f"{self._sensor}.{name}"), value))
         return value
 
 
@@ -283,6 +304,22 @@ class _ReplayEntity:
         self.data = _ReplayData(entity, slots)
 
 
+class _ReplaySensorData:
+    """Serves a structured sensor's recorded fields during the replay pass."""
+
+    def __init__(self, sensor: str, slots: dict[SlotKey, torch.Tensor]):
+        object.__setattr__(self, "_sensor", sensor)
+        object.__setattr__(self, "_slots", slots)
+
+    def __getattr__(self, name: str) -> torch.Tensor:
+        key = (_SENSOR_NS, f"{self._sensor}.{name}")
+        if key not in self._slots:
+            raise AttributeError(
+                f"sensor field {self._sensor}.{name} was not recorded during discovery"
+            )
+        return self._slots[key]
+
+
 class _ReplayScene:
     def __init__(
         self,
@@ -295,7 +332,11 @@ class _ReplayScene:
     def __getitem__(self, name: str) -> Any:
         real = self._sensors.get(name)
         if real is not None:
-            return _sensor_proxy(real, lambda: self._slots[(_SENSOR_NS, name)])
+            whole = (_SENSOR_NS, name)
+            if whole in self._slots:
+                return _sensor_proxy(real, lambda: self._slots[whole])
+            # Structured sensor: the discovery pass recorded its fields separately.
+            return _sensor_proxy(real, lambda: _ReplaySensorData(name, self._slots))
         return _ReplayEntity(name, self._slots)
 
 
@@ -475,7 +516,12 @@ def slot_to_json(key: SlotKey, shape: Sequence[int] | None = None) -> dict[str, 
     """
     namespace, name_part = key
     if namespace == _SENSOR_NS:
-        entry = {"sensor": name_part, "input": _slot_input_name(key)}
+        sensor_name, dot, sensor_field = name_part.partition(".")
+        entry = {"sensor": sensor_name, "input": _slot_input_name(key)}
+        if dot:
+            # A structured sensor (mjlab's RayCastSensor) contributes one slot per
+            # field the term reads, rather than one window of `sensordata`.
+            entry["field"] = sensor_field
     elif namespace == _COMMAND_NS:
         command_name, _, attr = name_part.partition(".")
         entry = {
@@ -618,7 +664,9 @@ def read_slot(env: Any, key: SlotKey) -> torch.Tensor:
     """
     namespace, name_part = key
     if namespace == _SENSOR_NS:
-        return env.scene[name_part].data
+        sensor_name, dot, sensor_field = name_part.partition(".")
+        data = env.scene[sensor_name].data
+        return getattr(data, sensor_field) if dot else data
     if namespace == _COMMAND_NS:
         command_name, _, attr = name_part.partition(".")
         return getattr(env.command_manager.get_term(command_name), attr)

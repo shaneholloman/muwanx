@@ -12,9 +12,16 @@
  *
  * | slot                | source                                            |
  * |---------------------|---------------------------------------------------|
- * | `{entity, field}`   | an `Entity.data.<field>` tensor (table below)      |
- * | `{sensor}`          | `mjData.sensordata[adr … adr+dim]`                |
- * | `{command, field}`  | a live `OnnxCommand`'s state field                 |
+ * | `{entity, field}`     | an `Entity.data.<field>` tensor (table below)    |
+ * | `{sensor}`            | `mjData.sensordata[adr … adr+dim]`              |
+ * | `{sensor, field}`     | a structured sensor's field — *not yet served*   |
+ * | `{command, field}`    | a live `OnnxCommand`'s state field               |
+ *
+ * The `{sensor, field}` shape is mjlab's `RayCastSensor` (a height scan): its data
+ * is ray hits, not a `sensordata` window, so serving it means casting the rays
+ * browser-side. `mj_ray` is available in the WASM build and the term math already
+ * traces; what is missing is the sensor descriptor (ray offsets, frame, alignment,
+ * max distance) in the build output and the reader here.
  *
  * **The whole field, not a slice.** The graph carries the term's own indexing
  * (mjlab's managers resolve `SceneEntityCfg` name patterns to ids at build time,
@@ -39,10 +46,10 @@
  * mjlab-assembled scene a `terrain` slot resolves to nothing and reads as
  * unavailable. Deliberate: the alternative is guessing that unprefixed elements
  * mean the terrain, which would also silently swallow a misspelled entity name.
- * No traced term reads terrain state — mjlab's own MDP terms take a robot or
- * object `SceneEntityCfg`, and the height-scan family that would want terrain is
- * already marked unsupported — so this costs nothing today and fails visibly (a
- * named warning from the caller) if that ever changes.
+ * No traced term reads terrain state as an *entity*: mjlab's own MDP terms take a
+ * robot or object `SceneEntityCfg`, and the height scan reaches the terrain through
+ * a `RayCastSensor` slot rather than `terrain.data`. So this costs nothing today
+ * and fails visibly (a named warning from the caller) if that ever changes.
  *
  * **float64 → float32** happens here, at the read site: mjData is float64 and
  * ORT-Web wants Float32Array.
@@ -406,6 +413,18 @@ export function createSlotReader(
     if (!mjModel || !mjData) return null;
 
     if (slot.sensor) {
+      if (slot.field) {
+        // A *field* of a structured sensor — mjlab's `RayCastSensor`, whose data is
+        // ray hits rather than a `sensordata` window. Serving it needs the rays
+        // cast in the browser (`mj_ray` is available; the sensor descriptor is
+        // not yet emitted), so report unavailable rather than reaching into
+        // `sensordata`, where this sensor has no window at all.
+        console.warn(
+          `[slotReader] sensor "${slot.sensor}" field "${slot.field}" needs a ` +
+            'raycast reader, which is not implemented yet.',
+        );
+        return null;
+      }
       const window = sensorWindow(mjModel, slot.sensor);
       if (!window) return null;
       const out = new Float32Array(window.dim);

@@ -8,7 +8,7 @@
  * a wall. So each field is checked against mjlab's own definition, computed by
  * hand from a fake model whose addresses are deliberately not the identity.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createSlotReader, isReadableEntityField, type SlotReaderContext } from '../slotReader';
 import { slotDims } from '../session';
@@ -339,5 +339,29 @@ describe('slotDims', () => {
   it('falls back to (1, n) when the model no longer matches the declared shape', () => {
     // Better a shape ORT rejects loudly than one that lies about the data.
     expect(slotDims({ shape: [1, 2, 3], input: 'robot__site_pos_w' }, 9)).toEqual([1, 9]);
+  });
+});
+
+describe('createSlotReader — structured sensor fields', () => {
+  it('reports a raycast field unavailable rather than reading sensordata', () => {
+    // mjlab's RayCastSensor is not a `sensordata` window — it has no window at
+    // all. Falling through to the builtin-sensor path would either miss the name
+    // or, worse, land on some other sensor's numbers.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const read = createSlotReader(() => context());
+    expect(
+      read({
+        sensor: 'terrain_scan',
+        field: 'distances',
+        input: 'sensor__terrain_scan_distances',
+      }),
+    ).toBeNull();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('still serves a builtin sensor, which carries no field', () => {
+    const read = createSlotReader(() => context());
+    close(read({ sensor: 'robot/imu_lin_vel' }), [1, 2, 3]);
   });
 });

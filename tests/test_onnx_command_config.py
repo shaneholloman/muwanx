@@ -280,24 +280,24 @@ def test_command_without_a_reset_trace_is_unchanged(tmp_path):
 
 
 def _opaque_state_env():
-    """An env whose only readable state is not a tensor — mjlab's RayCastSensor shape."""
+    """An env whose only readable state is not a tensor, so no slot can carry it."""
 
-    class _RayData:
-        """A dataclass-ish sensor reading: real state, but not a tensor field."""
-
+    class _Data:
         def __init__(self):
-            self.distances = torch.tensor([[1.0, 2.0]])
+            # Real state the term branches on, but nothing a graph input can hold.
+            self.contact_mode = "soft"
 
-    class _Sensor:
+    class _Entity:
         def __init__(self):
-            self.data = _RayData()
+            self.data = _Data()
 
     class _Scene:
         def __init__(self):
-            self.sensors = {"terrain_scan": _Sensor()}
+            self.sensors = {}
+            self._entities = {"robot": _Entity()}
 
         def __getitem__(self, name):
-            return self.sensors[name]
+            return self._entities[name]
 
     class _Env:
         def __init__(self):
@@ -306,9 +306,17 @@ def _opaque_state_env():
     return _Env()
 
 
-def _reads_opaque_sensor(env, *, sensor_name="terrain_scan"):
-    """Stands in for `height_scan`: reads a sensor whose `.data` is not a tensor."""
-    return env.scene[sensor_name].data.distances * 2.0
+def _reads_opaque_state(env, *, entity_name="robot"):
+    """A term whose only env read yields no tensor — the untraceable shape.
+
+    mjlab's `height_scan` used to land here (its `RayCastSensor.data` is a struct
+    of ray hits); the tracer now follows that per field, so this fixture uses a
+    non-tensor field instead. The failure mode being guarded is unchanged: state
+    was read, none of it can become a graph input, and baking the result would
+    freeze whatever it varies with.
+    """
+    mode = env.scene[entity_name].data.contact_mode
+    return torch.full((1, 3), 1.0 if mode == "soft" else 2.0)
 
 
 def _reads_nothing(env, *, width=3):
@@ -321,11 +329,11 @@ def test_untraceable_observation_fails_the_build():
     from mjswan.compile.tracer import UntraceableTerm, trace_term
 
     with pytest.raises(UntraceableTerm) as excinfo:
-        trace_term(_reads_opaque_sensor, {}, _opaque_state_env(), name="height_scan")
+        trace_term(_reads_opaque_state, {}, _opaque_state_env(), name="contact_obs")
     # The message has to name what it could not follow, or nobody can act on it.
-    assert "height_scan" in str(excinfo.value)
-    assert "terrain_scan" in str(excinfo.value)
-    assert excinfo.value.touched == ["sensor:terrain_scan"]
+    assert "contact_obs" in str(excinfo.value)
+    assert "robot.contact_mode" in str(excinfo.value)
+    assert excinfo.value.touched == ["robot.contact_mode"]
 
 
 def test_term_reading_nothing_is_a_constant_not_untraceable():
@@ -352,8 +360,8 @@ def test_serializer_bakes_a_constant_but_refuses_an_untraceable_term(tmp_path):
 
     with pytest.raises(UntraceableTerm):
         serialize_observation_term(
-            "height_scan",
-            ObservationTermCfg(func=_reads_opaque_sensor),
+            "contact_obs",
+            ObservationTermCfg(func=_reads_opaque_state),
             env,
             tmp_path,
             None,
@@ -370,3 +378,56 @@ def test_unsupported_observation_binding_fails_rather_than_dropping():
     )
     with pytest.raises(ValueError, match="shorter observation vector"):
         serialize_observation_term("height_scan", term, object(), None, None)
+
+
+def test_structured_sensor_fields_become_one_slot_each():
+    """mjlab's `RayCastSensor` traces per field, not as one opaque blob.
+
+    A height scan reads `distances` / `frame_pos_w` / `hit_pos_w` off a sensor whose
+    `.data` is a struct. Logging the struct wholesale made the term look
+    untraceable, which is what silently froze `height_scan` on both Velocity-Rough
+    tasks. Each field is its own slot now, so the arithmetic traces and the runtime
+    is told exactly which readings to supply.
+    """
+    from mjswan.compile.tracer import slot_to_json, trace_term
+
+    class _RayData:
+        def __init__(self):
+            self.distances = torch.tensor([[1.0, 2.0]])
+            self.hit_pos_w = torch.tensor([[[0.0, 0.0, 0.1], [0.0, 0.0, 0.2]]])
+
+    class _Sensor:
+        def __init__(self):
+            self.data = _RayData()
+
+    class _Scene:
+        def __init__(self):
+            self.sensors = {"terrain_scan": _Sensor()}
+
+        def __getitem__(self, name):
+            return self.sensors[name]
+
+    class _Env:
+        def __init__(self):
+            self.scene = _Scene()
+
+    def height_scan(env, *, sensor_name="terrain_scan"):
+        data = env.scene[sensor_name].data
+        heights = -data.hit_pos_w[..., 2]
+        return torch.where(data.distances < 0, torch.zeros_like(heights), heights)
+
+    export = trace_term(height_scan, {}, _Env(), name="height_scan")
+    assert [slot_to_json(k) for k in export.input_slots] == [
+        {
+            "sensor": "terrain_scan",
+            "input": "sensor__terrain_scan_distances",
+            "field": "distances",
+        },
+        {
+            "sensor": "terrain_scan",
+            "input": "sensor__terrain_scan_hit_pos_w",
+            "field": "hit_pos_w",
+        },
+    ]
+    # Only the fields the term touched — `normals_w` and the rest stay out.
+    assert export.reference_output.shape == (1, 2)
