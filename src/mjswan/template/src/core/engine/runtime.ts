@@ -37,7 +37,7 @@ import { LocomotionPolicy } from '../policy/modules/LocomotionPolicy';
 import { CommandManager, type CommandTermContext, type CommandsConfig } from '../command';
 import { EventManager } from '../event/EventManager';
 import { Events } from '../event/events';
-import type { EventConfig, TerrainData } from '../event/EventBase';
+import type { EventConfig, EventContext, TerrainData } from '../event/EventBase';
 import { OnnxSessionCache, type SlotReader } from '../onnx/session';
 import { createSlotReader } from '../onnx/slotReader';
 import { SeededRng } from '../rng';
@@ -407,8 +407,25 @@ export class mjswanRuntime {
 
     this.applyViewerConfig(scene.viewer ?? null);
 
+    // `mode="startup"` terms fire once, after the model and policy exist — they
+    // write to mjData (domain randomization), so there has to be an mjData.
+    if (this.eventManager && this.mjModel && this.mjData) {
+      await this.eventManager.startup(this.eventContext());
+      this.mujoco.mj_forward(this.mjModel, this.mjData);
+      this.updateCachedState();
+    }
+
     this.running = true;
     void this.startLoop();
+  }
+
+  /** Context every event term writes through; re-read per call (scene reloads). */
+  private eventContext(): EventContext {
+    return {
+      mjModel: this.mjModel,
+      mjData: this.mjData,
+      terrainData: this.terrainData,
+    };
   }
 
   /**
@@ -715,6 +732,9 @@ export class mjswanRuntime {
         // computes observations before stepping the environment.
         this.commandManager.update(target);
         this.commandManager.updateDebugVisuals();
+        // Advances `mode="interval"` timers (mjlab's mid-episode randomization) and
+        // the reset gates' step counters.
+        this.eventManager?.tick(target, this.eventContext());
       }
 
       const elapsed = (performance.now() - loopStart) / 1000;
@@ -1177,13 +1197,12 @@ export class mjswanRuntime {
         qvel[i] = this.initialQvel[i];
       }
     }
-    if (this.eventManager) {
-      this.eventManager.onReset({
-        mjModel: this.mjModel,
-        mjData: this.mjData,
-        terrainData: this.terrainData,
-      });
-    }
+    // Not awaited: `resetSimulationState` is synchronous and so is the public
+    // `resetSimulation()`. An ONNX reset term's write therefore lands a frame or
+    // two late — the same accepted one-frame lag as the rest of the async
+    // boundary (ADR 0005 §8), and the alternative is making reset async all the
+    // way out through the engine API.
+    void this.eventManager?.onReset(this.eventContext());
     this.commandManager.resetTerms();
     if (this.onnxModule) {
       this.onnxInputDict = this.onnxModule.initInput();

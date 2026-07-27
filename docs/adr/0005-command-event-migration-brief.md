@@ -36,7 +36,9 @@
 | Observation **fusion** (ADR §4, mandatory for v1) | **not started** — the build emits one `.onnx` per term and the runtime runs one session per term. Purely a build-time optimization; the runtime contract above is unaffected by it landing |
 | Remove TS-side DSL (`core/dsl/`, `DslObservation.ts`, `DslTermination.ts`, `DslEvent.ts`) | **not started** — dead code now that the Python build path never emits a DSL JSON envelope; needs a registry-wiring check in `ObservationManager.ts`/`TerminationManager.ts`/`EventManager.ts` plus corresponding vitest removal |
 | §3 ONNX **termination** runtime (TS) | **done** — `core/termination/OnnxTermination.ts` (session + declared slots; skip-if-in-flight like `OnnxCommand`, since `evaluate()` is synchronous and a one-frame-late reset is the accepted lag) + `TimeOutTermination.ts` for the native marker, evaluated against episode time the manager accumulates from the control `dt`. The build now ships `episode_length_s` with that marker — it previously named a comparison the runtime had no threshold for |
-| §4 byte delivery for observation/termination sessions | **not started** — `PolicyRunnerOptions` and `TerminationManagerDeps` both take `onnxSessions`/`readOnnxSlot`, but nothing populates them yet (same deferred seam as commands/events). This is now the single thing standing between the verified build artifacts and a working browser rollout |
+| §6 slot reader (TS) | **done** — `core/onnx/slotReader.ts` serves all three slot shapes from `mjModel`/`mjData`: 14 `Entity.data` fields, a sensor's `sensordata` window (prefix-tolerant), and a live `OnnxCommand`'s state field, with the float64→Float32Array conversion at the read site. State collection is native by design, so the Python parity harness cannot reach it — `__tests__/slotReaderParity.test.ts` compares every field against mjlab's own `env.scene[entity].data.<field>` on two live stepped tasks (fixture from `scripts/dump_slot_fixture.py`). That check found two bugs: falling back to the whole model on an empty prefix match answered `terrain.joint_pos` with the robot's joints, and the hardcoded `dims: [1, n]` feed made rank-3 `site_pos_w` and rank-1 `heading_w` unfeedable — the traced shape now travels with the slot (`slot_to_json`'s `shape`, via the shared `slots_json`) and `slotDims` rebuilds the rank. Known limit: mjlab attaches `terrain` with `prefix=""`, so a terrain slot reads as unavailable rather than guessing (no traced term reads terrain state) |
+| §4 byte delivery for observation/termination sessions | **done** — `PolicyInput.graphs`/`SceneInput.graphs` carry the traced graphs keyed by the config-relative path; `mjswan/manifest` fills both in (policy graphs relative to `policy.json`, event graphs relative to the model, matching where the Builder writes each), and the exported `policyGraphRefs`/`eventGraphRefs` derive the list for a caller assembling inputs without the manifest. The runtime holds two session caches split by lifetime (scene-scoped events vs policy-scoped everything else), one `SeededRng` reseeded per scene load, and one slot reader, wired into all four managers. Verified every slot's emitted shape against its real graph's declared input shape |
+| §4 Event dispatch wired into the loop | **done** — `EventManager.startup()`/`tick()` existed but nothing called them, so `mode="startup"`/`"interval"` terms loaded and then never fired. `startup()` now runs once at the end of `loadEnvironment` (after the model *and* policy exist, so its writes are not clobbered by the policy load's reset) and `tick(dt)` runs each control step beside `commandManager.update`. `onReset()` stays un-awaited: `resetSimulation()` is synchronous out through the engine API, so a traced reset term's write lands a frame late — the same accepted lag as the rest of the async boundary (§8) |
 | §3a `SliderCommandConfig` extension (TS) | not started |
 | Non-mjlab-task scenes (`add_scene()` + custom obs/term/event) | **done** — `mjswan.trace_env.build_single_entity_trace_env()` builds a minimal live env from a single entity's spec (reusing mjlab's own `Entity`/`Scene`, no reimplemented kinematics), attached via `SceneHandle.set_trace_env()`. `examples/demo/{main,splat,muscle}.py` and `examples/tutorial/minimum_policy.py` all migrated onto mjlab's real functions + a few self-authored ones and verified against real traces |
 | Sensor input slots (`builtin_sensor`, `projected_gravity_from_sensor`) | **done** — a whole-sensor read is its own slot namespace (`_SENSOR_NS`), served through a proxy that subclasses the real sensor's class so mjlab's `assert isinstance(sensor, BuiltinSensor)` still holds. Unblocked all four Velocity-Flat/Rough G1/Go1 tasks (previously failed to serialize at all); full 16-step numeric parity, max\|Δ\|=0 |
@@ -518,14 +520,15 @@ prev)` with `prev` cloned before `_resample_command`'s in-place writes; reset un
 
     84 vitest tests green across the engine (9 files), tsc clean, eslint clean.
 
-**Next:** thread **real** bytes through `ResolvedPolicy`/`SceneInput` → `runtime.ts` →
-`OnnxSessionCache.load()` (mirroring the existing `motions: MotionInput[]` pattern per ADR
-0004 §4 — additive, no fetch), instantiate `rng`/`onnxSessions` on `mjswanRuntime` and pass
-through `CommandTermContext`/event dispatch, call `eventManager.startup()`/`tick()` from the
-main loop and `await eventManager.onReset()` in `resetSimulationState`, and sweep the
-existing `Math.random()` sites in `DslEvent`/`TrackingCommand` into the seeded PRNG. This
-last mile can only be fully exercised once the Builder-side artifact wiring (writing
-command/event `.onnx` into the actual build output) exists — until then it's structural,
-tested with fakes. A separate track: model-field-write startup-DR events
+**Done since:** the byte path is closed. `PolicyInput.graphs`/`SceneInput.graphs` carry the
+traced graphs (per ADR 0004 §4 — additive, no fetch, mirroring `motions: MotionInput[]`),
+`mjswan/manifest` fills both in, and `mjswanRuntime` owns the two session caches, the
+`SeededRng`, and the slot reader, passing them through `PolicyRunnerOptions` /
+`TerminationManagerDeps` / `CommandTermContext` / `EventManagerDeps`.
+`eventManager.startup()`/`tick()` are now called.
+
+**Next:** sweep the remaining `Math.random()` sites in `DslEvent`/`TrackingCommand` into the
+seeded PRNG (a recorded session does not replay bit-for-bit while they stand), then
+observation fusion. A separate track: model-field-write startup-DR events
 (`geom_friction`/`encoder_bias`/`body_com_offset`) — currently native-fallback, needed for
 Velocity/Lift `mode="startup"` parity.
