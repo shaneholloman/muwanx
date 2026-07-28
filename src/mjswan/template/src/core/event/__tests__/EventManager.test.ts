@@ -180,3 +180,72 @@ describe('EventManager: mode="startup"', () => {
     expect(runFn).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ordering. mjlab's `EventManager.apply` loops a mode's terms in config order and
+// every write is an assignment (`data.qpos[env_ids, q_slice] = position`), so two
+// terms touching the same element resolve last-writer-wins by config order. These
+// used to fire through `Promise.all`, which made that *resolution* order instead —
+// invisible while writes are disjoint, as they are on every reference task, and
+// nondeterministic the moment they overlap.
+// ---------------------------------------------------------------------------
+
+describe('EventManager: dispatch order matches mjlab', () => {
+  /** Two reset terms whose sessions resolve out of config order. */
+  function outOfOrderDeps(applied: string[]): Promise<EventManagerDeps> {
+    // `slow` is declared first but resolves last. Under `Promise.all` its write
+    // would land second; looping in config order puts it first, as mjlab does.
+    const slow: OnnxSession = {
+      run: async () => {
+        for (let i = 0; i < 8; i++) await Promise.resolve();
+        applied.push('slow');
+        return { next_dummy: { data: Float32Array.from([0]), dims: [1, 1] } };
+      },
+    };
+    const fast: OnnxSession = {
+      run: () => {
+        applied.push('fast');
+        return Promise.resolve({ next_dummy: { data: Float32Array.from([0]), dims: [1, 1] } });
+      },
+    };
+    const sessions = new OnnxSessionCache((data) =>
+      Promise.resolve(new Uint8Array(data)[0] === 1 ? slow : fast),
+    );
+    return sessions
+      .load([
+        { name: 'event/slow.onnx', data: Uint8Array.from([1]).buffer },
+        { name: 'event/fast.onnx', data: Uint8Array.from([2]).buffer },
+      ])
+      .then(() => ({ sessions, rng: new SeededRng(1) }));
+  }
+
+  it('fires reset terms in config order, not completion order', async () => {
+    const applied: string[] = [];
+    const manager = new EventManager(
+      [
+        { name: 'slow', mode: 'reset', onnx: 'event/slow.onnx', rand_dim: 0 },
+        { name: 'fast', mode: 'reset', onnx: 'event/fast.onnx', rand_dim: 0 },
+      ] as never,
+      {},
+      await outOfOrderDeps(applied),
+    );
+    await manager.onReset(NO_MODEL);
+    // Config order. `Promise.all` would give ['fast', 'slow'] — the slow term's
+    // write landing last and winning any overlap it should have lost.
+    expect(applied).toEqual(['slow', 'fast']);
+  });
+
+  it('fires startup terms in config order too', async () => {
+    const applied: string[] = [];
+    const manager = new EventManager(
+      [
+        { name: 'slow', mode: 'startup', onnx: 'event/slow.onnx', rand_dim: 0 },
+        { name: 'fast', mode: 'startup', onnx: 'event/fast.onnx', rand_dim: 0 },
+      ] as never,
+      {},
+      await outOfOrderDeps(applied),
+    );
+    await manager.startup(NO_MODEL);
+    expect(applied).toEqual(['slow', 'fast']);
+  });
+});

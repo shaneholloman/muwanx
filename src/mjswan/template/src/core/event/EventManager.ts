@@ -33,9 +33,8 @@ type ResetEntry = PluginTerm | OnnxResetTerm;
  * `IntervalTrigger` allows; `mode="startup"` terms fire once. Events are one graph
  * per term and stay that way: per-mode fusion was measured and declined (brief §4b)
  * — no reference task has a traced `startup` or `interval` term at all, `reset` has
- * at most two, and fusing them would need a merge rule for the two Cartpole terms
- * that write the same entity's `joint_state` — safe today because their baked joint
- * indices are disjoint, not because of ordering: `onReset` fires terms concurrently.
+ * at most two, and it would have to reproduce the write semantics `onReset` gets for
+ * free by looping in config order (last writer wins per element, as mjlab does).
  */
 export class EventManager {
   private resetTerms: ResetEntry[] = [];
@@ -107,12 +106,17 @@ export class EventManager {
     }
   }
 
-  /** Fire every `mode="startup"` term once. Call after the scene/policy loads. */
+  /**
+   * Fire every `mode="startup"` term once. Call after the scene/policy loads.
+   *
+   * In config order, for the same reason `onReset` is (mjlab loops its terms), and
+   * after the model-field randomizations so `add`/`scale` see the compiled default.
+   */
   async startup(context: EventContext): Promise<void> {
     this.applyModelFieldTerms(context);
-    await Promise.all(
-      this.startupTerms.filter(({ trigger }) => trigger.take()).map(({ term }) => term.fire(context)),
-    );
+    for (const { term, trigger } of this.startupTerms) {
+      if (trigger.take()) await term.fire(context);
+    }
   }
 
   /**
@@ -148,21 +152,40 @@ export class EventManager {
    * flight) and advances every reset-gate step counter.
    */
   tick(dt: number, context: EventContext): void {
+    // Fire-and-forget, unlike `onReset`/`startup`: `tick` is synchronous because the
+    // step loop is, so there is nothing to await into. Two interval terms writing the
+    // same element would therefore resolve in completion order rather than mjlab's
+    // config order — no reference task has even one traced interval term, so this is
+    // noted rather than solved.
     for (const { term, trigger } of this.intervalTerms) {
       if (trigger.tick(dt)) void term.fire(context);
     }
     for (const { trigger } of this.resetTerms) trigger.step();
   }
 
-  /** Fire every `mode="reset"` term whose gate allows it; awaited by the caller. */
+  /**
+   * Fire every `mode="reset"` term whose gate allows it, **in config order**.
+   *
+   * Sequential rather than `Promise.all`, to match mjlab: its
+   * `EventManager.apply` loops the mode's terms in order, and every write is an
+   * assignment (`data.qpos[env_ids, q_slice] = position`), so two terms touching
+   * the same element resolve last-writer-wins by config order. Firing them
+   * concurrently made that resolution order instead — harmless while writes are
+   * disjoint, which they are on every reference task, and nondeterministic the
+   * moment they overlap.
+   *
+   * The term bodies read `default_*` rather than live state (mjlab's
+   * `reset_joints_by_offset` starts from `default_joint_pos`), so sequencing does
+   * not make them compound; it only decides which value survives on an overlap.
+   *
+   * Costs one reset's worth of serialized inference, which is a rare frame.
+   */
   async onReset(context: EventContext): Promise<void> {
-    await Promise.all(
-      this.resetTerms.map(async (entry) => {
-        if (!entry.trigger.take()) return;
-        if (entry.kind === 'onnx') await entry.term.fire(context);
-        else entry.term.onReset(context);
-      }),
-    );
+    for (const entry of this.resetTerms) {
+      if (!entry.trigger.take()) continue;
+      if (entry.kind === 'onnx') await entry.term.fire(context);
+      else entry.term.onReset(context);
+    }
     for (const { trigger } of this.intervalTerms) trigger.onReset();
   }
 
