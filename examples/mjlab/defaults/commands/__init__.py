@@ -103,6 +103,21 @@ def _bind_trace_friendly_velocity_override(term: Any) -> None:
     term._update_command = types.MethodType(_tf_update_command, term)
 
 
+def _adjustable(limit: float) -> dict[str, Any]:
+    """A "Max <label>" companion slider reaching up to the task's own limit (§3a).
+
+    mjlab's play GUI pairs every velocity axis with one of these, so a viewer can
+    narrow the drag range for fine control without the config changing. Purely
+    presentational — see :class:`mjswan.SliderRangeConfig`.
+    """
+    return {
+        "min": 0.0,
+        "max": abs(limit),
+        "step": max(abs(limit) / 40.0, 0.01),
+        "default": abs(limit),
+    }
+
+
 def _velocity_ui(cfg: Any) -> dict[str, Any]:
     """Joystick UI descriptor with slider ranges from this task's own ``cfg.ranges``.
 
@@ -128,6 +143,7 @@ def _velocity_ui(cfg: Any) -> dict[str, Any]:
                 "step": 0.05,
                 "default": max(ranges.lin_vel_x[0], min(0.5, ranges.lin_vel_x[1])),
                 "enabled_when": "enabled",
+                "adjustable_range": _adjustable(ranges.lin_vel_x[1]),
             },
             {
                 "type": "slider",
@@ -138,6 +154,7 @@ def _velocity_ui(cfg: Any) -> dict[str, Any]:
                 "step": 0.05,
                 "default": max(ranges.lin_vel_y[0], min(0.0, ranges.lin_vel_y[1])),
                 "enabled_when": "enabled",
+                "adjustable_range": _adjustable(ranges.lin_vel_y[1]),
             },
             {
                 "type": "slider",
@@ -148,6 +165,7 @@ def _velocity_ui(cfg: Any) -> dict[str, Any]:
                 "step": 0.05,
                 "default": max(ranges.ang_vel_z[0], min(0.0, ranges.ang_vel_z[1])),
                 "enabled_when": "enabled",
+                "adjustable_range": _adjustable(ranges.ang_vel_z[1]),
             },
             {"type": "button", "name": "zero", "label": "Zero"},
         ]

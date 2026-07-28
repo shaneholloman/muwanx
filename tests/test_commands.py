@@ -42,6 +42,37 @@ class TestSliderConfig:
     def test_slider_is_alias_for_slider_config(self):
         assert mjswan.Slider is SliderConfig
 
+    def test_adjustable_range_is_absent_unless_asked_for(self):
+        # It is a UI affordance, not a default: a config that never asked for one
+        # must not grow a companion slider in the browser.
+        assert "adjustable_range" not in SliderConfig(name="x", label="X").to_dict()
+
+    def test_adjustable_range_travels_as_its_own_bounds(self):
+        # mjlab's "Max <label>" meta-slider (ADR 0005 §3a): rescales how far the
+        # value slider drags, and is purely presentational — nothing here reaches
+        # the policy, so it carries only its own bounds.
+        s = SliderConfig(
+            name="lin_vel_x",
+            label="Forward Velocity",
+            range=(-1.5, 1.5),
+            adjustable_range=mjswan.SliderRangeConfig(
+                range=(0.0, 1.5), default=1.5, step=0.05
+            ),
+        )
+        assert s.to_dict()["adjustable_range"] == {
+            "min": 0.0,
+            "max": 1.5,
+            "step": 0.05,
+            "default": 1.5,
+        }
+
+    def test_adjustable_range_label_is_optional(self):
+        # Omitted means the browser writes `Max <label>`; naming it overrides that.
+        default = mjswan.SliderRangeConfig()
+        assert "label" not in default.to_dict()
+        named = mjswan.SliderRangeConfig(label="Speed cap")
+        assert named.to_dict()["label"] == "Speed cap"
+
 
 class TestButtonConfig:
     def test_to_dict_includes_name_and_label(self):

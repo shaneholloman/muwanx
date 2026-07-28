@@ -5,6 +5,23 @@ import type { OnnxSessionCache, SlotReader } from '../onnx/session';
 
 export type CommandType = 'slider' | 'button' | 'checkbox';
 
+/**
+ * A companion slider that rescales another slider's drag range (brief §3a).
+ *
+ * mjlab's play GUI pairs each velocity axis with a "Max <label>" slider whose only
+ * job is to widen or narrow how far the value slider can be dragged. It is not
+ * simulation state: nothing is sent to the engine, no command changes when it
+ * moves. Purely how far the *other* control reaches.
+ */
+export interface SliderRangeControl {
+  min: number;
+  max: number;
+  step: number;
+  default: number;
+  /** Label for the companion slider; defaults to `Max <label>`. */
+  label?: string;
+}
+
 export interface SliderCommandConfig {
   type: 'slider';
   name: string;
@@ -14,6 +31,12 @@ export interface SliderCommandConfig {
   step: number;
   default: number;
   enabled_when?: string;
+  /**
+   * When set, the app renders a companion range slider and clamps this one's
+   * displayed range to `[-value, value]`. Symmetric around zero, matching the
+   * three velocity axes mjlab does this for; an asymmetric range is a follow-up.
+   */
+  adjustable_range?: SliderRangeControl;
 }
 
 export interface ButtonCommandConfig {

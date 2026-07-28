@@ -18,6 +18,7 @@ from .command import (
     CommandUiConfig,
     Slider,
     SliderConfig,
+    SliderRangeConfig,
     register_command,
     ui_command,
     velocity_command,
@@ -78,6 +79,7 @@ __all__ = [
     # Commands
     "Slider",
     "SliderConfig",
+    "SliderRangeConfig",
     "Button",
     "ButtonConfig",
     "Checkbox",

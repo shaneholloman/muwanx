@@ -27,7 +27,14 @@ function toDescriptor(def: CommandDefinition): CommandDescriptor {
   const config = def.config;
   const base = { id: def.id, group: def.groupName, type: config.type, label: config.label };
   return config.type === 'slider'
-    ? { ...base, min: config.min, max: config.max, step: config.step, enabledWhen: config.enabled_when }
+    ? {
+        ...base,
+        min: config.min,
+        max: config.max,
+        step: config.step,
+        enabledWhen: config.enabled_when,
+        adjustableRange: config.adjustable_range,
+      }
     : base;
 }
 

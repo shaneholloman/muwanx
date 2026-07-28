@@ -18,6 +18,34 @@ CommandType = Literal["slider", "button", "checkbox"]
 
 
 @dataclass
+class SliderRangeConfig:
+    """A companion slider that rescales another slider's drag range (ADR 0005 §3a).
+
+    mjlab's play GUI pairs each velocity axis with a "Max <label>" slider whose
+    only effect is how far the value slider reaches. Purely presentational: the
+    browser clamps the value slider's displayed range to ``[-value, value]``
+    locally, and nothing about it is sent to the engine or the policy.
+    """
+
+    range: tuple[float, float] = (0.0, 2.0)
+    default: float = 1.0
+    step: float = 0.05
+    label: str | None = None
+    """Companion slider's label; defaults browser-side to ``Max <label>``."""
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "min": self.range[0],
+            "max": self.range[1],
+            "step": self.step,
+            "default": self.default,
+        }
+        if self.label is not None:
+            data["label"] = self.label
+        return data
+
+
+@dataclass
 class SliderConfig:
     """Configuration for a slider input exposed by a command term."""
 
@@ -28,6 +56,9 @@ class SliderConfig:
     step: float = 0.01
     enabled_when: str | None = None
     """Optional input name in the same command group that enables this slider."""
+    adjustable_range: SliderRangeConfig | None = None
+    """Optional companion slider rescaling this one's reach — see
+    :class:`SliderRangeConfig`. Symmetric around zero."""
 
     @property
     def min(self) -> float:
@@ -49,6 +80,8 @@ class SliderConfig:
         }
         if self.enabled_when is not None:
             data["enabled_when"] = self.enabled_when
+        if self.adjustable_range is not None:
+            data["adjustable_range"] = self.adjustable_range.to_dict()
         return data
 
 

@@ -85,6 +85,22 @@ export interface CommandDescriptor {
   step?: number;          // slider only
   /** Slider only: name of a sibling checkbox that gates this control. */
   enabledWhen?: string;
+  /**
+   * Slider only: a companion control that rescales this slider's drag range
+   * (brief §3a). Entirely presentational — the app clamps the displayed range to
+   * `[-value, value]` locally and never calls `set` for it, so moving it changes
+   * no simulation state. Absent unless the build asked for one.
+   */
+  adjustableRange?: SliderRangeControl;
+}
+
+/** Bounds of an {@link CommandDescriptor.adjustableRange} companion slider. */
+export interface SliderRangeControl {
+  min: number;
+  max: number;
+  step: number;
+  default: number;
+  label?: string;
 }
 
 export interface CommandControls {
