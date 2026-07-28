@@ -30,9 +30,12 @@ type ResetEntry = PluginTerm | OnnxResetTerm;
  * Previously reset-only (`onReset()`); now mode-aware. `mode="reset"` terms
  * (a traced `OnnxEvent`, or a plugin-registered class) fire on episode reset,
  * gated by a `ResetTrigger`; `mode="interval"` terms fire on the frames their
- * `IntervalTrigger` allows; `mode="startup"` terms fire once. Fusion (brief §4)
- * only changes how many graphs exist — dispatch here still gates *every* call,
- * fused or not, so a quiet frame costs no `ort.run()`.
+ * `IntervalTrigger` allows; `mode="startup"` terms fire once. Events are one graph
+ * per term and stay that way: per-mode fusion was measured and declined (brief §4b)
+ * — no reference task has a traced `startup` or `interval` term at all, `reset` has
+ * at most two, and fusing them would need a merge rule for the two Cartpole terms
+ * that write the same entity's `joint_state`, which sequential dispatch here keeps
+ * disjoint for free.
  */
 export class EventManager {
   private resetTerms: ResetEntry[] = [];
