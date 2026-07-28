@@ -99,10 +99,13 @@ describe('SeededRng', () => {
 // ---------------------------------------------------------------------------
 // What a seed alone does *not* buy.
 //
-// ADR 0005 §2 wants a recorded session to replay bit-for-bit, and the tests above
-// establish the necessary half: the sequence is a pure function of the seed. The
-// sufficient half does not hold yet, and these pin down why so it is a known
-// limitation rather than a surprise.
+// ADR 0005 §2 wants a recorded session to replay, and the tests above establish the
+// half that holds: the sequence is a pure function of the seed, so startup domain
+// randomization and every resample schedule reproduce exactly. *Bit-for-bit* replay
+// does not hold, and is deliberately not pursued — it is not simultaneously
+// satisfiable with §8's non-blocking async boundary (see the §2 rows in the
+// companion brief). These tests pin the mechanism so the limitation stays visible
+// rather than being rediscovered as a bug.
 //
 // Every traced term draws from *one* shared stream (`runtime.termRng`), and each of
 // `OnnxCommand.update`, `OnnxEvent.fire`, `OnnxTermination.evaluate` and
@@ -136,11 +139,11 @@ describe('SeededRng — shared-stream coupling (documents a replay limitation)',
   });
 
   it('would be unaffected if draws were addressed by step instead of order', () => {
-    // The shape of the fix, stated as a test so the intent is on record: derive a
-    // draw from (seed, term, step) so frame N gets the same numbers whether or not
-    // any other term ran. Modelled here with the same SplitMix mixing the
-    // constructor already uses; the real change is threading a step index to the
-    // consumers.
+    // Records the shape that *would* decouple the streams — derive a draw from
+    // (seed, term, step) so frame N gets the same numbers whether or not any other
+    // term ran. Kept as documentation rather than as a plan: it closes the draw half
+    // and not the trajectory half, since a termination verdict arriving a frame late
+    // moves the reset frame no matter how the draws are addressed.
     const at = (term: string, step: number): number => {
       let h = 2166136261 >>> 0;
       for (const ch of `${4242}:${term}:${step}`) {
