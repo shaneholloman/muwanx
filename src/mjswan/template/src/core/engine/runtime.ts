@@ -24,6 +24,7 @@ import {
   computeCameraPosition,
   updateCameraFromData,
 } from './viewer_config';
+import { stepPhysics, type ResolvedActionTerm } from '../action/applyAction';
 import { Observations } from '../observation/observations';
 import { TerminationManager } from '../termination/TerminationManager';
 import { Terminations } from '../termination/terminations';
@@ -48,6 +49,9 @@ import { SeededRng } from '../rng';
  * page load is reproducible; a "share this run" feature overrides it per session.
  */
 const DEFAULT_TERM_SEED = 0x5eed;
+
+/** Reused when no policy is loaded, so a policy-less frame allocates nothing. */
+const EMPTY_ACTIONS = new Float32Array(0);
 
 /**
  * Encoder bias by joint name, for the slot reader's `joint_pos_biased`.
@@ -195,25 +199,7 @@ export class mjswanRuntime {
   private policyStateBuilder: PolicyStateBuilder | null;
   private initialQpos: number[] | null;
   private initialQvel: number[] | null;
-  private policyControl: Array<{
-    controlType: string;
-    ctrlAdr: number[];
-    qposAdr: number[];
-    qvelAdr: number[];
-    // Indices into the flat policy action vector for this term's joints.
-    actionIndices: number[];
-    actionScale: Float32Array;
-    actionOffset: Float32Array;
-    defaultJointPos: Float32Array;
-    encoderBias: Float32Array;
-    // Per-actuator flag: true = position actuator (ctrl=target_pos, PD internal),
-    // false = motor actuator (ctrl=torque, PD computed in browser from kp/kd).
-    positionActuator: boolean[];
-    kp: Float32Array;
-    kd: Float32Array;
-    // muscle_activation only: when true apply MyoSuite sigmoid; when false clip(raw, 0, 1).
-    muscleNormalize: boolean;
-  }> | null;
+  private policyControl: ResolvedActionTerm[] | null;
   private onnxModule: OnnxModule | null;
   private onnxInputDict: Record<string, ort.Tensor> | null;
   private onnxInferencing: boolean;
@@ -1273,91 +1259,17 @@ export class mjswanRuntime {
     if (!this.mjModel || !this.mjData) {
       return;
     }
-    // Apply drag forces
+    // Viewer-only: mouse-drag forces, not part of the MDP.
     this.applyDragForces();
 
-    for (let substep = 0; substep < this.decimation; substep++) {
-      this.applyPolicyControl();
-      this.mujoco.mj_step(this.mjModel, this.mjData);
-    }
-  }
-
-  private applyPolicyControl(): void {
-    if (!this.policyControl || !this.mjData) {
-      return;
-    }
-
-    const ctrl = this.mjData.ctrl;
-    ctrl.fill(0.0);
-
-    // Fetch the full action vector once; each term reads its own slice via actionIndices.
-    const allActions = this.policyRunner?.getLastActions() ?? new Float32Array(0);
-
-    for (const term of this.policyControl) {
-      const {
-        controlType,
-        ctrlAdr,
-        qposAdr,
-        qvelAdr,
-        actionIndices,
-        actionScale,
-        actionOffset,
-        defaultJointPos,
-        encoderBias,
-        positionActuator,
-        kp,
-        kd,
-        muscleNormalize,
-      } =
-        term;
-      const numJoints = ctrlAdr.length;
-
-      if (controlType === 'joint_position') {
-        for (let i = 0; i < numJoints; i++) {
-          const ctrlIndex = ctrlAdr[i];
-          if (ctrlIndex < 0) continue;
-          const actionValue = allActions[actionIndices[i]] ?? 0;
-          const target =
-            defaultJointPos[i] +
-            actionOffset[i] +
-            actionScale[i] * actionValue -
-            encoderBias[i];
-
-          if (positionActuator[i]) {
-            // Position actuator (biastype=affine): ctrl = target joint position.
-            // MuJoCo computes force = kp*(ctrl - qpos) - kd*qvel internally.
-            ctrl[ctrlIndex] = target;
-          } else {
-            // Motor actuator (biastype=none): ctrl = torque.
-            // PD must be computed externally using kp/kd from the policy config.
-            const qpos = this.mjData.qpos[qposAdr[i]];
-            const qvel = this.mjData.qvel[qvelAdr[i]];
-            ctrl[ctrlIndex] = kp[i] * (target - qpos) + kd[i] * (0 - qvel);
-          }
-        }
-      } else if (controlType === 'torque') {
-        for (let i = 0; i < numJoints; i++) {
-          const ctrlIndex = ctrlAdr[i];
-          if (ctrlIndex >= 0) {
-            ctrl[ctrlIndex] = actionScale[i] * (allActions[actionIndices[i]] ?? 0);
-          }
-        }
-      } else if (controlType === 'muscle_activation') {
-        // Shared pre-step: raw = scale * action + offset.
-        // normalize=true:  MyoSuite-canonical sigmoid σ(5 * (raw - 0.5)).
-        // normalize=false: clip(raw, 0, 1) for models that already output excitation.
-        for (let i = 0; i < numJoints; i++) {
-          const ctrlIndex = ctrlAdr[i];
-          if (ctrlIndex < 0) continue;
-          const raw = (allActions[actionIndices[i]] ?? 0) * actionScale[i] + actionOffset[i];
-          if (muscleNormalize) {
-            ctrl[ctrlIndex] = 1 / (1 + Math.exp(-5 * (raw - 0.5)));
-          } else {
-            ctrl[ctrlIndex] = raw < 0 ? 0 : raw > 1 ? 1 : raw;
-          }
-        }
-      }
-    }
+    stepPhysics(
+      this.mujoco,
+      this.mjModel,
+      this.mjData,
+      this.policyControl ?? [],
+      this.policyRunner?.getLastActions() ?? EMPTY_ACTIONS,
+      this.decimation,
+    );
   }
 
   private async runOnnxInference(obs: Record<string, Float32Array>): Promise<void> {
