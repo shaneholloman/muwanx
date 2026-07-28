@@ -451,6 +451,7 @@ export class mjswanRuntime {
   /** Context every event term writes through; re-read per call (scene reloads). */
   private eventContext(): EventContext {
     return {
+      mujoco: this.mujoco,
       mjModel: this.mjModel,
       mjData: this.mjData,
       terrainData: this.terrainData,

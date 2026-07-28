@@ -22,6 +22,12 @@ export type EventConfig = {
 export type EventContext = {
   mjModel: import('mujoco').MjModel | null;
   mjData: import('mujoco').MjData | null;
+  /**
+   * The WASM module. Needed by a model-field randomization, which calls
+   * `mj_setConst` after touching an inertial field; absent for terms that only
+   * write `mjData`.
+   */
+  mujoco?: import('mujoco').MainModule | null;
   terrainData?: TerrainData | null;
 };
 

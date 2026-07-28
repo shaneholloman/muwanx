@@ -1,0 +1,233 @@
+/**
+ * Startup model-field randomization, against the real MuJoCo WASM.
+ *
+ * These events perturb `mjModel` rather than `mjData`, so nothing about them shows
+ * up in a graph and nothing in the Python parity harness reaches them. They are
+ * also the quietest kind of wrong: a friction coefficient written to the wrong
+ * geom, or an axis clobbered that another event owns, changes how the robot walks
+ * without any error. Hence a real model, with names and strides that are MuJoCo's
+ * rather than a fixture's.
+ */
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  applyModelFieldDr,
+  isModelFieldDrConfig,
+  ModelFieldDefaults,
+  type ModelFieldDrConfig,
+} from '../modelFieldDr';
+import { SeededRng } from '../../rng';
+
+type MainModule = import('mujoco').MainModule;
+
+const SCENE = `<mujoco>
+  <worldbody>
+    <geom name="floor" type="plane" size="5 5 0.1"/>
+    <body name="robot/torso" pos="0 0 1">
+      <joint type="free"/>
+      <geom name="robot/torso_collision" type="box" size="0.1 0.1 0.1" mass="2"/>
+      <body name="robot/foot" pos="0 0 -0.3">
+        <joint name="ankle" type="hinge" axis="0 1 0"/>
+        <geom name="robot/foot_collision" type="sphere" size="0.05" mass="0.3"/>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>`;
+
+let mujoco: MainModule;
+let mjModel: import('mujoco').MjModel;
+let mjData: import('mujoco').MjData;
+
+function freshModel(): void {
+  mjModel = (mujoco as unknown as { MjModel: { from_xml_string(s: string): never } })
+    .MjModel.from_xml_string(SCENE);
+}
+
+function friction(name: string): [number, number, number] {
+  const names = ['floor', 'robot/torso_collision', 'robot/foot_collision'];
+  const i = names.indexOf(name);
+  const f = mjModel.geom_friction;
+  return [f[i * 3], f[i * 3 + 1], f[i * 3 + 2]];
+}
+
+function config(over: Partial<ModelFieldDrConfig> = {}): ModelFieldDrConfig {
+  const operation = over.operation ?? 'abs';
+  return {
+    name: 'foot_friction',
+    kind: 'model_field',
+    field: 'geom_friction',
+    entity_type: 'geom',
+    entity_names: ['robot/foot_collision'],
+    axis_ranges: { '0': [0.7, 0.7] }, // degenerate range: one exact value
+    operation,
+    distribution: 'uniform',
+    shared_random: false,
+    // Mirrors what the build emits: `abs` overwrites, the other two are relative
+    // to the compiled default.
+    uses_defaults: operation === 'add' || operation === 'scale',
+    set_const: false,
+    ...over,
+  };
+}
+
+/** Apply one event, with a fresh defaults snapshot unless the test shares one. */
+function apply(
+  cfg: ModelFieldDrConfig,
+  rng: SeededRng,
+  defaults = new ModelFieldDefaults(mjModel),
+): boolean {
+  return applyModelFieldDr(mujoco, mjModel, mjData, cfg, rng, defaults);
+}
+
+beforeAll(async () => {
+  const load = (await import('mujoco')).default;
+  mujoco = await load();
+});
+
+beforeEach(() => {
+  // A fresh model per test: these write it, and the writes must not leak sideways.
+  freshModel();
+  mjData = new (mujoco as unknown as { MjData: new (m: unknown) => never }).MjData(mjModel);
+  mujoco.mj_forward(mjModel, mjData);
+});
+
+describe('applyModelFieldDr', () => {
+  it('writes the named geom and leaves every other one alone', () => {
+    const before = friction('floor');
+    expect(apply(config(), new SeededRng(1))).toBe(true);
+    expect(friction('robot/foot_collision')[0]).toBeCloseTo(0.7, 6);
+    // The scoping is the whole point: mjlab's config targets fingertip or foot
+    // collision geoms, not the world.
+    expect(friction('floor')).toEqual(before);
+    expect(friction('robot/torso_collision')[0]).not.toBeCloseTo(0.7, 6);
+  });
+
+  it('writes only the targeted axis, so sibling events compose', () => {
+    // Lift-Cube-Yam randomizes friction axes 0, 1 and 2 as three separate events.
+    // A version writing the whole triple would erase the other two.
+    const before = friction('robot/foot_collision');
+    apply(config({ axis_ranges: { '1': [0.05, 0.05] } }), new SeededRng(1));
+    const after = friction('robot/foot_collision');
+    expect(after[1]).toBeCloseTo(0.05, 6);
+    expect(after[0]).toBeCloseTo(before[0], 6);
+    expect(after[2]).toBeCloseTo(before[2], 6);
+  });
+
+  it('applies each operation against the compiled base', () => {
+    const base = friction('robot/foot_collision')[0];
+    apply(config({ operation: 'scale', axis_ranges: { '0': [2, 2] } }), new SeededRng(1));
+    expect(friction('robot/foot_collision')[0]).toBeCloseTo(base * 2, 6);
+
+    freshModel();
+    apply(config({ operation: 'add', axis_ranges: { '0': [0.25, 0.25] } }), new SeededRng(1));
+    expect(friction('robot/foot_collision')[0]).toBeCloseTo(base + 0.25, 6);
+  });
+
+  it('does not let two add events on one axis accumulate', () => {
+    // mjlab's `add`/`scale` read the *compile-time* default, not the live value, so
+    // a second event on the same axis offsets the same base rather than the first
+    // event's output. Reading the live field would drift by however many events
+    // happened to target the axis — silently, and differently per task.
+    const base = friction('robot/foot_collision')[0];
+    const defaults = new ModelFieldDefaults(mjModel);
+    const rng = new SeededRng(1);
+    apply(config({ operation: 'add', axis_ranges: { '0': [0.25, 0.25] } }), rng, defaults);
+    apply(config({ operation: 'add', axis_ranges: { '0': [0.1, 0.1] } }), rng, defaults);
+    expect(friction('robot/foot_collision')[0]).toBeCloseTo(base + 0.1, 6);
+  });
+
+  it('gives every geom the same draw under shared_random', () => {
+    // mjlab's foot friction shares one coefficient across both feet rather than
+    // letting them differ.
+    const names = ['robot/foot_collision', 'robot/torso_collision'];
+    apply(
+      config({ entity_names: names, axis_ranges: { '0': [0.2, 1.8] }, shared_random: true }),
+      new SeededRng(7),
+    );
+    expect(friction(names[0])[0]).toBeCloseTo(friction(names[1])[0], 6);
+  });
+
+  it('gives them different draws without it', () => {
+    const names = ['robot/foot_collision', 'robot/torso_collision'];
+    apply(config({ entity_names: names, axis_ranges: { '0': [0.2, 1.8] } }), new SeededRng(7));
+    expect(friction(names[0])[0]).not.toBeCloseTo(friction(names[1])[0], 3);
+  });
+
+  it('is reproducible from the seed', () => {
+    // ADR 0005 §2: a recorded session replays, so the draws cannot come from
+    // anywhere but the seeded stream.
+    const cfg = config({ axis_ranges: { '0': [0.2, 1.8] } });
+    apply(cfg, new SeededRng(42));
+    const first = friction('robot/foot_collision')[0];
+
+    freshModel();
+    apply(cfg, new SeededRng(42));
+    expect(friction('robot/foot_collision')[0]).toBe(first);
+  });
+
+  it('draws log-uniformly when asked', () => {
+    // A [0.01, 1] range spends equal probability per decade, so samples cluster
+    // low — a uniform draw would average near 0.5.
+    const rng = new SeededRng(3);
+    const samples: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      freshModel();
+      apply(config({ distribution: 'log_uniform', axis_ranges: { '0': [0.01, 1] } }), rng);
+      samples.push(friction('robot/foot_collision')[0]);
+    }
+    for (const s of samples) {
+      expect(s).toBeGreaterThanOrEqual(0.01);
+      expect(s).toBeLessThanOrEqual(1);
+    }
+    const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+    expect(mean).toBeLessThan(0.4);
+  });
+
+  it('calls mj_setConst for an inertial field', () => {
+    // `body_ipos` feeds precomputed constants; skipping this would half-apply the
+    // perturbation.
+    const setConst = vi.spyOn(mujoco, 'mj_setConst');
+    apply(
+      config({
+        name: 'base_com',
+        field: 'body_ipos',
+        entity_type: 'body',
+        entity_names: ['robot/torso'],
+        axis_ranges: { '0': [0.01, 0.01] },
+        operation: 'add',
+        set_const: true,
+      }),
+      new SeededRng(1),
+    );
+    expect(setConst).toHaveBeenCalledWith(mjModel, mjData);
+    setConst.mockRestore();
+  });
+
+  it('skips and says so when a name or field is not in this model', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(apply(config({ entity_names: ['robot/absent'] }), new SeededRng(1))).toBe(false);
+    expect(apply(config({ field: 'no_such_field' }), new SeededRng(1))).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it('skips an axis past the field width instead of writing a neighbour', () => {
+    // `geom_friction` is 3 wide; axis 5 would land in the next geom's slot.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const before = friction('robot/torso_collision');
+    apply(config({ axis_ranges: { '5': [9, 9] } }), new SeededRng(1));
+    expect(friction('robot/torso_collision')).toEqual(before);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('isModelFieldDrConfig', () => {
+  it('separates it from a traced event', () => {
+    expect(isModelFieldDrConfig(config())).toBe(true);
+    expect(isModelFieldDrConfig({ name: 'push_robot', mode: 'interval', onnx: 'x.onnx' })).toBe(
+      false,
+    );
+    expect(isModelFieldDrConfig({ name: 'x', native: true, reason: 'nope' })).toBe(false);
+  });
+});

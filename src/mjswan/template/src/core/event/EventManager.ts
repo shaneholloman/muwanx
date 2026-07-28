@@ -3,6 +3,12 @@ import type { OnnxSessionCache } from '../onnx/session';
 import type { SlotReader } from '../onnx/session';
 import { EventBase, type EventConfig, type EventContext } from './EventBase';
 import type { EventConstructor } from './EventBase';
+import {
+  applyModelFieldDr,
+  isModelFieldDrConfig,
+  ModelFieldDefaults,
+  type ModelFieldDrConfig,
+} from './modelFieldDr';
 import { OnnxEvent, isOnnxEventConfig } from './OnnxEvent';
 import { IntervalTrigger, ResetTrigger, StartupTrigger } from './triggers';
 
@@ -32,13 +38,21 @@ export class EventManager {
   private resetTerms: ResetEntry[] = [];
   private intervalTerms: Array<{ term: OnnxEvent; trigger: IntervalTrigger }> = [];
   private startupTerms: Array<{ term: OnnxEvent; trigger: StartupTrigger }> = [];
+  /** Model-field randomizations, applied once by `startup()` (see `modelFieldDr`). */
+  private modelFieldTerms: Array<{ config: ModelFieldDrConfig; trigger: StartupTrigger }> = [];
 
   constructor(
     configs: EventConfig[],
     registry: Record<string, EventConstructor>,
-    deps?: EventManagerDeps,
+    private readonly deps?: EventManagerDeps,
   ) {
     for (const config of configs) {
+      if (isModelFieldDrConfig(config)) {
+        // Perturbs `mjModel` rather than running a graph, so it needs no session —
+        // just the seeded PRNG, which `startup()` supplies.
+        this.modelFieldTerms.push({ config, trigger: new StartupTrigger() });
+        continue;
+      }
       if (isOnnxEventConfig(config)) {
         if (!deps) {
           console.warn(
@@ -92,9 +106,37 @@ export class EventManager {
 
   /** Fire every `mode="startup"` term once. Call after the scene/policy loads. */
   async startup(context: EventContext): Promise<void> {
+    this.applyModelFieldTerms(context);
     await Promise.all(
       this.startupTerms.filter(({ trigger }) => trigger.take()).map(({ term }) => term.fire(context)),
     );
+  }
+
+  /**
+   * Apply the model-field randomizations, once.
+   *
+   * Synchronous and before the graph-backed startup terms: `add`/`scale` are
+   * relative to the compiled default, which is only still in the model until
+   * something writes it.
+   */
+  private applyModelFieldTerms(context: EventContext): void {
+    if (this.modelFieldTerms.length === 0) return;
+    const { mujoco, mjModel, mjData } = context;
+    if (!mujoco || !mjModel || !mjData) {
+      console.warn('[EventManager] model-field randomization needs a live model; skipping.');
+      return;
+    }
+    if (!this.deps?.rng) {
+      console.warn('[EventManager] model-field randomization needs the seeded rng; skipping.');
+      return;
+    }
+    // One `defaults` for the whole pass, so several events on one field all read the
+    // same compiled base rather than each other's output.
+    const defaults = new ModelFieldDefaults(mjModel);
+    for (const { config, trigger } of this.modelFieldTerms) {
+      if (!trigger.take()) continue;
+      applyModelFieldDr(mujoco, mjModel, mjData, config, this.deps.rng, defaults);
+    }
   }
 
   /**

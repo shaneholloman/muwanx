@@ -16,6 +16,7 @@ Called from :mod:`mjswan.builder`, once per scene, after that scene's live
 from __future__ import annotations
 
 import copy
+import inspect
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -555,6 +556,187 @@ def _fused_termination_entry(
 # ---------------------------------------------------------------------------
 
 
+_DR_ENTITY_INDEX_ATTR = {
+    "geom": "geom_ids",
+    "body": "body_ids",
+    "site": "site_ids",
+}
+
+
+def _dr_entity_names(env: Any, asset_cfg: Any, entity_type: str) -> list[str] | None:
+    """Names of the model elements a startup-DR event perturbs.
+
+    Names, not ids: the browser compiles its own model, so an id from the build env
+    means nothing there. ``None`` when the entity type is one this does not know how
+    to enumerate — the caller then leaves the event native.
+    """
+    attr = _DR_ENTITY_INDEX_ATTR.get(entity_type)
+    if attr is None:
+        return None
+    asset = env.scene[asset_cfg.name]
+    scoped = getattr(asset_cfg, f"{entity_type}_ids", None)
+    all_ids = getattr(asset.indexing, attr)
+    ids = [int(i) for i in all_ids.tolist()]
+    if scoped is not None and not isinstance(scoped, slice):
+        # mjlab's `_get_entity_indices` is `indexing.geom_ids[asset_cfg.geom_ids]` —
+        # positions into the entity's own elements, in the cfg's order. Keeping that
+        # order keeps the browser's per-element draws lined up with the names.
+        positions = list(scoped) if hasattr(scoped, "__iter__") else [scoped]
+        ids = [ids[int(p)] for p in positions]
+    accessor = {
+        "geom": env.sim.mj_model.geom,
+        "body": env.sim.mj_model.body,
+        "site": env.sim.mj_model.site,
+    }[entity_type]
+    return [accessor(i).name for i in ids]
+
+
+def _dr_arg(func: Any, params: dict[str, Any], key: str) -> Any:
+    """A DR keyword as mjlab would see it: the term's value, else *func*'s default.
+
+    The default is read off the wrapper's signature rather than assumed, because
+    mjlab's wrappers do not share one: ``geom_friction`` defaults ``operation`` to
+    ``"abs"``, ``body_com_offset`` to ``"add"``, ``body_mass`` to ``"scale"``. A
+    single hardcoded default would describe an omitted ``operation`` as replacing
+    the value when mjlab actually scales it — a silent divergence, and the worse
+    one for mass.
+    """
+    if key in params:
+        return params[key]
+    param = inspect.signature(func).parameters.get(key)
+    return (
+        None
+        if param is None or param.default is inspect.Parameter.empty
+        else param.default
+    )
+
+
+def _dr_name_of(value: Any, fallback: str) -> str:
+    """``Operation``/``Distribution`` accept an instance as well as a string."""
+    if value is None:
+        return fallback
+    return str(getattr(value, "name", value))
+
+
+def _dr_target_axes(
+    func: Any, params: dict[str, Any], ranges: Any, default_axes: list[int]
+) -> list[int]:
+    """mjlab's ``_determine_target_axes`` precedence: explicit, then int keys, then default."""
+    axes = _dr_arg(func, params, "axes")
+    if axes is not None:
+        return [int(a) for a in axes]
+    if isinstance(ranges, dict):
+        return [int(k) for k in ranges]
+    return list(default_axes)
+
+
+def model_field_dr_descriptor(
+    term_cfg: EventTermCfg, env: Any, params: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """Describe a startup model-field randomization for the browser, or None.
+
+    These events (`geom_friction`, `body_com_offset`, …) perturb the *model* rather
+    than `mjData`, so the `entity_write` tracer has nothing to capture and they look
+    to it exactly like an event that did nothing. They also need no graph: the whole
+    event is "draw a number per element per axis, combine it with the base value,
+    write it back", and the browser can do that itself at startup from the
+    orchestrator's seeded PRNG (ADR 0005 §2), so a session still replays.
+
+    Returns ``None`` for anything this cannot describe — an unknown entity type, or
+    the string-keyed `ranges` form mjlab resolves by name pattern.
+    """
+    func = term_cfg.func
+    # Resolved params, not the raw ones: an unresolved `SceneEntityCfg` has
+    # `geom_ids=slice(None)`, so a fingertip-scoped event would silently describe
+    # *every* geom in the scene. Same trap that froze `site_pos_w` earlier.
+    params = params if params is not None else _resolved_params(term_cfg.params, env)
+    field = getattr(func, "_mjswan_dr_field", None) or _DR_FIELD_BY_FUNC.get(
+        getattr(func, "__name__", "")
+    )
+    if field is None:
+        return None
+    field_name, entity_type, default_axes = field
+    ranges = _dr_arg(func, params, "ranges")
+    if not isinstance(ranges, (tuple, list, dict)):
+        return None
+    if isinstance(ranges, dict) and any(isinstance(k, str) for k in ranges):
+        # mjlab resolves these by name pattern per element; not described here.
+        return None
+    asset_cfg = _dr_arg(func, params, "asset_cfg")
+    if asset_cfg is None:
+        return None
+    names = _dr_entity_names(env, asset_cfg, entity_type)
+    if names is None:
+        return None
+
+    axes = _dr_target_axes(func, params, ranges, default_axes)
+    if isinstance(ranges, dict):
+        # `_prepare_axis_ranges` narrows to the target axes, so a range for an axis
+        # nobody targets is dropped rather than written.
+        if any(a not in ranges for a in axes):
+            return None
+        axis_ranges = {a: [float(ranges[a][0]), float(ranges[a][1])] for a in axes}
+    else:
+        axis_ranges = {a: [float(ranges[0]), float(ranges[1])] for a in axes}
+
+    operation = _dr_name_of(_dr_arg(func, params, "operation"), "abs")
+    return {
+        "kind": "model_field",
+        "field": field_name,
+        "entity_type": entity_type,
+        "entity_names": names,
+        # Axis -> [lo, hi]. Only these axes are written, so two events targeting
+        # different axes of one field compose instead of clobbering.
+        "axis_ranges": axis_ranges,
+        "operation": operation,
+        "distribution": _dr_name_of(_dr_arg(func, params, "distribution"), "uniform"),
+        "shared_random": bool(_dr_arg(func, params, "shared_random")),
+        # `add`/`scale` combine with the *compile-time* default, not the live value,
+        # so repeated events on one axis do not accumulate (mjlab's
+        # `Operation.uses_defaults`). The browser needs to know which base to read.
+        "uses_defaults": operation in _DR_OPS_USING_DEFAULTS,
+        "set_const": _dr_needs_recompute(func, field_name),
+    }
+
+
+# mjlab's `Operation.uses_defaults`: `abs` overwrites, so it reads the live value;
+# `add`/`scale` are relative to the compiled default.
+_DR_OPS_USING_DEFAULTS = frozenset({"add", "scale"})
+
+# Fallback for a DR func without mjlab's `requires_model_fields` decorator: fields
+# whose change invalidates derived constants.
+_SET_CONST_FIELDS = frozenset(
+    {"body_ipos", "body_mass", "body_inertia", "dof_armature"}
+)
+
+
+def _dr_needs_recompute(func: Any, field_name: str) -> bool:
+    """Whether the browser owes an ``mj_setConst`` after writing this field.
+
+    mjlab's `requires_model_fields` decorator records this on the function as a
+    `RecomputeLevel`, so read it rather than guessing. Its three non-zero levels
+    recompute progressively larger subsets; MuJoCo's C API exposes only the full
+    `mj_setConst`, so any level above `none` maps to that — more work than the
+    lower levels need, same result.
+    """
+    recompute = getattr(func, "recompute", None)
+    if recompute is not None:
+        return int(recompute) > 0
+    return field_name in _SET_CONST_FIELDS
+
+
+_DR_FIELD_BY_FUNC: dict[str, tuple[str, str, list[int]]] = {
+    # mjlab's DR helpers are thin wrappers over `_randomize_model_field`, and the
+    # entity-type / default-axes they pass are not introspectable from the wrapper
+    # — hence this table. Keyed by function name, so an author's own wrapper can
+    # opt in by setting `_mjswan_dr_field` instead.
+    "geom_friction": ("geom_friction", "geom", [0]),
+    "body_com_offset": ("body_ipos", "body", [0, 1, 2]),
+    "body_ipos": ("body_ipos", "body", [0, 1, 2]),
+    "body_mass": ("body_mass", "body", [0]),
+}
+
+
 def serialize_event(
     name: str, term_cfg: EventTermCfg, env: Any, out_dir: Path
 ) -> dict[str, Any] | None:
@@ -566,19 +748,25 @@ def serialize_event(
     if isinstance(func, EventBinding):
         return term_cfg.to_dict()
 
+    resolved = _resolved_params(term_cfg.params, env)
     try:
         export = trace_event_term(
             func,
-            _resolved_params(term_cfg.params, env),
+            resolved,
             env,
             name=name,
             mode=term_cfg.mode,
         )
     except ValueError as exc:
-        # A model-field write (e.g. geom_friction/encoder_bias/body_com_offset
-        # domain randomization) isn't captured by the joint/root entity_write
-        # tracer yet -- known gap (companion brief §4's separate track), not a
-        # build failure: surface it so a task author can see what was skipped.
+        # A model-field write perturbs `mjModel`, not `mjData`, so the
+        # `entity_write` tracer sees nothing to capture. Most of those are startup
+        # domain randomization and need no graph at all — describe them instead and
+        # let the browser draw from the seeded PRNG once at load.
+        descriptor = model_field_dr_descriptor(term_cfg, env, resolved)
+        if descriptor is not None:
+            return {"name": name, "mode": term_cfg.mode, **descriptor}
+        # Anything else stays a native marker carrying why, so a task author can
+        # see what was skipped rather than wondering.
         return {"name": name, "mode": term_cfg.mode, "native": True, "reason": str(exc)}
 
     ref = _onnx_ref("event", name)
