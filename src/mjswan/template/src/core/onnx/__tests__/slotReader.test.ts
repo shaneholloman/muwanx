@@ -343,21 +343,29 @@ describe('slotDims', () => {
 });
 
 describe('createSlotReader — structured sensor fields', () => {
-  it('reports a raycast field unavailable rather than reading sensordata', () => {
-    // mjlab's RayCastSensor is not a `sensordata` window — it has no window at
-    // all. Falling through to the builtin-sensor path would either miss the name
-    // or, worse, land on some other sensor's numbers.
+  const SCAN = {
+    sensor: 'terrain_scan',
+    field: 'distances',
+    input: 'sensor__terrain_scan_distances',
+  };
+
+  it('says so by name when the build emitted no descriptor', () => {
+    // A `{sensor, field}` slot must never fall through to the builtin path: this
+    // sensor has no `sensordata` window, so that would either miss the name or,
+    // worse, land on some other sensor's numbers.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const read = createSlotReader(() => context());
-    expect(
-      read({
-        sensor: 'terrain_scan',
-        field: 'distances',
-        input: 'sensor__terrain_scan_distances',
-      }),
-    ).toBeNull();
-    expect(warn).toHaveBeenCalled();
+    const read = createSlotReader(() => ({ ...context(), mujoco: {} as never }));
+    expect(read(SCAN)).toBeNull();
+    expect(warn.mock.calls.flat().join(' ')).toContain('terrain_scan');
     warn.mockRestore();
+  });
+
+  it('reports unavailable before the WASM module exists', () => {
+    // `mj_ray` lives on the module; no module, nothing to cast with.
+    const read = createSlotReader(() => context(), {
+      raycastSensors: () => ({ terrain_scan: {} as never }),
+    });
+    expect(read(SCAN)).toBeNull();
   });
 
   it('still serves a builtin sensor, which carries no field', () => {

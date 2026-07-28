@@ -14,14 +14,12 @@
  * |---------------------|---------------------------------------------------|
  * | `{entity, field}`     | an `Entity.data.<field>` tensor (table below)    |
  * | `{sensor}`            | `mjData.sensordata[adr … adr+dim]`              |
- * | `{sensor, field}`     | a structured sensor's field — *not yet served*   |
+ * | `{sensor, field}`     | a structured sensor's field, cast here (`raycast.ts`) |
  * | `{command, field}`    | a live `OnnxCommand`'s state field               |
  *
  * The `{sensor, field}` shape is mjlab's `RayCastSensor` (a height scan): its data
- * is ray hits, not a `sensordata` window, so serving it means casting the rays
- * browser-side. `mj_ray` is available in the WASM build and the term math already
- * traces; what is missing is the sensor descriptor (ray offsets, frame, alignment,
- * max distance) in the build output and the reader here.
+ * is ray hits, not a `sensordata` window, so it is recomputed rather than read —
+ * see `raycast.ts`.
  *
  * **The whole field, not a slice.** The graph carries the term's own indexing
  * (mjlab's managers resolve `SceneEntityCfg` name patterns to ids at build time,
@@ -79,10 +77,12 @@
  */
 
 import { quatApply, quatApplyInv } from '../observation/math';
+import { RaycastSensor, isRaycastField, type RaycastSensorDescriptor } from './raycast';
 import type { OnnxInputSlot, SlotReader } from './session';
 
 type MjModel = import('mujoco').MjModel;
 type MjData = import('mujoco').MjData;
+type MainModule = import('mujoco').MainModule;
 
 /** A command term that can hand back one of its traced state fields by name. */
 export interface CommandStateSource {
@@ -96,6 +96,8 @@ export interface CommandStateSource {
 export type SlotReaderContext = {
   mjModel: MjModel | null;
   mjData: MjData | null;
+  /** Needed to cast a `RayCastSensor`'s rays (`mj_ray`); absent before load. */
+  mujoco?: MainModule | null;
   commandManager?: { getTerm(name: string): unknown } | null;
 };
 
@@ -110,6 +112,12 @@ export type SlotReaderOptions = {
    * identical to `joint_pos` exactly as mjlab's own zero-bias default does.
    */
   jointBias?: (jointName: string) => number;
+  /**
+   * Descriptors for the structured sensors the config's slots name, by sensor
+   * name. A function because they arrive with the policy, while the reader is
+   * built once with the runtime.
+   */
+  raycastSensors?: () => Record<string, RaycastSensorDescriptor>;
 };
 
 /** Everything about one entity that resolving its fields needs, computed once. */
@@ -384,6 +392,35 @@ export function createSlotReader(
 ): SlotReader {
   let cachedModel: MjModel | null = null;
   const indices = new Map<string, EntityIndex>();
+  // One caster per sensor, kept because it holds the per-model frame resolution
+  // and the ray buffers; a height scan is ~200 rays every control step.
+  const casters = new Map<string, RaycastSensor | null>();
+
+  const readRaycast = (
+    sensor: string,
+    field: string,
+    context: SlotReaderContext,
+  ): Float32Array | null => {
+    const { mjModel, mjData, mujoco } = context;
+    if (!mjModel || !mjData || !mujoco) return null;
+    if (!casters.has(sensor)) {
+      const descriptor = options.raycastSensors?.()[sensor];
+      if (!descriptor) {
+        console.warn(
+          `[slotReader] no raycast descriptor for sensor "${sensor}"; the build ` +
+            'did not emit one.',
+        );
+      }
+      casters.set(sensor, descriptor ? new RaycastSensor(mujoco, descriptor) : null);
+    }
+    const caster = casters.get(sensor);
+    if (!caster) return null;
+    if (!isRaycastField(field)) {
+      console.warn(`[slotReader] raycast sensor "${sensor}" cannot serve "${field}".`);
+      return null;
+    }
+    return caster.read(field, mjModel, mjData);
+  };
 
   const indexFor = (mjModel: MjModel, entity: string | null | undefined): EntityIndex => {
     if (mjModel !== cachedModel) {
@@ -415,15 +452,9 @@ export function createSlotReader(
     if (slot.sensor) {
       if (slot.field) {
         // A *field* of a structured sensor — mjlab's `RayCastSensor`, whose data is
-        // ray hits rather than a `sensordata` window. Serving it needs the rays
-        // cast in the browser (`mj_ray` is available; the sensor descriptor is
-        // not yet emitted), so report unavailable rather than reaching into
-        // `sensordata`, where this sensor has no window at all.
-        console.warn(
-          `[slotReader] sensor "${slot.sensor}" field "${slot.field}" needs a ` +
-            'raycast reader, which is not implemented yet.',
-        );
-        return null;
+        // ray hits rather than a `sensordata` window. Never fall through to the
+        // builtin path: this sensor has no window there to find.
+        return readRaycast(slot.sensor, slot.field, context);
       }
       const window = sensorWindow(mjModel, slot.sensor);
       if (!window) return null;

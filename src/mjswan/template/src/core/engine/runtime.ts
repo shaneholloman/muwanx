@@ -39,6 +39,7 @@ import { EventManager } from '../event/EventManager';
 import { Events } from '../event/events';
 import type { EventConfig, EventContext, TerrainData } from '../event/EventBase';
 import { OnnxSessionCache, type SlotReader } from '../onnx/session';
+import type { RaycastSensorDescriptor } from '../onnx/raycast';
 import { createSlotReader } from '../onnx/slotReader';
 import { SeededRng } from '../rng';
 
@@ -67,6 +68,25 @@ function buildJointBias(config: PolicyConfig): Map<string, number> {
     if (values[i]) bias.set(names[i], values[i]);
   }
   return bias;
+}
+
+/**
+ * Structured-sensor descriptors from every observation group in a policy config.
+ *
+ * They ride on the group rather than the policy because only a fused group knows
+ * which sensors its slots name; gathering them here keeps the slot reader from
+ * having to know about groups at all.
+ */
+function collectRaycastSensors(
+  config: PolicyConfig
+): Record<string, RaycastSensorDescriptor> {
+  const sensors: Record<string, RaycastSensorDescriptor> = {};
+  for (const group of Object.values(config.observations ?? {})) {
+    const declared = (group as { sensors?: Record<string, RaycastSensorDescriptor> })
+      .sensors;
+    if (declared) Object.assign(sensors, declared);
+  }
+  return sensors;
 }
 
 /** A policy with its ONNX weights resolved to bytes; motion data stays lazy. */
@@ -227,6 +247,11 @@ export class mjswanRuntime {
   private readonly readOnnxSlot: SlotReader;
   /** Encoder bias by joint name, from the active policy config; see `SlotReaderOptions`. */
   private jointBias = new Map<string, number>();
+  /**
+   * Descriptors for structured sensors the policy's slots name (mjlab's height
+   * scan). Policy-scoped, since they come out of `policy.json`'s groups.
+   */
+  private raycastSensors: Record<string, RaycastSensorDescriptor> = {};
 
   constructor(mujoco: MainModule, container: HTMLElement) {
     this.mujoco = mujoco;
@@ -241,11 +266,15 @@ export class mjswanRuntime {
     // scene rebuild is picked up without rewiring every manager.
     this.readOnnxSlot = createSlotReader(
       () => ({
+        mujoco: this.mujoco,
         mjModel: this.mjModel,
         mjData: this.mjData,
         commandManager: this.commandManager,
       }),
-      { jointBias: (name) => this.jointBias.get(name) ?? 0 },
+      {
+        jointBias: (name) => this.jointBias.get(name) ?? 0,
+        raycastSensors: () => this.raycastSensors,
+      },
     );
 
     const workingPath = '/working';
@@ -758,6 +787,7 @@ export class mjswanRuntime {
     this.terminationManager = null;
     this.policyGraphs.clear();
     this.jointBias.clear();
+    this.raycastSensors = {};
     // Note: eventManager, sceneGraphs and terrainData are scene-level state set in
     // loadEnvironment; do not clear here.
 
@@ -777,6 +807,7 @@ export class mjswanRuntime {
       const config = policy.config;
       await this.policyGraphs.load(policy.graphs ?? []);
       this.jointBias = buildJointBias(config);
+      this.raycastSensors = collectRaycastSensors(config);
       // Motion metadata lives in policy.json; the app supplies the bytes as
       // MotionInput[]. Merge the bytes onto each motion entry by name.
       if (Array.isArray(config.motions)) {

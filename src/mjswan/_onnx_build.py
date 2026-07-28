@@ -276,7 +276,7 @@ def _fused_group_entry(
     export = trace_observation_group(specs, env, name=group_name)
     ref = _onnx_ref("obs", group_name)
     _write_onnx(out_dir, ref, export.onnx_bytes)
-    return {
+    entry: dict[str, Any] = {
         "fused": ref,
         "input_slots": slots_json(export),
         "native_inputs": export.native_inputs,
@@ -285,6 +285,75 @@ def _fused_group_entry(
         "layout": export.layout,
         "size": _tensor_width(export.reference_output),
     }
+    sensors = _raycast_descriptors(export, env)
+    if sensors:
+        # Only present when a slot names a structured sensor; a builtin sensor is a
+        # `sensordata` window the runtime already knows how to find.
+        entry["sensors"] = sensors
+    return entry
+
+
+def _mj_element_name(env: Any, obj_type: str, obj_id: int) -> str:
+    """Model name of a body/site/geom the sensor's rays are attached to.
+
+    Names travel, not ids: the browser's model is compiled separately, so an id
+    from the build env means nothing there.
+    """
+    mj_model = env.sim.mj_model
+    return {"body": mj_model.body, "site": mj_model.site, "geom": mj_model.geom}[
+        obj_type
+    ](obj_id).name
+
+
+def raycast_sensor_descriptor(env: Any, sensor_name: str) -> dict[str, Any] | None:
+    """Everything the browser needs to reproduce one ``RayCastSensor``'s readings.
+
+    A structured sensor's fields are graph inputs (ADR 0005 §6: state collection is
+    native), and unlike a builtin sensor there is no ``sensordata`` window to read —
+    the browser has to cast the rays itself. It can: ``mj_ray`` is in the WASM
+    build. What it cannot do is re-derive the pattern, so the ray offsets and
+    directions are baked here from the live sensor rather than re-implementing
+    mjlab's ``GridPatternCfg``/``PinholeCfg``/``RingCfg`` generators — that also
+    means a pattern mjswan has never heard of works for free.
+
+    Returns ``None`` if *sensor_name* is not a raycast sensor.
+    """
+    sensor = env.scene.sensors.get(sensor_name)
+    offsets = getattr(sensor, "_local_offsets", None)
+    if offsets is None:
+        return None
+    return {
+        "kind": "raycast",
+        # [N, 3] each, in the frame's local coordinates.
+        "local_offsets": offsets.detach().cpu().tolist(),
+        "local_directions": sensor._local_directions.detach().cpu().tolist(),
+        "frames": [
+            {"type": obj_type, "name": _mj_element_name(env, obj_type, obj_id)}
+            for obj_type, obj_id, _ in sensor._frame_infos
+        ],
+        # "base" | "yaw" | "world" — how the frame's rotation reaches the rays.
+        "ray_alignment": sensor.cfg.ray_alignment,
+        "max_distance": float(sensor.cfg.max_distance),
+        # mjlab excludes each frame's own parent body so a ray cannot self-hit.
+        "exclude_parent_body": bool(sensor.cfg.exclude_parent_body),
+    }
+
+
+def _raycast_descriptors(export: Any, env: Any) -> dict[str, Any]:
+    """Descriptors for every structured sensor the group's slots name."""
+    from .compile.tracer import _SENSOR_NS
+
+    descriptors: dict[str, Any] = {}
+    for namespace, name_part in export.input_slots:
+        if namespace != _SENSOR_NS or "." not in name_part:
+            continue
+        sensor_name = name_part.split(".", 1)[0]
+        if sensor_name in descriptors:
+            continue
+        descriptor = raycast_sensor_descriptor(env, sensor_name)
+        if descriptor is not None:
+            descriptors[sensor_name] = descriptor
+    return descriptors
 
 
 def serialize_observation_group(
