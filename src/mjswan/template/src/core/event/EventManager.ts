@@ -34,8 +34,8 @@ type ResetEntry = PluginTerm | OnnxResetTerm;
  * per term and stay that way: per-mode fusion was measured and declined (brief §4b)
  * — no reference task has a traced `startup` or `interval` term at all, `reset` has
  * at most two, and fusing them would need a merge rule for the two Cartpole terms
- * that write the same entity's `joint_state`, which sequential dispatch here keeps
- * disjoint for free.
+ * that write the same entity's `joint_state` — safe today because their baked joint
+ * indices are disjoint, not because of ordering: `onReset` fires terms concurrently.
  */
 export class EventManager {
   private resetTerms: ResetEntry[] = [];
