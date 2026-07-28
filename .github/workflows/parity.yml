@@ -1,0 +1,59 @@
+name: onnx parity
+
+# ADR 0005 §Consequences makes the numeric-parity check mandatory: every traced
+# term must reproduce its live mjlab output, every step. The default `test` job
+# cannot carry it — it installs only the `dev` extra and runs `-m "not slow"`, so
+# every parity test is skipped there. This job installs the `examples` extras
+# (mjlab / torch / onnxruntime, ~2 GB) and compiles warp's CPU kernels once, which
+# is why it is not on the per-PR path.
+#
+# Runs on demand and weekly. The weekly cadence is aimed at *upstream* drift —
+# mjlab is a fast-moving dependency and a changed term definition would otherwise
+# surface as a mysterious runtime difference rather than a failing check. For a
+# change to the tracer or the serializers, trigger it by hand before merging.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays, 04:00 UTC.
+    - cron: "0 4 * * 1"
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    # The warp kernel compile plus seven mjlab envs is the bulk of this.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install uv
+          uv pip install --system -e ".[dev,examples]"
+
+      - name: Cache warp kernels
+        uses: actions/cache@v4
+        with:
+          # mjlab compiles these on first env construction; without the cache
+          # every task in the sweep pays for it again.
+          path: ~/.cache/warp
+          key: warp-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: warp-${{ runner.os }}-
+
+      - name: Parity sweep across every reference task
+        env:
+          # No display on a runner, and mjlab imports mujoco's renderer eagerly.
+          MUJOCO_GL: disable
+        # No `-m` filter: the parity file is marked `slow` (excluded by the default
+        # job) and the command/event files gate themselves on `importorskip`
+        # instead, so a marker selector would silently pick up only one of the
+        # three. Naming the files is what actually runs all of them.
+        run: |
+          pytest tests/test_onnx_parity.py tests/test_onnx_command_config.py \
+            tests/test_onnx_event_config.py --tb=short -q

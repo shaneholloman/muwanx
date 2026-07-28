@@ -1,13 +1,24 @@
-"""ADR 0005 Phase-1 parity: exported ONNX term graphs vs the live mjlab env.
+"""ADR 0005 parity: exported ONNX term graphs vs the live mjlab env.
 
 Layer: L3 (requires the ``examples`` extras — mjlab / torch / onnxruntime — and a
 one-time warp CPU-kernel compile, so it is marked ``slow``/``mjlab`` and skipped
 when those deps are absent).
 
-Asserts that every value-returning observation term of mjlab's Cartpole task,
-traced to ONNX by :mod:`mjswan.compile`, reproduces the live env output within
-tolerance for every term over multiple steps — and that ``time_out`` is
-classified as a native term rather than an ONNX graph.
+Two scopes. **Cartpole** is asserted in detail — every observation term traced,
+``time_out`` classified native rather than as a graph, both reset Events replayed
+against recorded RNG draws — because it is small enough for each claim to be
+specific. **Every other reference task** goes through :func:`parity_sweep`, which
+is the same harness over a wider term set; ADR §Consequences calls that check
+mandatory, and it had been living in ``scripts/onnx_parity_*.py`` as something a
+human ran by hand, so a regression on Lift or Velocity was nobody's failing test.
+
+Run the whole thing with::
+
+    MUJOCO_GL=disable pytest tests/test_onnx_parity.py -m mjlab
+
+Note that the default CI job runs ``-m "not slow"`` *and* installs only the
+``dev`` extra, so nothing in this file runs there — the sweep has its own
+workflow (``.github/workflows/parity.yml``).
 """
 
 from __future__ import annotations
@@ -69,6 +80,85 @@ def test_reset_events_are_onnx_and_match(cartpole_report):
         assert ev.rand_dim == 2
         assert ev.steps_checked > 0
         assert ev.max_abs_diff <= cartpole_report.atol
+
+
+# ---------------------------------------------------------------------------
+# The sweep: the same harness over every reference task, not just Cartpole.
+#
+# ADR §Consequences makes this check mandatory ("a term that fails to trace fails
+# the build"), but it had been a set of hand-run scripts, so the only asserted task
+# was the smallest and least representative one. Cartpole has four scalar
+# observations and no commands; the bugs that actually shipped were in the wide
+# tasks — a frozen `height_scan` on Velocity-Rough, an unresolved `SceneEntityCfg`
+# widening `ee_to_cube` on Lift.
+# ---------------------------------------------------------------------------
+
+# The reference tasks, with why each one earns its place in the sweep.
+SWEEP_TASKS = [
+    pytest.param("Mjlab-Cartpole-Swingup", id="cartpole-swingup"),
+    # Command-state slots (`cube_to_goal` reads another term's goal) and
+    # site-indexed reads, which is where the unresolved-`SceneEntityCfg` bug hid.
+    pytest.param("Mjlab-Lift-Cube-Yam", id="lift-cube-yam"),
+    # Builtin-sensor slots, `joint_pos_biased`, a traced termination.
+    pytest.param("Mjlab-Velocity-Flat-Unitree-G1", id="velocity-flat-g1"),
+    pytest.param("Mjlab-Velocity-Flat-Unitree-Go1", id="velocity-flat-go1"),
+    # `height_scan`: a structured `RayCastSensor`, the term that was silently
+    # baked as 187 constants until the tracer learned to read a sensor per field.
+    pytest.param("Mjlab-Velocity-Rough-Unitree-G1", id="velocity-rough-g1"),
+    pytest.param("Mjlab-Velocity-Rough-Unitree-Go1", id="velocity-rough-go1"),
+]
+
+# Deliberately out of the sweep: the Tracking tasks need their motion clip from a
+# W&B artifact, so they cannot be constructed offline (`examples/mjlab/g1_spinkick`
+# and `unitree_rl` carry them), and the Lift camera variants (`-Depth`, `-Rgb`,
+# `Multi-Cube-Seg`) observe rendered images, which mjswan does not serve.
+
+
+@pytest.fixture(scope="module")
+def sweep_report(request):
+    from mjlab.envs import ManagerBasedRlEnv
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjswan.compile import run_parity
+
+    cfg = load_env_cfg(request.param, play=True)
+    cfg.scene.num_envs = 1
+    # The Rough tasks' terrain generates far more contacts than the default
+    # arena allows, and mjlab sizes `nconmax` for a training-scale batch rather
+    # than one env; without this they raise `nconmax overflow` at construction.
+    cfg.sim.nconmax = 200_000
+    env = ManagerBasedRlEnv(cfg, device="cpu")
+    try:
+        yield run_parity(env, obs_group="actor", n_steps=8, seed=0)
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("sweep_report", SWEEP_TASKS, indirect=True)
+def test_every_term_matches_mjlab(sweep_report):
+    assert sweep_report.passed, "\n" + sweep_report.summary()
+
+
+@pytest.mark.parametrize("sweep_report", SWEEP_TASKS, indirect=True)
+def test_no_term_is_silently_unchecked(sweep_report):
+    """A term reported as a graph must have been *compared*, every step.
+
+    Without this the suite above passes on a task whose terms all traced and none
+    of which was ever run: `passed` is an AND over comparisons, and an empty AND
+    is True. `steps_checked` is what distinguishes "agreed" from "never asked".
+    """
+    graphs = [
+        t
+        for t in sweep_report.terms
+        if t.representation == "onnx" and t.kind == "observation"
+    ]
+    assert graphs, "no observation term traced to a graph — the task serialized empty"
+    for term in graphs:
+        assert term.steps_checked == sweep_report.n_steps, (
+            f"{term.name} compared on {term.steps_checked} of "
+            f"{sweep_report.n_steps} steps"
+        )
+        assert term.max_abs_diff <= sweep_report.atol
 
 
 # ---------------------------------------------------------------------------
