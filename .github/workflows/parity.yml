@@ -55,5 +55,6 @@ jobs:
         # instead, so a marker selector would silently pick up only some of
         # them. Naming the files is what actually runs them all.
         run: |
-          pytest tests/test_onnx_parity.py tests/test_onnx_command_config.py \
-            tests/test_onnx_event_config.py tests/test_action_clip.py --tb=short -q
+          pytest tests/test_onnx_parity.py tests/test_onnx_command_parity.py \
+            tests/test_onnx_command_config.py tests/test_onnx_event_config.py \
+            tests/test_action_clip.py --tb=short -q

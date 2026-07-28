@@ -17,7 +17,7 @@
 | `entity_write` — root **velocity** | **done** — Go1 `push_robot` (`write_root_link_velocity_to_sim`), parity clean |
 | `entity_write` — root **pose** | **done** — Go1 `reset_base` (`write_root_link_pose_to_sim`), parity clean (max\|Δ\|≈1e-7) |
 | Scene-const + control-flow-scalar capture | **done** — `env.scene.env_origins`, `asset.is_fixed_base` baked as constants |
-| §3 `OnnxCommand` tracer (Python) | **partial** — stateful `trace_command_term` done; `LiftingCommand` (§3b) parity clean |
+| §3 `OnnxCommand` tracer (Python) | **done** — stateful `trace_command_term` promotes hidden state to explicit `(prev_state, resample_mask, rand) → (next_state, …)` I/O, gates the resample with `where(mask, resampled, prev)`, and captures any `entity_write`. Was marked *partial* on the strength of one hand-checked task; `tests/test_onnx_command_parity.py` now asserts every reference task with a traced command (`lift_height` on Lift-Cube-Yam, `twist` on both Velocity-Flat tasks) over 16 replayed draws each, resolving `state_fields`/`command_field`/`trace_override` through the registry exactly as `serialize_command` does — so a registration that drifts from its term fails, not just a broken graph. Three guards keep it from passing vacuously: every draw must have been compared (an empty AND is True), `rand_dim` must be non-zero (a term with no randomness makes the replay meaningless), and the fixture asserts the command resolved to a *traced* term rather than a native one. Mutation-checked by inverting the resample gate |
 | §3b `LiftingCommandCfg` body | **done** — Lift-Cube-Yam, rand_dim=7, mask gate + cube entity_write, parity clean |
 | §3a `UniformVelocityCommandCfg` body | **traceable via override** — examples-side trace-friendly override incl. heading tracking traces + parity clean (dynamic-slot Command support, finding 15) |
 | Dynamic-slot Command support (runtime reads) | **done** — `term.robot`/`term._env` swapped to the Event tagged-key proxies; `heading_w` threaded as a graph input |
@@ -380,8 +380,14 @@ joystick/command injection point inside the graph.
 
 ## 5. Acceptance criteria
 
-- [ ] RNG spy/replay harness (§2b) in place and used for every term with internal
-      randomness before any Command/Event parity claim is trusted. **(done for reset)**
+- [x] RNG spy/replay harness (§2b) in place and used for every term with internal
+      randomness before any Command/Event parity claim is trusted. Reset-mode Events
+      go through `run_parity`'s replay; commands — the most randomness-heavy layer,
+      `lift_height` drawing 7 per resample and the tracking RSI graph 41 — are now
+      asserted by `tests/test_onnx_command_parity.py` instead of by hand-run scripts.
+      Startup model-field DR draws browser-side from the seeded PRNG, so there is no
+      graph to replay; its arithmetic is covered against the real WASM by
+      `modelFieldDr.test.ts`.
 - [~] A recorded session replays from its persisted PRNG seed (ADR acceptance
       criterion 2) — **restated as approximate, not bit-for-bit**. The seed is now
       choosable and readable through the public API, which it was not, and it fully
@@ -402,15 +408,27 @@ joystick/command injection point inside the graph.
       `test_onnx_parity.py`'s parameterized sweep rather than a hand-run script, with
       its own CI workflow. The carved-out Tracking/Mimic tasks are still out of
       scope.)**
-- [ ] Velocity-Flat/Rough: `fell_over`/`out_of_terrain_bounds` termination tracing;
-      `mode="startup"` + `mode="interval"` dispatch (native timer, §4); the
-      `UniformVelocityCommand` ONNX body + declarative GUI override (§3a; GUI override
-      checked manually, not in the automated parity check).
-- [ ] Lift-Cube-Yam: `mode="startup"` dispatch; the `LiftingCommand` ONNX body (§3b),
-      incl. the object pose/velocity reset side effect via the native delta mechanism.
+- [x] Velocity-Flat/Rough: `fell_over` traces (proven in `rolloutParity`'s fixture,
+      where it fires and clears across a forced pitch sweep); `mode="startup"` dispatch
+      is the model-field descriptor path and `mode="interval"` dispatch exists
+      (`IntervalTrigger`) though no play config has a traced interval term; the
+      `UniformVelocityCommand` ONNX body traces via the examples-side override and is
+      now in the automated command sweep, and the GUI override *is* covered
+      automatically after all — `ControlPanel/__tests__/SliderRange.test.ts` plus
+      `test_commands.py`, contrary to the "checked manually" note this line used to
+      carry. **`out_of_terrain_bounds` does not exist**: the current mjlab's Velocity
+      play configs carry only `time_out` and `fell_over` (`bad_orientation`), so that
+      half of this criterion referred to a term upstream no longer has.
+- [x] Lift-Cube-Yam: `mode="startup"` dispatch is its three fingertip-friction
+      model-field descriptors; the `LiftingCommand` ONNX body (§3b) traces with
+      `rand_dim=7`, a mask gate and the cube pose/velocity `entity_write`, and is now in
+      the automated command sweep rather than a hand-run script.
 - [ ] Tracking/Mimic tasks: physics/Obs/Term/Action/reset-Event parity holds;
-      `TrackingCommand` **not** required to be ONNX-traced yet — confirm the native impl
-      still runs unchanged.
+      `TrackingCommand` **not** required to be ONNX-traced (it stays native — a clip
+      lookup is a data lookup — while its RSI jitter is traced). Blocked on inputs
+      rather than on design: g1_spinkick needs its W&B motion artifact to construct an
+      env, unitree_rl imports an author's own `src.tasks` absent from this repo, and
+      musclemimic has a private-repo dependency. See the example table.
 - [x] No term's Python source ships to the browser as executable text, and no
       training-only manager reaches the artifacts (`tests/test_artifact_hygiene.py`
       — see the row above; the ADR's "reject a config referencing reward/curriculum/
