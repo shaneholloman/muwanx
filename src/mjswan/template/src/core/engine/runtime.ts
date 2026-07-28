@@ -734,21 +734,30 @@ export class mjswanRuntime {
       const target = this.timestep * this.decimation;
 
       if (this.mjModel && this.mjData) {
-        this.mujoco.mj_forward(this.mjModel, this.mjData);
+        // The loop body mirrors `ManagerBasedRlEnv.step()` (ADR 0005 §8), which
+        // spends exactly one `forward()` per step and places it deliberately.
+        // Observations read the state the *previous* iteration's forward left
+        // (the scene/policy load paths forward before the loop starts), so the
+        // cycle is the same one mjlab runs: forward → command → event → obs →
+        // action → physics → term → reset → forward.
         if (this.policyRunner && this.policyStateBuilder) {
           const state = this.policyStateBuilder.build();
           const obs = await this.policyRunner.collectObservationsByKey(state);
           await this.runOnnxInference(obs);
         }
         this.executeSimulationSteps();
-        this.updateCachedState();
 
-        // Evaluate termination conditions after simulation step
+        // Terminations read pre-forward mjData, so derived quantities (`xpos`,
+        // `xquat`, `site_xpos`, `cvel`, `sensordata`) lag `qpos`/`qvel` by one
+        // physics substep — `mj_step` runs its forward kinematics *before*
+        // integrating. mjlab accepts exactly this staleness for the same reason
+        // (its `step()` docstring: consistent every step, so the MDP stays
+        // well-defined) rather than paying for a second forward.
         if (this.terminationManager && this.policyStateBuilder) {
           const postState = this.policyStateBuilder.build();
           const result = this.terminationManager.evaluate(postState, target);
           if (result.done) {
-            this.resetSimulationState();
+            this.resetSimulationState({ forward: false });
             this.terminationManager.reset();
             if (this.policyRunner) {
               const resetState = this.policyStateBuilder.build();
@@ -757,9 +766,14 @@ export class mjswanRuntime {
           }
         }
 
-        // Commands are updated after the physics step to match mjlab training-time semantics:
-        // the policy sees command values from the previous step, consistent with how mjlab
-        // computes observations before stepping the environment.
+        // The one forward. It resolves the decimation loop's staleness and picks
+        // up a reset's writes, so everything after it reads fresh derived state.
+        this.mujoco.mj_forward(this.mjModel, this.mjData);
+        this.updateCachedState();
+
+        // After the forward, as in mjlab: a command term reading `site_xpos` or a
+        // traced interval event reading `root_link_vel_w` would otherwise see the
+        // pre-integration values, and on a reset frame the pre-reset ones.
         this.commandManager.update(target);
         this.commandManager.updateDebugVisuals();
         // Advances `mode="interval"` timers (mjlab's mid-episode randomization) and
@@ -826,9 +840,9 @@ export class mjswanRuntime {
       }
       this.initialQpos = Array.isArray(config.initial_qpos) ? (config.initial_qpos as number[]) : null;
       this.initialQvel = Array.isArray(config.initial_qvel) ? (config.initial_qvel as number[]) : null;
+      // `resetSimulationState` does the forward; a second one here would be
+      // redundant work on every policy load.
       this.resetSimulationState();
-      this.mujoco.mj_forward(this.mjModel, this.mjData);
-      this.updateCachedState();
 
       // Initialize commands from policy config if present
       if (config.commands && typeof config.commands === 'object') {
@@ -1208,7 +1222,15 @@ export class mjswanRuntime {
     return output;
   }
 
-  private resetSimulationState(): void {
+  /**
+   * Put the sim back to its initial state and fire `mode="reset"` events.
+   *
+   * `forward: false` when the caller runs its own `mj_forward` right after — the
+   * step loop does, because ADR 0005 §8 allows exactly one forward per step and
+   * mjlab spends it *after* the reset block (`ManagerBasedRlEnv.step`), covering
+   * the reset write and the decimation loop's one-substep staleness in one call.
+   */
+  private resetSimulationState({ forward = true }: { forward?: boolean } = {}): void {
     if (!this.mjModel || !this.mjData) {
       return;
     }
@@ -1240,9 +1262,11 @@ export class mjswanRuntime {
       this.onnxInputDict = this.onnxModule.initInput();
     }
     this.onnxTimeStep = 0;
-    this.mujoco.mj_forward(this.mjModel, this.mjData);
     this.lastSimState.bodies.clear();
-    this.updateCachedState();
+    if (forward) {
+      this.mujoco.mj_forward(this.mjModel, this.mjData);
+      this.updateCachedState();
+    }
   }
 
   private executeSimulationSteps(): void {
