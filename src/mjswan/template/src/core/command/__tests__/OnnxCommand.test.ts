@@ -114,7 +114,9 @@ describe('OnnxCommand: state threading and command output', () => {
     expect(Array.from(cmd.getCommand())).toEqual([2, 0, 0]);
   });
 
-  it('seeds state to zeros from the declared shape/dtype', async () => {
+  it('seeds state to zeros from the declared shape/dtype when no init is given', async () => {
+    // An older bundle carries no `init`; zero-fill is what this did before, and it
+    // is right for every reference task (all of their state starts at zero).
     const session = new FakeSession(() => velocityOutputs(0, 0, 0));
     const cmd = new OnnxCommand('twist', VELOCITY_CFG, null, {
       session,
@@ -123,6 +125,53 @@ describe('OnnxCommand: state threading and command output', () => {
     await cmd.step(true);
     expect(values(session.calls[0].prev_vel_command_b)).toEqual([0, 0, 0]);
     expect(session.calls[0].prev_vel_command_b.dims).toEqual([1, 3]);
+  });
+
+  it('seeds state from the declared init (ADR 0005 §3)', async () => {
+    // The case the field exists for: a term whose first resample does *not*
+    // overwrite every field starts where the build found it, not at zero. No
+    // reference task needs this today — all of their state is zeros — which is
+    // exactly why the omission was invisible.
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand(
+      'twist',
+      {
+        ...VELOCITY_CFG,
+        state_fields: [
+          { name: 'vel_command_b', shape: [1, 3], dtype: 'float32', init: [0.4, -0.2, 1.5] },
+          { name: 'is_standing_env', shape: [1], dtype: 'bool', init: [1] },
+        ],
+      },
+      null,
+      { session, rng: new SeededRng(1) },
+    );
+    await cmd.step(true);
+    expect(values(session.calls[0].prev_vel_command_b)).toEqual([
+      0.4000000059604645, -0.20000000298023224, 1.5,
+    ]);
+    expect(values(session.calls[0].prev_is_standing_env)).toEqual([1]);
+  });
+
+  it('ignores an init that disagrees with the declared width', async () => {
+    // A config and a graph that disagree is a build bug; writing past the buffer
+    // would throw and writing short would leave a zero mid-state, so the extra is
+    // dropped and the short case keeps its zeros.
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    const cmd = new OnnxCommand(
+      'twist',
+      {
+        ...VELOCITY_CFG,
+        state_fields: [
+          { name: 'vel_command_b', shape: [1, 3], dtype: 'float32', init: [1, 2, 3, 4, 5] },
+          { name: 'is_standing_env', shape: [1], dtype: 'bool', init: [] },
+        ],
+      },
+      null,
+      { session, rng: new SeededRng(1) },
+    );
+    await cmd.step(true);
+    expect(values(session.calls[0].prev_vel_command_b)).toEqual([1, 2, 3]);
+    expect(values(session.calls[0].prev_is_standing_env)).toEqual([0]);
   });
 
   it('threads a declared dynamic input slot from the slot reader', async () => {

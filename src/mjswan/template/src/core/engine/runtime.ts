@@ -24,7 +24,7 @@ import {
   computeCameraPosition,
   updateCameraFromData,
 } from './viewer_config';
-import { stepPhysics, type ResolvedActionTerm } from '../action/applyAction';
+import { resolveActionClip, stepPhysics, type ResolvedActionTerm } from '../action/applyAction';
 import { Observations } from '../observation/observations';
 import { TerminationManager } from '../termination/TerminationManager';
 import { Terminations } from '../termination/terminations';
@@ -978,21 +978,7 @@ export class mjswanRuntime {
     config: PolicyConfig,
     runner: PolicyRunner,
     stateBuilder: PolicyStateBuilder
-  ): Array<{
-    controlType: string;
-    ctrlAdr: number[];
-    qposAdr: number[];
-    qvelAdr: number[];
-    actionIndices: number[];
-    actionScale: Float32Array;
-    actionOffset: Float32Array;
-    defaultJointPos: Float32Array;
-    encoderBias: Float32Array;
-    positionActuator: boolean[];
-    kp: Float32Array;
-    kd: Float32Array;
-    muscleNormalize: boolean;
-  }> | null {
+  ): ResolvedActionTerm[] | null {
     const jointNames = runner.getPolicyJointNames();
     const affineBiasValue = this.mujoco.mjtBias?.mjBIAS_AFFINE?.value ?? 1;
 
@@ -1004,7 +990,8 @@ export class mjswanRuntime {
       configOffset: number[] | number | Record<string, number> | undefined,
       configStiffness: number[] | number | Record<string, number> | undefined,
       configDamping: number[] | number | Record<string, number> | undefined,
-      useDefaultOffset: boolean
+      useDefaultOffset: boolean,
+      configClip?: Record<string, readonly number[]>
     ) => {
       const n = mapping.qposAdr.length;
       const subsetJointNames = mapping.actionIndices.map((i) => jointNames[i]);
@@ -1030,6 +1017,9 @@ export class mjswanRuntime {
 
       const kp = this.normalizeControlArray(configStiffness, n, 0.0, subsetJointNames);
       const kd = this.normalizeControlArray(configDamping, n, 0.0, subsetJointNames);
+      // Pattern-keyed, so resolved by `resolveActionClip` rather than by the
+      // exact-name `normalizeControlArray` its siblings above use.
+      const { clipLo, clipHi } = resolveActionClip(configClip, subsetJointNames, n);
 
       // Detect per-actuator whether the scene uses position actuators (biastype=affine,
       // ctrl=target_pos, PD handled internally by MuJoCo) or motor actuators
@@ -1063,6 +1053,8 @@ export class mjswanRuntime {
         kp,
         kd,
         muscleNormalize: false,
+        clipLo,
+        clipHi,
       };
     };
 
@@ -1146,6 +1138,11 @@ export class mjswanRuntime {
           kp: new Float32Array(n),
           kd: new Float32Array(n),
           muscleNormalize,
+          ...resolveActionClip(
+            actionTerm.clip as Record<string, readonly number[]> | undefined,
+            muscleMapping.ctrlAdr.map((_, i) => patterns[i] ?? ''),
+            n
+          ),
         });
         continue;
       }
@@ -1185,7 +1182,8 @@ export class mjswanRuntime {
         actionTerm.offset as number[] | number | Record<string, number> | undefined,
         actionTerm.stiffness as number[] | number | Record<string, number> | undefined,
         actionTerm.damping as number[] | number | Record<string, number> | undefined,
-        useDefaultOffset
+        useDefaultOffset,
+        actionTerm.clip as Record<string, readonly number[]> | undefined
       ));
     }
 

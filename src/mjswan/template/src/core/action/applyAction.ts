@@ -46,6 +46,16 @@ export interface ResolvedActionTerm {
   kd: Float32Array;
   /** `muscle_activation` only: MyoSuite sigmoid when true, else clip to [0, 1]. */
   muscleNormalize: boolean;
+  /**
+   * Per-target bounds on the *processed* action, `±Infinity` where unbounded.
+   *
+   * mjlab's `BaseAction.process_actions` clamps `raw * scale + offset` and only
+   * then does each kind's `apply_actions` run — for `joint_position` that means the
+   * clamp happens *before* the encoder-bias subtraction, not on the final target.
+   * Clamping the wrong side of that would move every bound by the bias.
+   */
+  clipLo: Float32Array;
+  clipHi: Float32Array;
 }
 
 /**
@@ -94,12 +104,14 @@ function applyActionTerm(
       const actionValue = actions[actionIndices[i]] ?? 0;
       // `encoder_bias` is subtracted before the write (ADR §7): the policy was
       // trained against a biased reading, so the target has to be un-biased to
-      // land where the policy meant.
-      const target =
-        defaultJointPos[i] +
-        actionOffset[i] +
-        actionScale[i] * actionValue -
-        encoderBias[i];
+      // land where the policy meant. The clip lands on the processed action that
+      // precedes it, which is where mjlab puts it.
+      const processed = clamp(
+        defaultJointPos[i] + actionOffset[i] + actionScale[i] * actionValue,
+        term.clipLo[i],
+        term.clipHi[i],
+      );
+      const target = processed - encoderBias[i];
 
       if (positionActuator[i]) {
         ctrl[ctrlIndex] = target;
@@ -116,7 +128,14 @@ function applyActionTerm(
     for (let i = 0; i < numJoints; i++) {
       const ctrlIndex = ctrlAdr[i];
       if (ctrlIndex >= 0) {
-        ctrl[ctrlIndex] = actionScale[i] * (actions[actionIndices[i]] ?? 0);
+        // `+ offset` matches mjlab's `raw * scale + offset`; this branch used to
+        // drop it, which is invisible while every effort term's offset is 0.0 (as
+        // all the reference tasks' are) and silently wrong for one that sets it.
+        ctrl[ctrlIndex] = clamp(
+          actionScale[i] * (actions[actionIndices[i]] ?? 0) + actionOffset[i],
+          term.clipLo[i],
+          term.clipHi[i],
+        );
       }
     }
     return;
@@ -129,7 +148,13 @@ function applyActionTerm(
     for (let i = 0; i < numJoints; i++) {
       const ctrlIndex = ctrlAdr[i];
       if (ctrlIndex < 0) continue;
-      const raw = (actions[actionIndices[i]] ?? 0) * actionScale[i] + actionOffset[i];
+      // The declared bounds apply to the processed action, so before the
+      // activation mapping — the [0, 1] squeeze below is the actuator's own range.
+      const raw = clamp(
+        (actions[actionIndices[i]] ?? 0) * actionScale[i] + actionOffset[i],
+        term.clipLo[i],
+        term.clipHi[i],
+      );
       ctrl[ctrlIndex] = muscleNormalize
         ? 1 / (1 + Math.exp(-5 * (raw - 0.5)))
         : clamp01(raw);
@@ -139,6 +164,46 @@ function applyActionTerm(
 
 function clamp01(value: number): number {
   return value < 0 ? 0 : value > 1 ? 1 : value;
+}
+
+function clamp(value: number, lo: number, hi: number): number {
+  return value < lo ? lo : value > hi ? hi : value;
+}
+
+/**
+ * Per-target bounds from a pattern-keyed `clip` config.
+ *
+ * mjlab resolves these with `re.fullmatch` against the term's target names, so the
+ * anchored regex here is the same rule — and it is why `clip` cannot reuse the
+ * exact-name resolver `stiffness`/`damping` share: those are mjswan's own fields.
+ * A target no pattern matches stays unbounded.
+ */
+export function resolveActionClip(
+  clip: Record<string, readonly number[]> | undefined,
+  targetNames: readonly string[],
+  length: number,
+): { clipLo: Float32Array; clipHi: Float32Array } {
+  const clipLo = new Float32Array(length).fill(-Infinity);
+  const clipHi = new Float32Array(length).fill(Infinity);
+  if (!clip) return { clipLo, clipHi };
+  for (const [pattern, bounds] of Object.entries(clip)) {
+    if (!Array.isArray(bounds) || bounds.length < 2) {
+      console.warn(`[applyAction] clip "${pattern}" needs [min, max]; ignoring.`);
+      continue;
+    }
+    let matched = 0;
+    const re = new RegExp(`^(?:${pattern})$`);
+    for (let i = 0; i < Math.min(length, targetNames.length); i++) {
+      if (!re.test(targetNames[i])) continue;
+      clipLo[i] = bounds[0];
+      clipHi[i] = bounds[1];
+      matched++;
+    }
+    if (matched === 0) {
+      console.warn(`[applyAction] clip "${pattern}" matched no target; ignoring.`);
+    }
+  }
+  return { clipLo, clipHi };
 }
 
 /**

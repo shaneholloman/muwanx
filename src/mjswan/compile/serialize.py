@@ -11,7 +11,7 @@ A single generic ``OnnxCommand`` runtime handler interprets every command
 (brief §3). The config declares everything the handler needs to allocate state,
 supply ``rand``, thread dynamic reads, and apply any ``entity_write``:
 
-- ``state_fields``  — each with **shape + dtype** so the handler can build the
+- ``state_fields``  — each with **shape + dtype + init** so the handler can build the
   ONNX I/O tensors and persist state across frames (brief §3a).
 - ``command_field`` — which state field is the command value.
 - ``rand_dim``      — how many seeded PRNG draws to feed as ``rand``.
@@ -59,12 +59,15 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["name", "shape", "dtype"],
+                "required": ["name", "shape", "dtype", "init"],
                 "additionalProperties": False,
                 "properties": {
                     "name": {"type": "string"},
                     "shape": {"type": "array", "items": {"type": "integer"}},
                     "dtype": {"type": "string"},
+                    # Flattened initial value (ADR 0005 §3), so the runtime starts
+                    # the term where the build found it rather than at zero.
+                    "init": {"type": "array", "items": {"type": ["number", "boolean"]}},
                 },
             },
         },
@@ -231,9 +234,19 @@ def validate_command_config(cfg: dict[str, Any]) -> list[str]:
 
     names: set[str] = set()
     for sf in cfg.get("state_fields", []):
-        if not isinstance(sf, dict) or not {"name", "shape", "dtype"} <= set(sf):
-            errors.append(f"state_field must have name/shape/dtype: {sf!r}")
+        if not isinstance(sf, dict) or not {"name", "shape", "dtype", "init"} <= set(
+            sf
+        ):
+            errors.append(f"state_field must have name/shape/dtype/init: {sf!r}")
             continue
+        expected = 1
+        for dim in sf["shape"]:
+            expected *= int(dim)
+        if len(sf["init"]) != expected:
+            errors.append(
+                f"state_field {sf['name']!r}: init has {len(sf['init'])} values, "
+                f"shape {sf['shape']} needs {expected}"
+            )
         names.add(sf["name"])
     if cfg.get("command_field") and cfg["command_field"] not in names:
         errors.append(

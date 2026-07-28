@@ -52,8 +52,8 @@ jobs:
           MUJOCO_GL: disable
         # No `-m` filter: the parity file is marked `slow` (excluded by the default
         # job) and the command/event files gate themselves on `importorskip`
-        # instead, so a marker selector would silently pick up only one of the
-        # three. Naming the files is what actually runs all of them.
+        # instead, so a marker selector would silently pick up only some of
+        # them. Naming the files is what actually runs them all.
         run: |
           pytest tests/test_onnx_parity.py tests/test_onnx_command_config.py \
-            tests/test_onnx_event_config.py --tb=short -q
+            tests/test_onnx_event_config.py tests/test_action_clip.py --tb=short -q

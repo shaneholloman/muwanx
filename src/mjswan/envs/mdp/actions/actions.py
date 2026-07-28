@@ -42,11 +42,28 @@ class ActionTermCfg(abc.ABC):
     mjswan targets the single policy entity."""
 
     clip: dict[str, tuple] | None = None
-    """Optional per-actuator clipping bounds after scale/offset.
-    Accepted for mjlab compatibility; not yet applied in TS runtime."""
+    """Per-target clipping bounds, applied after scale/offset.
+
+    Keys are joint-name *patterns* (mjlab resolves them with ``re.fullmatch`` via
+    ``resolve_matching_names_values``), values are ``(min, max)``. A target no
+    pattern matches is unbounded. Mirrors ``BaseActionCfg.clip``: mjlab clamps
+    ``raw * scale + offset`` — the *processed* action, before any encoder-bias
+    subtraction — so the browser applies it at the same point."""
 
     unsupported_reason: str | None = None
     """If set, raises ``NotImplementedError`` at build time."""
+
+    def _add_clip(self, entry: dict[str, Any]) -> None:
+        """Attach ``clip`` to a serialized entry, if this term declares any.
+
+        Every ``to_dict`` calls this rather than inheriting it, because each
+        subclass builds its own entry from scratch. Emitted as patterns and
+        resolved browser-side with the same fullmatch mjlab uses — unlike
+        ``stiffness``/``damping``, which are mjswan's own fields and keyed by
+        exact joint name.
+        """
+        if self.clip is not None:
+            entry["clip"] = {k: list(v) for k, v in self.clip.items()}
 
     @abc.abstractmethod
     def to_dict(self) -> dict[str, Any]:
@@ -83,6 +100,7 @@ class BaseActionCfg(ActionTermCfg):
         if self.offset != 0.0:
             entry["offset"] = self.offset
         entry["actuator_names"] = list(self.actuator_names)
+        self._add_clip(entry)
         return entry
 
 
@@ -126,6 +144,7 @@ class JointPositionActionCfg(BaseActionCfg):
             entry["stiffness"] = self.stiffness
         if self.damping is not None:
             entry["damping"] = self.damping
+        self._add_clip(entry)
         return entry
 
 
@@ -179,6 +198,7 @@ class JointEffortActionCfg(BaseActionCfg):
             entry["stiffness"] = self.stiffness
         if self.damping is not None:
             entry["damping"] = self.damping
+        self._add_clip(entry)
         return entry
 
 
@@ -214,6 +234,7 @@ class MuscleActivationActionCfg(BaseActionCfg):
         if not self.normalize:
             entry["normalize"] = False
         entry["actuator_names"] = list(self.actuator_names)
+        self._add_clip(entry)
         return entry
 
 

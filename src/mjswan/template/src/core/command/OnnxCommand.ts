@@ -49,6 +49,16 @@ export interface OnnxStateFieldSpec {
   name: string;
   shape: number[];
   dtype: string;
+  /**
+   * Flattened initial value, as the build found it on the term (ADR 0005 §3).
+   *
+   * Optional on the read side only so an older bundle still loads: absent means
+   * zero-fill, which is what this did before the build emitted the value. That is
+   * correct for a term whose first resample overwrites every field — which is
+   * every reference task today — and wrong for one holding a counter or a
+   * carried-over value.
+   */
+  init?: number[];
 }
 
 export interface OnnxCommandVizConfig {
@@ -86,6 +96,13 @@ function numel(shape: readonly number[]): number {
 function makeTensor(spec: OnnxStateFieldSpec): OnnxTensorLike {
   const n = numel(spec.shape);
   const data = spec.dtype === 'bool' ? new Uint8Array(n) : new Float32Array(n);
+  const init = spec.init;
+  if (init) {
+    // Truncated or padded to the declared width rather than trusted: a mismatch
+    // means the config and the graph disagree, and writing past `data` would throw
+    // while writing short would leave a silent zero in the middle of the state.
+    for (let i = 0; i < Math.min(n, init.length); i++) data[i] = Number(init[i]);
+  }
   return { data, dims: [...spec.shape] };
 }
 

@@ -10,9 +10,14 @@
  * biased joint reading has to have that bias removed from its target, or every
  * joint sits a fixed distance from where the policy meant.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { applyAction, stepPhysics, type ResolvedActionTerm } from '../applyAction';
+import {
+  applyAction,
+  resolveActionClip,
+  stepPhysics,
+  type ResolvedActionTerm,
+} from '../applyAction';
 
 type MjData = import('mujoco').MjData;
 
@@ -41,6 +46,10 @@ function term(over: Partial<ResolvedActionTerm> = {}): ResolvedActionTerm {
     kp: new Float32Array(n),
     kd: new Float32Array(n),
     muscleNormalize: true,
+    // Unbounded by default: a clip is opt-in, and ±Infinity is what
+    // `resolveActionClip` leaves for a target no pattern names.
+    clipLo: new Float32Array(n).fill(-Infinity),
+    clipHi: new Float32Array(n).fill(Infinity),
     ...over,
   };
 }
@@ -189,5 +198,121 @@ describe('stepPhysics', () => {
     expect(stepped).toBe(3);
     // ctrl = 1 * (1 - qpos); qpos advances 0.1 per substep, so the values must move.
     expect(seen.map(v => Number(v.toFixed(3)))).toEqual([1, 0.9, 0.8]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `clip` (mjlab's `BaseActionCfg.clip`). It was declared on the Python cfg,
+// never serialized and never applied, so a task that set it got it silently
+// dropped. No reference task sets it — all three are `clip=None` — which is
+// exactly why the drop was invisible.
+// ---------------------------------------------------------------------------
+
+describe('applyAction — clip', () => {
+  it('bounds the processed action *before* the encoder bias is removed', () => {
+    // The distinguishing case. mjlab clamps `raw * scale + offset` and only then
+    // does `apply_actions` subtract the bias, so with a bias the final ctrl sits
+    // *outside* the declared bound by exactly that bias. Clamping the target
+    // instead would pin ctrl to 0.5 and look plausible.
+    const data = fakeData(1);
+    applyAction(
+      data,
+      [
+        term({
+          ctrlAdr: [0],
+          qposAdr: [0],
+          qvelAdr: [0],
+          actionIndices: [0],
+          actionScale: Float32Array.from([1]),
+          actionOffset: new Float32Array(1),
+          defaultJointPos: new Float32Array(1),
+          encoderBias: Float32Array.from([0.1]),
+          positionActuator: [true],
+          clipLo: Float32Array.from([-0.5]),
+          clipHi: Float32Array.from([0.5]),
+        }),
+      ],
+      Float32Array.from([10]),
+    );
+    expect(data.ctrl[0]).toBeCloseTo(0.5 - 0.1, 6);
+  });
+
+  it('bounds a torque, and adds the offset mjlab adds', () => {
+    const data = fakeData(2);
+    applyAction(
+      data,
+      [
+        term({
+          controlType: 'torque',
+          actionScale: Float32Array.from([1, 1]),
+          actionOffset: Float32Array.from([0.25, 0]),
+          clipLo: Float32Array.from([-1, -1]),
+          clipHi: Float32Array.from([1, 1]),
+        }),
+      ],
+      Float32Array.from([0.5, 5]),
+    );
+    // 0.5 * 1 + 0.25 = 0.75, inside the bound; the second saturates at 1.
+    expect(data.ctrl[0]).toBeCloseTo(0.75, 6);
+    expect(data.ctrl[1]).toBeCloseTo(1, 6);
+  });
+
+  it('bounds a muscle excitation before the activation mapping', () => {
+    const data = fakeData(1);
+    applyAction(
+      data,
+      [
+        term({
+          controlType: 'muscle_activation',
+          muscleNormalize: false,
+          ctrlAdr: [0],
+          actionScale: Float32Array.from([1]),
+          actionOffset: new Float32Array(1),
+          clipLo: Float32Array.from([0]),
+          clipHi: Float32Array.from([0.4]),
+        }),
+      ],
+      Float32Array.from([5]),
+    );
+    // Clipped to 0.4 first, so the [0, 1] squeeze leaves it there rather than at 1.
+    expect(data.ctrl[0]).toBeCloseTo(0.4, 6);
+  });
+});
+
+describe('resolveActionClip', () => {
+  const NAMES = ['hip_left', 'hip_right', 'knee_left'];
+
+  it('leaves every target unbounded without a config', () => {
+    const { clipLo, clipHi } = resolveActionClip(undefined, NAMES, 3);
+    expect(Array.from(clipLo)).toEqual([-Infinity, -Infinity, -Infinity]);
+    expect(Array.from(clipHi)).toEqual([Infinity, Infinity, Infinity]);
+  });
+
+  it('resolves a pattern by fullmatch, as mjlab does', () => {
+    // `hip_.*` must take both hips and leave the knee alone. A substring match
+    // would be wrong the other way: `hip` alone matches nothing.
+    const { clipLo, clipHi } = resolveActionClip({ 'hip_.*': [-2, 2] }, NAMES, 3);
+    expect(Array.from(clipLo)).toEqual([-2, -2, -Infinity]);
+    expect(Array.from(clipHi)).toEqual([2, 2, Infinity]);
+
+    const partial = resolveActionClip({ hip: [-2, 2] }, NAMES, 3);
+    expect(Array.from(partial.clipLo)).toEqual([-Infinity, -Infinity, -Infinity]);
+  });
+
+  it('lets a later pattern override an earlier one on the same target', () => {
+    const { clipLo } = resolveActionClip(
+      { '.*': [-5, 5], knee_left: [-1, 1] },
+      NAMES,
+      3,
+    );
+    expect(Array.from(clipLo)).toEqual([-5, -5, -1]);
+  });
+
+  it('warns rather than throwing on a pattern that matches nothing', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { clipLo } = resolveActionClip({ 'ankle_.*': [-1, 1] }, NAMES, 3);
+    expect(Array.from(clipLo)).toEqual([-Infinity, -Infinity, -Infinity]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

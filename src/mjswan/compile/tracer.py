@@ -1325,11 +1325,21 @@ def trace_command_term(
         )
     _restore_state(term, snap)
 
+    # `init` is ADR 0005 §3's "names, shapes, *and initial values*". The state was
+    # restored from `snap` above, so these are the values `cfg.build(env)` left —
+    # the term's state before any resample. Without them the runtime zero-fills,
+    # which is right only for a term whose first resample overwrites every field;
+    # a counter or a held previous value would start wrong, silently.
     state_specs = [
         {
             "name": f,
             "shape": list(getattr(term, f).shape),
             "dtype": str(getattr(term, f).dtype).replace("torch.", ""),
+            "init": [
+                # bool/int state round-trips as a number; the reader rebuilds dtype.
+                bool(v) if getattr(term, f).dtype == torch.bool else v
+                for v in getattr(term, f).detach().reshape(-1).tolist()
+            ],
         }
         for f in state_fields
     ]

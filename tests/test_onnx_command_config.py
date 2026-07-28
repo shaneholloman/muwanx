@@ -36,10 +36,15 @@ def _make_export() -> CommandExport:
         name="twist",
         onnx_bytes=b"\x08\x01onnx-graph-bytes",
         state_fields=[
-            {"name": "vel_command_b", "shape": [1, 3], "dtype": "float32"},
-            {"name": "heading_target", "shape": [1], "dtype": "float32"},
-            {"name": "is_heading_env", "shape": [1], "dtype": "bool"},
-            {"name": "is_standing_env", "shape": [1], "dtype": "bool"},
+            {
+                "name": "vel_command_b",
+                "shape": [1, 3],
+                "dtype": "float32",
+                "init": [0.0, 0.0, 0.0],
+            },
+            {"name": "heading_target", "shape": [1], "dtype": "float32", "init": [0.0]},
+            {"name": "is_heading_env", "shape": [1], "dtype": "bool", "init": [False]},
+            {"name": "is_standing_env", "shape": [1], "dtype": "bool", "init": [False]},
         ],
         command_field="vel_command_b",
         input_slots=[("robot", "heading_w")],
@@ -72,9 +77,16 @@ def test_command_config_shape():
         "field": "heading_w",
         "input": "robot__heading_w",
     } in cfg["input_slots"]
-    # every state field carries a shape + dtype (brief §3a)
+    # Every state field carries shape + dtype + init (ADR 0005 §3): the runtime
+    # allocates from the first two and starts the term where the build found it from
+    # the third, rather than zero-filling and relying on the first resample to
+    # overwrite every field.
     for sf in cfg["state_fields"]:
-        assert set(sf) == {"name", "shape", "dtype"}
+        assert set(sf) == {"name", "shape", "dtype", "init"}
+        expected = 1
+        for dim in sf["shape"]:
+            expected *= dim
+        assert len(sf["init"]) == expected
 
 
 def test_command_config_validates():
@@ -89,7 +101,14 @@ def test_lifting_command_with_entity_write():
     export = CommandExport(
         name="lift_height",
         onnx_bytes=b"onnx",
-        state_fields=[{"name": "target_pos", "shape": [1, 3], "dtype": "float32"}],
+        state_fields=[
+            {
+                "name": "target_pos",
+                "shape": [1, 3],
+                "dtype": "float32",
+                "init": [0.0, 0.0, 0.0],
+            }
+        ],
         command_field="target_pos",
         input_slots=[],
         input_names=[],
@@ -570,3 +589,78 @@ def test_fused_lanes_match_the_terms_run_individually(tmp_path):
     # And the lanes genuinely differ, so agreement is not a coincidence: the
     # robot is at z=0.4, below 0.5 but above 0.1, and is upright.
     assert expected == [True, False, False]
+
+
+# ---------------------------------------------------------------------------
+# Stateful-term initial values (ADR 0005 §3): "names, shapes, *and initial
+# values*". Only the first two were emitted, so the runtime zero-filled — correct
+# for a term whose first resample overwrites every field, which is every reference
+# task, and wrong for one carrying a counter or a held value. That the reference
+# tasks all start at zero is exactly why the omission was invisible.
+# ---------------------------------------------------------------------------
+
+
+class _StatefulTerm:
+    """A traceable command term whose state does *not* start at zero."""
+
+    num_envs = 1
+
+    def __init__(self):
+        self.cfg = type("_Cfg", (), {"entity_name": None})()
+        # A held offset and a latched flag: neither is re-drawn on resample, so
+        # zero-filling them browser-side would start the term somewhere else.
+        self.bias = torch.tensor([[0.25, -0.5, 1.75]])
+        self.latched = torch.tensor([True])
+        self.command = torch.tensor([[0.0, 0.0, 0.0]])
+
+    def _resample_command(self, rand):
+        # Only `command` is resampled; `bias`/`latched` carry over untouched.
+        self.command = self.bias + rand.reshape(1, -1)[:, :3]
+
+    def _update_command(self):
+        pass
+
+
+def test_traced_state_fields_carry_the_terms_initial_values(tmp_path):
+    pytest.importorskip("mjlab")
+    from mjswan.compile import trace_command_term
+
+    term = _StatefulTerm()
+    export = trace_command_term(
+        term,
+        ["bias", "latched", "command"],
+        name="held",
+        command_field="command",
+    )
+    specs = {sf["name"]: sf for sf in export.state_fields}
+
+    # The values `build()` left, not zeros — and flattened to the declared width.
+    assert specs["bias"]["init"] == [0.25, -0.5, 1.75]
+    assert specs["bias"]["shape"] == [1, 3]
+    # A bool field round-trips as a bool rather than as 1.0.
+    assert specs["latched"]["init"] == [True]
+    assert specs["latched"]["dtype"] == "bool"
+    # A field the resample does overwrite still reports its pre-resample value;
+    # the runtime needs somewhere to start on frame 0 either way.
+    assert specs["command"]["init"] == [0.0, 0.0, 0.0]
+
+
+def test_state_field_init_is_restored_not_post_trace(tmp_path):
+    """Tracing mutates the term; the emitted init must be the pre-trace value.
+
+    `trace_command_term` snapshots the state, runs discovery and the export (both
+    of which call `_resample_command`), then restores. If `init` were read after
+    tracing instead of after the restore, it would ship whatever the last traced
+    resample happened to leave.
+    """
+    pytest.importorskip("mjlab")
+    from mjswan.compile import trace_command_term
+
+    term = _StatefulTerm()
+    export = trace_command_term(
+        term, ["bias", "command"], name="held", command_field="command"
+    )
+    specs = {sf["name"]: sf for sf in export.state_fields}
+    assert specs["command"]["init"] == [0.0, 0.0, 0.0]
+    # And the term itself is back where it started, so a second trace agrees.
+    assert term.command.reshape(-1).tolist() == [0.0, 0.0, 0.0]
