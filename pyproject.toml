@@ -61,7 +61,13 @@ dependencies = [
 dev = [
     "pyright>=1.1.407",
     "pre-commit>=3.3.2",
-    "ruff>=0.14.9",
+    # Pinned exactly, not floored. CI installs `.[dev]` fresh, so a floor resolves
+    # to whatever ruff is newest that day — and a ruff release that stabilizes a
+    # preview rule turns the lint job red with no change to this repo. That already
+    # happened once: `PLR0917` (too many positional arguments) went stable in
+    # 0.16.0 and failed a `__init__` that had passed for months. A lint version is
+    # a tool, not a dependency; bump it deliberately.
+    "ruff==0.16.0",
     "pytest>=9.0.2",
 ]
 examples = [
