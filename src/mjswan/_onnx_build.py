@@ -427,6 +427,129 @@ def serialize_termination(
     return entry
 
 
+def _native_termination_entry(
+    name: str, term_cfg: TerminationTermCfg, env: Any
+) -> dict[str, Any]:
+    """The `time_out` marker: ADR 0005 §2's one legitimately-native termination.
+
+    It compares env-level step counters rather than entity data, so there is
+    nothing to trace. The threshold travels with it — the marker alone names a
+    comparison the runtime has no number for.
+    """
+    entry: dict[str, Any] = {
+        "name": name,
+        "native": "elapsed_s >= episode_length_s",
+        "episode_length_s": float(getattr(env, "max_episode_length_s", 0.0)),
+    }
+    if term_cfg.time_out:
+        entry["time_out"] = True
+    return entry
+
+
+def _is_native_termination(term_cfg: TerminationTermCfg, env: Any) -> bool:
+    """Whether a term reads no time-varying state (so it cannot be traced)."""
+    from .compile import trace_term
+    from .compile.tracer import ConstantTerm
+
+    try:
+        trace_term(
+            term_cfg.func,
+            _resolved_params(term_cfg.params, env),
+            env,
+            name="probe",
+        )
+    except ConstantTerm:
+        return True
+    return False
+
+
+def serialize_terminations(
+    terminations: dict[str, TerminationTermCfg] | None, env: Any, out_dir: Path
+) -> dict[str, Any]:
+    """Serialize a policy's terminations, fusing the traced ones into one graph.
+
+    Same mechanism and motivation as observation fusion (companion brief §4b),
+    with one difference in the output: a bool *lane* per term rather than one
+    value, so the manager keeps per-term ``reasons`` and its
+    terminated-vs-truncated split.
+
+    Native markers (`time_out`) and legacy `*Binding` terms stay as their own
+    entries; the fused graph joins them under ``__fused__``. The gain scales with
+    the traced-term count, which is 0–1 for mjlab's locomotion and manipulation
+    tasks but 3 for the tracking tasks `examples/mjlab/g1_spinkick` and
+    `unitree_rl` use (`anchor_pos`, `anchor_ori`, `ee_body_pos`).
+    """
+    result: dict[str, Any] = {}
+    if not terminations:
+        return result
+
+    fusable: dict[str, TerminationTermCfg] = {}
+    for name, term_cfg in terminations.items():
+        func = term_cfg.func
+        if isinstance(func, TerminationBinding):
+            if func.unsupported_reason is None:
+                result[name] = term_cfg.to_dict()
+            continue
+        if _is_native_termination(term_cfg, env):
+            result[name] = _native_termination_entry(name, term_cfg, env)
+            continue
+        fusable[name] = term_cfg
+
+    if not fusable:
+        return result
+    if len(fusable) == 1:
+        # Fusing one term buys nothing and costs a wire shape, so don't.
+        name, term_cfg = next(iter(fusable.items()))
+        entry = serialize_termination(name, term_cfg, env, out_dir)
+        if entry is not None:
+            result[name] = entry
+        return result
+
+    result[FUSED_TERMINATION_KEY] = _fused_termination_entry(
+        fusable, env, out_dir, "terminations"
+    )
+    return result
+
+
+FUSED_TERMINATION_KEY = "__fused__"
+"""Config key the fused termination graph lives under.
+
+Terminations are a name-keyed map, and the fused graph covers several of those
+names at once, so it needs a key of its own rather than one term's. The sentinel
+cannot collide: mjlab term names come from Python identifiers in a config class.
+"""
+
+
+def _fused_termination_entry(
+    terms: dict[str, TerminationTermCfg], env: Any, out_dir: Path, group_name: str
+) -> dict[str, Any]:
+    from .compile.tracer import (
+        GroupTermSpec,
+        slots_json,
+        trace_termination_group,
+    )
+
+    specs = [
+        GroupTermSpec(
+            name=name, func=cfg.func, params=_resolved_params(cfg.params, env)
+        )
+        for name, cfg in terms.items()
+    ]
+    export = trace_termination_group(specs, env, name=group_name)
+    ref = _onnx_ref("term", group_name)
+    _write_onnx(out_dir, ref, export.onnx_bytes)
+    return {
+        "fused": ref,
+        "input_slots": slots_json(export),
+        # Lane order is the graph's output order; `time_out` rides along so the
+        # manager can still split truncation from termination per lane.
+        "lanes": [
+            {"name": name, "time_out": bool(terms[name].time_out)}
+            for name in export.lanes
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------

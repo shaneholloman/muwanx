@@ -426,7 +426,7 @@ class Builder:
         from ._onnx_build import (
             serialize_command,
             serialize_observation_group,
-            serialize_termination,
+            serialize_terminations,
         )
 
         config_path = getattr(policy, "config_path", None)
@@ -509,11 +509,7 @@ class Builder:
                 name: cfg.to_dict() for name, cfg in policy.actions.items()
             }
         if policy.terminations:
-            terminations = {}
-            for name, cfg in policy.terminations.items():
-                entry = serialize_termination(name, cfg, env, scene_dir)
-                if entry is not None:
-                    terminations[name] = entry
+            terminations = serialize_terminations(policy.terminations, env, scene_dir)
             if terminations:
                 data["terminations"] = terminations
         if policy.motions:

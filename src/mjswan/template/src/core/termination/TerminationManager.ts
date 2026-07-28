@@ -1,5 +1,11 @@
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
 import type { TerminationConstructor } from './terminations';
+import {
+  FusedLane,
+  FusedTermination,
+  isFusedTerminationConfig,
+  type FusedTerminationConfig,
+} from './FusedTermination';
 import { OnnxTermination, type OnnxTerminationConfig } from './OnnxTermination';
 import { TimeOutTermination, type TimeOutTerminationConfig } from './TimeOutTermination';
 import type { OnnxSessionCache, SlotReader } from '../onnx/session';
@@ -42,6 +48,8 @@ export class TerminationManager {
   private terms: { name: string; term: TerminationBase; isTimeOut: boolean }[] = [];
   /** Episode time, accumulated from the control `dt` the caller passes. */
   private elapsedS = 0;
+  /** Fused graphs, driven once per evaluation before their lanes are read. */
+  private fused: FusedTermination[] = [];
 
   constructor(
     config: Record<string, TerminationConfigEntry>,
@@ -50,6 +58,10 @@ export class TerminationManager {
     deps: TerminationManagerDeps = {},
   ) {
     for (const [name, entry] of Object.entries(config)) {
+      if (isFusedTerminationConfig(entry)) {
+        this.addFusedGroup(entry, runner, deps);
+        continue;
+      }
       if (isOnnxEntry(entry)) {
         const term = this.buildOnnxTermination(name, entry, runner, deps);
         if (term) {
@@ -81,6 +93,39 @@ export class TerminationManager {
         isTimeOut: entry.time_out ?? false,
       });
     }
+  }
+
+  /**
+   * Expand a fused graph into one manager entry per lane.
+   *
+   * The lanes look like ordinary terms from here, so the OR-reduce, `reasons` and
+   * truncation split below need to know nothing about fusion. Warns and skips the
+   * whole group on missing deps, matching the per-term case: losing reset
+   * conditions beats taking down the scene.
+   */
+  private addFusedGroup(
+    entry: FusedTerminationConfig,
+    runner: PolicyRunner,
+    deps: TerminationManagerDeps,
+  ): void {
+    const session = deps.onnxSessions?.get(entry.fused);
+    const readSlot = deps.readOnnxSlot;
+    if (!session || !readSlot) {
+      console.warn(
+        `[TerminationManager] the fused graph "${entry.fused}" needs a session and ` +
+          'a slot reader; skipping every term it covers.',
+      );
+      return;
+    }
+    const group = new FusedTermination(entry, { session, readSlot });
+    this.fused.push(group);
+    entry.lanes.forEach((lane, index) => {
+      this.terms.push({
+        name: lane.name,
+        term: new FusedLane(runner, { name: lane.name }, group, index),
+        isTimeOut: lane.time_out ?? false,
+      });
+    });
   }
 
   /**
@@ -116,6 +161,8 @@ export class TerminationManager {
    */
   evaluate(state: PolicyState, dt = 0): TerminationResult {
     this.elapsedS += dt;
+    // Drive each fused graph once, before its lanes are read below.
+    for (const group of this.fused) group.kick();
     let terminated = false;
     let truncated = false;
     const reasons: string[] = [];
@@ -141,6 +188,7 @@ export class TerminationManager {
 
   reset(): void {
     this.elapsedS = 0;
+    for (const group of this.fused) group.reset();
     for (const { term } of this.terms) {
       term.reset?.();
     }

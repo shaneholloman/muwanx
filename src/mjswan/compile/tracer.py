@@ -1611,3 +1611,156 @@ def trace_observation_group(
         reference_output=reference,
         constant_slots=sorted(constants),
     )
+
+
+# ---------------------------------------------------------------------------
+# Termination-group fusion (ADR 0005 §4, companion brief §4b)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TerminationGroupExport:
+    """The result of fusing a set of termination terms into a single ONNX graph."""
+
+    name: str
+    onnx_bytes: bytes
+    input_slots: list[SlotKey]
+    input_names: list[str]
+    input_shapes: list[list[int]]
+    lanes: list[str]
+    """Term names, in output-lane order — lane *i* is `lanes[i]`'s verdict."""
+    output_name: str
+    reference_output: torch.Tensor
+    constant_slots: list[SlotKey] = field(default_factory=list)
+
+
+class _TerminationGroupModule(nn.Module):
+    """Every termination body in one graph, emitting one bool lane per term.
+
+    A lane rather than a single OR because the manager reports *which* term fired
+    (its `reasons`) and splits `time_out` from real terminations — collapsing them
+    here would throw that away to save one comparison.
+    """
+
+    def __init__(
+        self,
+        terms: list[GroupTermSpec],
+        dynamic_keys: list[SlotKey],
+        constants: dict[SlotKey, torch.Tensor],
+        *,
+        sensors: dict[str, Any],
+        commands: dict[str, Any],
+    ):
+        super().__init__()
+        self._terms = terms
+        self._dynamic_keys = dynamic_keys
+        self._sensors = sensors
+        self._commands = commands
+        self._const_buffers: dict[SlotKey, str] = {}
+        for i, (key, value) in enumerate(constants.items()):
+            buffer_name = f"_const_{i}"
+            self.register_buffer(buffer_name, value.detach().clone())
+            self._const_buffers[key] = buffer_name
+
+    def forward(self, *dynamic: torch.Tensor) -> torch.Tensor:
+        slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
+        for key, buffer_name in self._const_buffers.items():
+            slots[key] = getattr(self, buffer_name)
+        env = _ReplayEnv(slots, self._sensors, self._commands)
+        lanes = [term.func(env, **term.params).reshape(-1, 1) for term in self._terms]
+        return torch.cat(lanes, dim=-1)
+
+
+def trace_termination_group(
+    terms: list[GroupTermSpec],
+    env: Any,
+    *,
+    name: str,
+    opset: int = 17,
+) -> TerminationGroupExport:
+    """Fuse termination terms into one graph, one bool lane each (ADR 0005 §4).
+
+    Same motivation as observation fusion (companion brief §4b) and the same
+    mechanics — the deduplicated union of the terms' slots in, one graph out —
+    but the output is a bool *vector*, one lane per term, so the manager keeps
+    per-term `reasons` and its terminated-vs-truncated split.
+
+    `time_out` never reaches here: it reads no entity state, so it is classified
+    native before this is called.
+
+    Raises:
+        ValueError: if no term reads dynamic state, or if tracing fails.
+    """
+    dynamic: dict[SlotKey, torch.Tensor] = {}
+    constants: dict[SlotKey, torch.Tensor] = {}
+    sensors: dict[str, Any] = {}
+    commands: dict[str, Any] = {}
+
+    for term in terms:
+        recorder = _RecordingEnv(env)
+        recorded = term.func(recorder, **term.params)
+        if not isinstance(recorded, torch.Tensor):
+            raise ValueError(
+                f"Termination term {term.name!r} returned "
+                f"{type(recorded).__name__}, not a Tensor."
+            )
+        term_dynamic = False
+        for key, value in recorder._log:  # noqa: SLF001 — internal proxy
+            if not isinstance(value, torch.Tensor):
+                continue
+            namespace, field_name = key
+            if namespace in (_SENSOR_NS, _COMMAND_NS) or _is_dynamic_field(field_name):
+                dynamic.setdefault(key, value)
+                term_dynamic = True
+            else:
+                constants.setdefault(key, value)
+        sensors.update(recorder._sensors)  # noqa: SLF001 — internal proxy
+        commands.update(recorder._commands)  # noqa: SLF001 — internal proxy
+        if not term_dynamic:
+            # Unlike an observation there is no constant to bake: a termination
+            # that cannot see time-varying state either never fires or always
+            # does, and either way the build should say so rather than emit it.
+            raise UntraceableTerm(
+                term.name,
+                sorted({slot_label(k) for k, _ in recorder._log}),  # noqa: SLF001
+            )
+
+    if not dynamic:
+        raise ValueError(
+            f"Termination group {name!r} reads no time-varying state; every term "
+            "should be native (e.g. time_out)."
+        )
+
+    dynamic_keys = sorted(dynamic)
+    input_names = [_slot_input_name(k) for k in dynamic_keys]
+    example_inputs = tuple(dynamic[k] for k in dynamic_keys)
+
+    module = _TerminationGroupModule(
+        terms, dynamic_keys, constants, sensors=sensors, commands=commands
+    ).eval()
+    output_name = "done"
+    buffer = io.BytesIO()
+    with torch.no_grad():
+        reference = module(*example_inputs).detach()
+        torch.onnx.export(
+            module,
+            example_inputs,
+            buffer,
+            input_names=input_names,
+            output_names=[output_name],
+            dynamic_axes={n: {0: "batch"} for n in [*input_names, output_name]},
+            opset_version=opset,
+            dynamo=False,
+        )
+
+    return TerminationGroupExport(
+        name=name,
+        onnx_bytes=buffer.getvalue(),
+        input_slots=dynamic_keys,
+        input_names=input_names,
+        input_shapes=[list(dynamic[k].shape) for k in dynamic_keys],
+        lanes=[term.name for term in terms],
+        output_name=output_name,
+        reference_output=reference,
+        constant_slots=sorted(constants),
+    )

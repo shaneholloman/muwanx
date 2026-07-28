@@ -9,6 +9,10 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import {
+  FusedTermination,
+  isFusedTerminationConfig,
+} from '../FusedTermination';
 import { OnnxTermination, type OnnxTerminationConfig } from '../OnnxTermination';
 import { TerminationManager } from '../TerminationManager';
 import { TimeOutTermination } from '../TimeOutTermination';
@@ -231,5 +235,139 @@ describe('TerminationManager', () => {
     expect(manager.size).toBe(0);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe('FusedTermination', () => {
+  const FUSED = {
+    fused: 'term/terminations.onnx',
+    input_slots: [
+      { entity: 'robot', field: 'root_link_pos_w', input: 'robot__root_link_pos_w' },
+    ],
+    lanes: [
+      { name: 'anchor_pos' },
+      { name: 'anchor_ori' },
+      { name: 'ee_body_pos' },
+      { name: 'time_out', time_out: true },
+    ],
+  };
+
+  /** Emits one bool lane per term, as the fused graph does. */
+  function laneSession(lanes: number[]): FakeSession {
+    return new FakeSession(() => Uint8Array.from(lanes));
+  }
+
+  it('fans lanes back out into per-term reasons from one run', async () => {
+    const session = laneSession([0, 1, 0, 0]);
+    const manager = new TerminationManager({ __fused__: FUSED } as never, {}, runner, {
+      onnxSessions: { get: () => session } as never,
+      readOnnxSlot: () => new Float32Array([0, 0, 0.4]),
+    });
+    // Four terms, but the manager only ever runs one graph.
+    expect(manager.size).toBe(4);
+
+    manager.evaluate({} as never, 0.02); // kicks inference
+    await settle();
+    const result = manager.evaluate({} as never, 0.02);
+    // Two evaluations, two runs — one apiece, not one per lane. That ratio is
+    // the whole point of fusing: unfused this would be 8.
+    expect(session.calls.length).toBe(2);
+    expect(result.reasons).toEqual(['anchor_ori']);
+    expect(result.terminated).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('keeps the truncation split per lane', async () => {
+    // The `time_out` lane is a truncation; a lane beside it is not. Collapsing
+    // the graph to a single OR would lose exactly this.
+    const session = laneSession([0, 0, 0, 1]);
+    const manager = new TerminationManager({ __fused__: FUSED } as never, {}, runner, {
+      onnxSessions: { get: () => session } as never,
+      readOnnxSlot: () => new Float32Array([0, 0, 0.4]),
+    });
+    manager.evaluate({} as never, 0.02);
+    await settle();
+    const result = manager.evaluate({} as never, 0.02);
+    expect(result.reasons).toEqual(['time_out']);
+    expect(result.truncated).toBe(true);
+    expect(result.terminated).toBe(false);
+  });
+
+  it('reports every lane that fired', async () => {
+    const session = laneSession([1, 0, 1, 0]);
+    const manager = new TerminationManager({ __fused__: FUSED } as never, {}, runner, {
+      onnxSessions: { get: () => session } as never,
+      readOnnxSlot: () => new Float32Array([0, 0, 0.4]),
+    });
+    manager.evaluate({} as never, 0.02);
+    await settle();
+    expect(manager.evaluate({} as never, 0.02).reasons).toEqual([
+      'anchor_pos',
+      'ee_body_pos',
+    ]);
+  });
+
+  it('holds every lane when a slot is unreadable', async () => {
+    const session = laneSession([1, 1, 1, 1]);
+    let available = true;
+    const group = new FusedTermination(FUSED, {
+      session,
+      readSlot: () => (available ? new Float32Array([0, 0, 0.4]) : null),
+    });
+    await group.step();
+    expect(group.verdict(0)).toBe(true);
+
+    available = false;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await group.step();
+    // Not re-run, and the verdicts stand — reporting "not done" would let a real
+    // termination through.
+    expect(session.calls.length).toBe(1);
+    expect(group.verdict(0)).toBe(true);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('skips a frame that arrives mid-inference rather than queueing', () => {
+    const session = new FakeSession(() => Uint8Array.from([1, 0, 0, 0]), true);
+    const group = new FusedTermination(FUSED, {
+      session,
+      readSlot: () => new Float32Array([0, 0, 0.4]),
+    });
+    for (let i = 0; i < 10; i++) group.kick();
+    expect(session.calls.length).toBe(1);
+    expect(session.inFlightCount).toBe(1);
+  });
+
+  it('reset() clears every lane', async () => {
+    const group = new FusedTermination(FUSED, {
+      session: laneSession([1, 1, 1, 1]),
+      readSlot: () => new Float32Array([0, 0, 0.4]),
+    });
+    await group.step();
+    group.reset();
+    expect(FUSED.lanes.map((_, i) => group.verdict(i))).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it('warns and skips the whole group when the session is missing', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const manager = new TerminationManager({ __fused__: FUSED } as never, {}, runner);
+    expect(manager.size).toBe(0);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('isFusedTerminationConfig', () => {
+  it('separates a fused group from a single traced term', () => {
+    expect(isFusedTerminationConfig({ fused: 'term/x.onnx', lanes: [] })).toBe(true);
+    expect(isFusedTerminationConfig(FELL_OVER_CFG)).toBe(false);
+    // `lanes` is what makes it usable; a path alone is not enough.
+    expect(isFusedTerminationConfig({ fused: 'term/x.onnx' })).toBe(false);
   });
 });

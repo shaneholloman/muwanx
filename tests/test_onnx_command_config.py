@@ -431,3 +431,142 @@ def test_structured_sensor_fields_become_one_slot_each():
     ]
     # Only the fields the term touched — `normals_w` and the rest stay out.
     assert export.reference_output.shape == (1, 2)
+
+
+# ---------------------------------------------------------------------------
+# Termination fusion (ADR 0005 §4). The payoff scales with the traced-term count:
+# mjlab's locomotion and manipulation tasks have 0-1, but the tracking tasks
+# behind `examples/mjlab/g1_spinkick` and `unitree_rl` have three
+# (`anchor_pos`, `anchor_ori`, `ee_body_pos`) beside the native `time_out`.
+# ---------------------------------------------------------------------------
+
+
+def _term_env():
+    """Two entity fields, so a group can read one, the other, or both."""
+
+    class _Data:
+        def __init__(self):
+            self.root_link_pos_w = torch.tensor([[0.0, 0.0, 0.4]])
+            self.projected_gravity_b = torch.tensor([[0.0, 0.1, -0.99]])
+
+    class _Entity:
+        def __init__(self):
+            self.data = _Data()
+
+    class _Scene:
+        def __init__(self):
+            self.sensors = {}
+            self._entities = {"robot": _Entity()}
+
+        def __getitem__(self, name):
+            return self._entities[name]
+
+    class _Env:
+        def __init__(self):
+            self.scene = _Scene()
+            self.max_episode_length_s = 20.0
+
+    return _Env()
+
+
+def _too_low(env, *, minimum_height=0.5):
+    return env.scene["robot"].data.root_link_pos_w[:, 2] < minimum_height
+
+
+def _tipped(env, *, limit=0.5):
+    return env.scene["robot"].data.projected_gravity_b[:, 2] > -limit
+
+
+def _time_out(env):
+    """Native by construction: reads nothing off the env."""
+    del env
+    return torch.zeros(1, dtype=torch.bool)
+
+
+def test_terminations_fuse_into_one_graph_with_one_lane_per_term(tmp_path):
+    pytest.importorskip("mjlab")
+    from mjswan._onnx_build import FUSED_TERMINATION_KEY, serialize_terminations
+    from mjswan.managers.termination_manager import TerminationTermCfg
+
+    entries = serialize_terminations(
+        {
+            "time_out": TerminationTermCfg(func=_time_out, time_out=True),
+            "too_low": TerminationTermCfg(func=_too_low),
+            "tipped": TerminationTermCfg(func=_tipped),
+        },
+        _term_env(),
+        tmp_path,
+    )
+
+    # The native marker keeps its own entry — it reads no state, so there is
+    # nothing to fuse it into.
+    assert entries["time_out"]["native"] == "elapsed_s >= episode_length_s"
+    assert entries["time_out"]["episode_length_s"] == 20.0
+
+    fused = entries[FUSED_TERMINATION_KEY]
+    assert fused["fused"] == "term/terminations.onnx"
+    assert (tmp_path / fused["fused"]).exists()
+    # One lane per term, in graph output order, each carrying whether it is a
+    # truncation — the manager needs both to report `reasons` and split
+    # terminated from truncated.
+    assert fused["lanes"] == [
+        {"name": "too_low", "time_out": False},
+        {"name": "tipped", "time_out": False},
+    ]
+    # Slots are the union of what the two terms read, deduplicated.
+    assert sorted(s["field"] for s in fused["input_slots"]) == [
+        "projected_gravity_b",
+        "root_link_pos_w",
+    ]
+
+
+def test_a_lone_traced_termination_is_not_fused(tmp_path):
+    """Fusing one term buys no `ort.run()` and costs a wire shape."""
+    pytest.importorskip("mjlab")
+    from mjswan._onnx_build import FUSED_TERMINATION_KEY, serialize_terminations
+    from mjswan.managers.termination_manager import TerminationTermCfg
+
+    entries = serialize_terminations(
+        {
+            "time_out": TerminationTermCfg(func=_time_out, time_out=True),
+            "too_low": TerminationTermCfg(func=_too_low),
+        },
+        _term_env(),
+        tmp_path,
+    )
+    assert FUSED_TERMINATION_KEY not in entries
+    assert entries["too_low"]["onnx"] == "term/too_low.onnx"
+
+
+def test_fused_lanes_match_the_terms_run_individually(tmp_path):
+    """The graph's lane *i* must be term *i* — a swap would be silent."""
+    pytest.importorskip("mjlab")
+    onnxruntime = pytest.importorskip("onnxruntime")
+    from mjswan.compile.tracer import (
+        GroupTermSpec,
+        read_slot,
+        trace_termination_group,
+    )
+
+    env = _term_env()
+    specs = [
+        GroupTermSpec("too_low", _too_low, {"minimum_height": 0.5}),
+        GroupTermSpec("never", _too_low, {"minimum_height": 0.1}),
+        GroupTermSpec("tipped", _tipped, {"limit": 0.5}),
+    ]
+    export = trace_termination_group(specs, env, name="terminations")
+    session = onnxruntime.InferenceSession(
+        export.onnx_bytes, providers=["CPUExecutionProvider"]
+    )
+    feeds = {
+        name: read_slot(env, key).detach().numpy()
+        for name, key in zip(export.input_names, export.input_slots)
+    }
+    lanes = session.run([export.output_name], feeds)[0].reshape(-1).astype(bool)
+    expected = [bool(spec.func(env, **spec.params).item()) for spec in specs]
+
+    assert export.lanes == ["too_low", "never", "tipped"]
+    assert lanes.tolist() == expected
+    # And the lanes genuinely differ, so agreement is not a coincidence: the
+    # robot is at z=0.4, below 0.5 but above 0.1, and is upright.
+    assert expected == [True, False, False]

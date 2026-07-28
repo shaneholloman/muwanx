@@ -94,4 +94,20 @@ describe('policyGraphRefs — fused groups', () => {
       }),
     ).toEqual(['obs/critic.onnx', 'obs/policy.onnx', 'term/fell_over.onnx']);
   });
+
+  it('collects a fused termination graph beside its native siblings', () => {
+    // Terminations fuse too, under a reserved key, since one graph covers
+    // several named terms (ADR 0005 §4).
+    expect(
+      policyGraphRefs({
+        terminations: {
+          time_out: { native: 'elapsed_s >= episode_length_s', episode_length_s: 20 },
+          __fused__: {
+            fused: 'term/terminations.onnx',
+            lanes: [{ name: 'anchor_pos' }, { name: 'anchor_ori' }],
+          },
+        },
+      }),
+    ).toEqual(['term/terminations.onnx']);
+  });
 });

@@ -1,0 +1,138 @@
+/**
+ * `FusedTermination`: one graph for several termination terms (ADR 0005 §4).
+ *
+ * Same trade as observation fusion (companion brief §4b) — the fixed
+ * per-`ort.run()` cost does not shrink with the graph, so N small graphs cost N
+ * times the overhead to do a handful of comparisons. The difference is the
+ * output: a bool *lane* per term rather than one verdict, because the manager
+ * reports which term fired and splits `time_out` from real terminations, and
+ * OR-ing inside the graph would throw both away.
+ *
+ * The lanes are handed back to `TerminationManager` as ordinary one-term objects
+ * (`FusedLane`), so its OR-reduce, `reasons`, and terminated-vs-truncated logic
+ * are untouched by fusion existing. Only one of them drives the graph: the
+ * manager calls `step()` once per evaluation, and each lane just reads its bit.
+ *
+ * **Async boundary.** Same as the per-term `OnnxTermination`: `evaluate()` is
+ * synchronous while ORT is not, so a frame arriving mid-inference is skipped
+ * rather than queued, and the verdicts are one frame old. A one-frame-late reset
+ * is the accepted lag (ADR §8).
+ */
+
+import { TerminationBase, type TerminationConfig } from './TerminationBase';
+import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
+import { slotDims, slotInputName } from '../onnx/session';
+import type { PolicyRunner } from '../policy/PolicyRunner';
+import type { PolicyState } from '../policy/types';
+
+export interface FusedTerminationLane {
+  name: string;
+  /** Whether this lane is a truncation rather than a failure. */
+  time_out?: boolean;
+}
+
+export interface FusedTerminationConfig {
+  /** Path to the group's graph; its presence is what marks the entry fused. */
+  fused: string;
+  input_slots?: OnnxInputSlot[];
+  lanes: FusedTerminationLane[];
+}
+
+export interface FusedTerminationDeps {
+  session: OnnxSession;
+  readSlot: SlotReader;
+}
+
+/** Whether a terminations-config entry is the fused graph rather than one term. */
+export function isFusedTerminationConfig(entry: unknown): entry is FusedTerminationConfig {
+  return (
+    typeof entry === 'object' &&
+    entry !== null &&
+    typeof (entry as { fused?: unknown }).fused === 'string' &&
+    Array.isArray((entry as { lanes?: unknown }).lanes)
+  );
+}
+
+function isTruthy(data: OnnxTensorLike['data'], lane: number): boolean {
+  const value = data[lane];
+  return typeof value === 'bigint' ? value !== 0n : Boolean(value);
+}
+
+export class FusedTermination {
+  private verdicts: boolean[];
+  private inFlight = false;
+
+  constructor(
+    private readonly config: FusedTerminationConfig,
+    private readonly deps: FusedTerminationDeps,
+  ) {
+    this.verdicts = config.lanes.map(() => false);
+  }
+
+  get lanes(): FusedTerminationLane[] {
+    return this.config.lanes;
+  }
+
+  verdict(lane: number): boolean {
+    return this.verdicts[lane] ?? false;
+  }
+
+  reset(): void {
+    this.verdicts = this.config.lanes.map(() => false);
+  }
+
+  /** Kick off one evaluation; skipped while a previous one is still running. */
+  kick(): void {
+    if (this.inFlight) return;
+    this.inFlight = true;
+    void this.step().finally(() => {
+      this.inFlight = false;
+    });
+  }
+
+  /** Run the graph once and latch every lane. Exposed for deterministic tests. */
+  async step(): Promise<void> {
+    const feeds: Record<string, OnnxTensorLike> = {};
+    for (const slot of this.config.input_slots ?? []) {
+      const value = this.deps.readSlot(slot);
+      if (!value) {
+        // Hold every lane rather than reporting "not done" on absent state — a
+        // real termination slipping through is worse than a late one.
+        console.warn(
+          `[FusedTermination] could not read slot ${slotInputName(slot)}; ` +
+            'holding the previous verdicts.',
+        );
+        return;
+      }
+      feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
+    }
+    const outputs = await this.deps.session.run(feeds);
+    const first = Object.values(outputs)[0];
+    if (!first) {
+      console.warn('[FusedTermination] the graph produced no output.');
+      return;
+    }
+    this.verdicts = this.config.lanes.map((_, lane) => isTruthy(first.data, lane));
+  }
+}
+
+/**
+ * One lane of a fused graph, wearing the single-term interface the manager wants.
+ *
+ * Reading only: the manager drives the shared graph once per evaluation, so N
+ * lanes still cost one `ort.run()`.
+ */
+export class FusedLane extends TerminationBase {
+  constructor(
+    runner: PolicyRunner,
+    config: TerminationConfig,
+    private readonly group: FusedTermination,
+    private readonly lane: number,
+  ) {
+    super(runner, config);
+  }
+
+  evaluate(_state: PolicyState): boolean {
+    return this.group.verdict(this.lane);
+  }
+}
