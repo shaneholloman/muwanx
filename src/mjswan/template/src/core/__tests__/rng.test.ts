@@ -95,3 +95,66 @@ describe('SeededRng', () => {
     expect(repeats).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// What a seed alone does *not* buy.
+//
+// ADR 0005 §2 wants a recorded session to replay bit-for-bit, and the tests above
+// establish the necessary half: the sequence is a pure function of the seed. The
+// sufficient half does not hold yet, and these pin down why so it is a known
+// limitation rather than a surprise.
+//
+// Every traced term draws from *one* shared stream (`runtime.termRng`), and each of
+// `OnnxCommand.update`, `OnnxEvent.fire`, `OnnxTermination.evaluate` and
+// `FusedTermination.kick` skips its run when a previous one is still in flight
+// ("skip, never queue" — the async boundary ADR §8 chose over blocking the loop).
+// Whether a given frame skips depends on how long ORT took against the frame
+// budget, which is wall-clock and therefore machine-dependent.
+// ---------------------------------------------------------------------------
+
+describe('SeededRng — shared-stream coupling (documents a replay limitation)', () => {
+  it('shifts every later draw when one consumer skips a frame', () => {
+    // Two terms alternating draws off one stream, and the same two with term A
+    // skipping a single frame — as it would on a machine where that frame's
+    // inference had not settled.
+    const drawBoth = (skipFrame: number | null): number[] => {
+      const rng = new SeededRng(4242);
+      const fromB: number[] = [];
+      for (let frame = 0; frame < 6; frame++) {
+        if (frame !== skipFrame) rng.next(); // term A's `rand`
+        fromB.push(rng.next()); // term B's `rand`
+      }
+      return fromB;
+    };
+
+    const steady = drawBoth(null);
+    const withSkip = drawBoth(2);
+    // Frames before the skip agree; everything after it is a different number for
+    // a term that did nothing differently.
+    expect(withSkip.slice(0, 2)).toEqual(steady.slice(0, 2));
+    expect(withSkip.slice(2)).not.toEqual(steady.slice(2));
+  });
+
+  it('would be unaffected if draws were addressed by step instead of order', () => {
+    // The shape of the fix, stated as a test so the intent is on record: derive a
+    // draw from (seed, term, step) so frame N gets the same numbers whether or not
+    // any other term ran. Modelled here with the same SplitMix mixing the
+    // constructor already uses; the real change is threading a step index to the
+    // consumers.
+    const at = (term: string, step: number): number => {
+      let h = 2166136261 >>> 0;
+      for (const ch of `${4242}:${term}:${step}`) {
+        h = (Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0) >>> 0;
+      }
+      return new SeededRng(h).next();
+    };
+
+    const steady = Array.from({ length: 6 }, (_, frame) => at('B', frame));
+    // Term A skipping frame 2 cannot move term B's numbers: nothing is sequential.
+    const withSkip = Array.from({ length: 6 }, (_, frame) => at('B', frame));
+    expect(withSkip).toEqual(steady);
+    // And the addressing is still seed-dependent, not a constant.
+    expect(at('B', 0)).not.toEqual(at('B', 1));
+    expect(at('A', 0)).not.toEqual(at('B', 0));
+  });
+});

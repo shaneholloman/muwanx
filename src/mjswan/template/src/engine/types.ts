@@ -116,11 +116,30 @@ export interface MjswanEngineState {
   error: Error | null;
   commands: ReadonlyArray<CommandDescriptor>;
   commandValues: Readonly<Record<string, number>>;
+  /**
+   * The seed this engine's traced terms are drawing from — the caller's
+   * {@link CreateEngineOptions.termSeed} when given, else the built-in default.
+   *
+   * Reported rather than assumed: an app recording a session has to persist the
+   * seed the run actually used, and a default it never chose is exactly the value
+   * it would otherwise have to guess.
+   */
+  termSeed: number;
 }
 
 export interface CreateEngineOptions {
   /** Load `mujoco/mt` (SharedArrayBuffer; requires COOP/COEP). Default false. */
   multithreaded?: boolean;
+  /**
+   * Seed for the PRNG every traced term draws its `rand` input from (ADR 0005 §2).
+   *
+   * Randomness in Event and Command bodies comes from one orchestrator-owned
+   * stream rather than from ONNX's random ops, so that a run is reproducible from
+   * a value the app holds. Pass the seed read back from
+   * {@link MjswanEngineState.termSeed} to re-run a recorded session; omit it for
+   * the built-in default.
+   */
+  termSeed?: number;
 }
 
 /** A headless, instance-scoped simulation engine. Create with {@link createEngine}. */

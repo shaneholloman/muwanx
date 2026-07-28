@@ -229,6 +229,15 @@ export class mjswanRuntime {
    * session replays bit-for-bit. Scene-lifetime: reseeded per `loadEnvironment`.
    */
   private termRng: SeededRng;
+  /**
+   * The seed every scene's `termRng` is built from (ADR 0005 §2).
+   *
+   * Held rather than only passed on, because a caller recording a session has to
+   * be able to read back the seed the run actually used — a seed the app cannot
+   * observe is a seed it cannot persist, and replay needs the value, not the
+   * default.
+   */
+  private readonly termSeed: number;
   /** Reads the dynamic state a traced graph declares as inputs (ADR 0005 §6). */
   private readonly readOnnxSlot: SlotReader;
   /** Encoder bias by joint name, from the active policy config; see `SlotReaderOptions`. */
@@ -239,15 +248,16 @@ export class mjswanRuntime {
    */
   private raycastSensors: Record<string, RaycastSensorDescriptor> = {};
 
-  constructor(mujoco: MainModule, container: HTMLElement) {
+  constructor(mujoco: MainModule, container: HTMLElement, termSeed = DEFAULT_TERM_SEED) {
     this.mujoco = mujoco;
     this.container = container;
+    this.termSeed = termSeed;
     this.commandManager = new CommandManager();
     this.scenePlugins = {};
     this.policyPlugins = {};
     this.policyGraphs = new OnnxSessionCache();
     this.sceneGraphs = new OnnxSessionCache();
-    this.termRng = new SeededRng(DEFAULT_TERM_SEED);
+    this.termRng = new SeededRng(termSeed);
     // Reads `this.mjModel`/`this.mjData` per call rather than capturing them, so a
     // scene rebuild is picked up without rewiring every manager.
     this.readOnnxSlot = createSlotReader(
@@ -369,7 +379,7 @@ export class mjswanRuntime {
     this.terrainData = scene.terrainData ?? null;
     // A fresh scene is a fresh run: reseed so two loads of the same scene draw the
     // same randomness (ADR 0005 §2).
-    this.termRng = new SeededRng(DEFAULT_TERM_SEED);
+    this.termRng = new SeededRng(this.termSeed);
     this.sceneGraphs.clear();
     await this.sceneGraphs.load(scene.graphs ?? []);
     if (scene.events && scene.events.length > 0) {
@@ -631,6 +641,16 @@ export class mjswanRuntime {
   /** Instance-scoped command manager the engine reads/writes and subscribes to. */
   get commands(): CommandManager {
     return this.commandManager;
+  }
+
+  /**
+   * The seed this instance's traced terms draw their randomness from.
+   *
+   * Readable so an app can persist it with a recording; without it the only seed
+   * in play is a module default the caller can neither choose nor observe.
+   */
+  get seed(): number {
+    return this.termSeed;
   }
 
   /** Resume the physics loop (rendering runs continuously regardless). */

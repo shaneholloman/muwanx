@@ -15,5 +15,10 @@ test('createEngine renders a scene from bytes, React-free', async ({ page }) => 
   expect(result?.ok, result?.error).toBe(true);
   expect(result?.running).toBe(true);
   expect(result?.nonBlank, `luminance range ${JSON.stringify(result?.luminanceRange)}`).toBe(true);
+  // ADR 0005 §2: an app has to be able to choose the term PRNG's seed and read
+  // back the one in use, or a recorded session has no value to replay from. The
+  // harness passes 0xc0ffee; the built-in default is a different number, so a
+  // dropped option shows up here rather than silently falling back.
+  expect(result?.termSeed).toBe(0xc0ffee);
   expect(pageErrors).toEqual([]);
 });

@@ -114,6 +114,7 @@ class Engine implements MjswanEngine {
       error: this.error,
       commands: cm.getCommands().map(toDescriptor),
       commandValues: cm.getValues(),
+      termSeed: this.runtime.seed,
     };
   }
 
@@ -225,5 +226,5 @@ export async function createEngine(
 ): Promise<MjswanEngine> {
   const mujocoModule = options.multithreaded ? await import('mujoco/mt') : await import('mujoco');
   const mujoco = await mujocoModule.default();
-  return new Engine(new mjswanRuntime(mujoco, element));
+  return new Engine(new mjswanRuntime(mujoco, element, options.termSeed));
 }
