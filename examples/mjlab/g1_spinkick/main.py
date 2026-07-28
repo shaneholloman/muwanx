@@ -20,11 +20,17 @@ if __name__ == "__main__" and __package__ is None:
 import mjlab.tasks  # noqa: F401 - populates the mjlab task registry
 from mjlab.tasks.registry import load_env_cfg
 
+# `examples.mjlab.defaults.commands` registers the traced reset graph for
+# `MotionCommandCfg` — the reference-state-initialization jitter (ADR 0005 §3).
+# Without it the command still builds, bound to the native `TrackingCommand`, but
+# with no jitter graph, so every episode would start from the unjittered reference
+# frame where mjlab's play config asks for `joint_position_range=(-0.1, 0.1)`.
+import examples.mjlab.defaults.commands  # noqa: F401
 import mjswan
 
-# Tracking terminations (bad_anchor_pos_z_only, bad_anchor_ori,
-# bad_motion_body_pos_z_only, base_ang_vel_exceed) are declarative built-ins
-# in mjswan.envs.mdp.terminations — no registration needed.
+# This task's terminations (`anchor_pos`, `anchor_ori`, `ee_body_pos`, plus a
+# native `time_out`) need no registration: under ADR 0005 they are traced straight
+# from mjlab's own functions. They were declarative DSL built-ins before that.
 
 
 def setup_builder() -> mjswan.Builder:

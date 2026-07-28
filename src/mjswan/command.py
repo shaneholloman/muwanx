@@ -10,6 +10,7 @@ term rather than as a separate command system.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
@@ -350,17 +351,52 @@ def _serialize_motion_command(cfg: Any) -> dict[str, Any]:
     return data
 
 
-# Bridges mjlab's MotionCommandCfg (e.g. isaac_lab_tasks MotionCommandCfg) to the TrackingCommand term.
+def _motion_rsi_unregistered(cfg: Any) -> None:
+    """Stand-in `reset_trace` that says the real one is not loaded.
+
+    The reference-state-initialization jitter is traced from mjlab's own
+    `sample_uniform` / `quat_from_euler_xyz`, so its body lives author-side (in
+    `examples/mjlab/defaults/commands`) and this module keeps mjlab a soft
+    dependency. The binding below therefore has no jitter graph, and
+    `TrackingCommand` starts every episode from the unjittered reference frame when
+    none is supplied — correct for a task that jitters nothing, and a silent loss for
+    one that does.
+
+    It *was* silent: the browser-side jitter used to be `Math.random()` inside
+    `TrackingCommand.ts` and moved into the traced graph, so a task whose author
+    never imported the registration module quietly stopped jittering. This warns
+    instead. Always returns `None` — there is no graph to offer, only a diagnosis.
+    """
+    pose_range = dict(getattr(cfg, "pose_range", None) or {})
+    velocity_range = dict(getattr(cfg, "velocity_range", None) or {})
+    joint_position_range = tuple(getattr(cfg, "joint_position_range", (0.0, 0.0)))
+    if not pose_range and not velocity_range and joint_position_range == (0.0, 0.0):
+        return None  # Nothing to jitter; the plain binding is the whole story.
+    warnings.warn(
+        "MotionCommandCfg declares reference-state-initialization jitter "
+        f"(pose_range={pose_range or None}, velocity_range={velocity_range or None}, "
+        f"joint_position_range={joint_position_range}) but no traced reset graph is "
+        "registered, so the browser will start every episode from the unjittered "
+        "reference frame. Import the module that registers it — "
+        "`examples.mjlab.defaults.commands` for the bundled examples — or supply "
+        "your own via mjswan.register_command('MotionCommandCfg', ...).",
+        category=RuntimeWarning,
+        stacklevel=3,
+    )
+    return None
+
+
+# Bridges mjlab's MotionCommandCfg (e.g. isaac_lab_tasks MotionCommandCfg) to the
+# TrackingCommand term. `reset_trace` here only diagnoses its own absence; the real
+# graph comes from an author-side re-registration (see `_motion_rsi_unregistered`).
 register_command(
     "MotionCommandCfg",
     CommandBinding(
         ts_name="TrackingCommand",
         serializer=_serialize_motion_command,
+        reset_trace=_motion_rsi_unregistered,
     ),
 )
-# The reference-state-initialization jitter is registered separately, by
-# `examples/mjlab/defaults/commands`: it needs mjlab's own `sample_uniform` /
-# `quat_from_euler_xyz`, and this module keeps mjlab a soft dependency.
 
 
 __all__ = [
