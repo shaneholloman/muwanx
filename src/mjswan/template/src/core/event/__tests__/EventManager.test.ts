@@ -12,6 +12,7 @@ import { SeededRng } from '../../rng';
 import { OnnxSessionCache, type OnnxSession, type OnnxTensorLike } from '../../onnx/session';
 import { EventManager, type EventManagerDeps } from '../EventManager';
 import { EventBase, type EventContext } from '../EventBase';
+import type { ModelFieldDrConfig } from '../modelFieldDr';
 
 const NO_MODEL: EventContext = { mjModel: null, mjData: null };
 
@@ -60,6 +61,39 @@ describe('EventManager: legacy reset-only terms (backward compatible)', () => {
     const mgr = new EventManager([{ name: 'nope' }], {});
     expect(mgr.size).toBe(0);
     expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('counts a model-field randomization as a loaded term', () => {
+    // A task whose only events are DR (mjlab's tracking play config: base_com,
+    // foot_friction) otherwise reports "0 event term(s) loaded" while randomizing.
+    const dr: ModelFieldDrConfig = {
+      name: 'base_com',
+      kind: 'model_field',
+      field: 'body_ipos',
+      entity_type: 'body',
+      entity_names: ['robot/torso_link'],
+      axis_ranges: { 0: [-0.025, 0.025] },
+      operation: 'add',
+      distribution: 'uniform',
+      shared_random: false,
+      uses_defaults: true,
+      set_const: true,
+    };
+    expect(new EventManager([dr], {}).size).toBe(1);
+  });
+
+  it('skips a build-marked native term without warning', () => {
+    // The build says why it left the term to the engine (`reason`); reporting it
+    // as a missing plugin sends the reader looking for one that was never meant
+    // to exist. mjlab's `encoder_bias` is the live example.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mgr = new EventManager(
+      [{ name: 'encoder_bias', mode: 'startup', native: true, reason: 'wrote nothing traceable' }],
+      {},
+    );
+    expect(mgr.size).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 });

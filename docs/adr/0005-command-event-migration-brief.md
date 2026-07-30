@@ -712,3 +712,34 @@ slots, and the model-field startup-DR track — all three rows above. `mode="sta
 for Velocity and Lift is closed: every startup event on the reference tasks either traces,
 is described as a model-field randomization, or is native for a stated reason
 (`randomize_terrain`, `encoder_bias`).
+
+**Findings from the first browser run of a traced tracking task**
+(`g1_spinkick`, `Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation`):
+
+20. **ORT-Web serializes runs process-wide, and the engine has several independent
+    callers.** Its wasm binding holds one *module-global* active-run slot, so a second
+    `run()` started before the first resolves throws `Session already started` and the
+    first lands on `Session mismatch` — across different sessions too. The policy net
+    (step loop), the fused observation/termination graphs, and the reset-time event
+    graphs are all separately async, and `TrackingCommand`'s RSI jitter is deliberately
+    fire-and-forget (§8's accepted lag), so overlap is the normal case, not a race. Every
+    ORT call now goes through `core/onnx/runQueue.ts`. Costs nothing: the backend is
+    single-threaded (`numThreads = 1`), so these never ran in parallel anyway.
+21. **A native command still has to serve its traced slots.** `motion` stays a native
+    `TrackingCommand` (a clip lookup is data, not math — §4b), but the tracking task's
+    observations and terminations are ordinary traced terms that read
+    `{command: "motion", field}` slots off it. Only `OnnxCommand` implemented
+    `getStateField`, so every such slot read as unavailable and the fused graphs held
+    their previous vectors — the policy ran on a frozen command. `TrackingCommand` now
+    implements `CommandStateSource` for the fields mjlab's own terms read, including
+    `body_pos_relative_w` (mjlab's `update_relative_body_poses` yaw re-anchoring).
+    Generally: a native command term is only native *to the runtime*; the traced terms
+    around it still see it as a state source.
+22. **Declared slots the exporter folds away must not reach the config.**
+    `MotionCommand.body_indexes` is an integer index tensor; `torch.onnx.export` bakes it
+    into the Gather it feeds, so the graph has no such input — and ORT rejects a feed
+    that is not a graph input (`invalid input '…'`), which would have broken every run of
+    the graph once the slot became readable. `slots_json` now filters the declared slots
+    against the exported graph's actual inputs, in the one place all six emit sites share.
+23. **`gravity_vec_w` was missing from the slot reader.** mjlab fills it with the constant
+    `(0, 0, -1)` (it is not `mjModel.opt.gravity`); the tracking terminations read it.

@@ -97,6 +97,11 @@ export class EventManager {
         }
         continue;
       }
+      if (config.native) {
+        // The build could not trace this term and said so (`reason`), leaving it
+        // for the engine to handle natively or not at all. Not a missing plugin.
+        continue;
+      }
       const EventClass = registry[config.name];
       if (!EventClass) {
         console.warn(`[EventManager] Unknown event type: ${config.name}`);
@@ -190,6 +195,13 @@ export class EventManager {
   }
 
   get size(): number {
-    return this.resetTerms.length + this.intervalTerms.length + this.startupTerms.length;
+    return (
+      this.resetTerms.length +
+      this.intervalTerms.length +
+      this.startupTerms.length +
+      // Counted too: a model-field randomization is a term the manager applies,
+      // and a task whose only events are DR reported "0 loaded" while randomizing.
+      this.modelFieldTerms.length
+    );
   }
 }
