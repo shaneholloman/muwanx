@@ -1,5 +1,7 @@
 import * as ort from 'onnxruntime-web';
 
+import { queueOrtRun } from '../onnx/runQueue';
+
 ort.env.wasm.proxy = false;
 ort.env.wasm.numThreads = 1;
 // Lib build: redirect ort's dynamic file fetches to its own CDN package.
@@ -71,7 +73,8 @@ export class OnnxModule {
       onnxInput[name] = input[key];
     }
 
-    const onnxOutput = await this.session.run(onnxInput);
+    const session = this.session;
+    const onnxOutput = await queueOrtRun(() => session.run(onnxInput));
     const result: Record<string, ort.Tensor> = {};
     for (let i = 0; i < this.outKeys.length; i++) {
       const key = this.outKeys[i];

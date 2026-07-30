@@ -9,6 +9,8 @@
  */
 import * as ort from 'onnxruntime-web';
 
+import { queueOrtRun } from './runQueue';
+
 /** Minimal ORT-Web surface a command/event handler needs. */
 export interface OnnxSession {
   run(feeds: Record<string, OnnxTensorLike>): Promise<Record<string, OnnxTensorLike>>;
@@ -101,7 +103,7 @@ class OrtSession implements OnnxSession {
   async run(feeds: Record<string, OnnxTensorLike>): Promise<Record<string, OnnxTensorLike>> {
     const ortFeeds: Record<string, ort.Tensor> = {};
     for (const [name, tensor] of Object.entries(feeds)) ortFeeds[name] = toOrtTensor(tensor);
-    const outputs = await this.session.run(ortFeeds);
+    const outputs = await queueOrtRun(() => this.session.run(ortFeeds));
     const result: Record<string, OnnxTensorLike> = {};
     for (const [name, tensor] of Object.entries(outputs)) result[name] = fromOrtTensor(tensor);
     return result;
