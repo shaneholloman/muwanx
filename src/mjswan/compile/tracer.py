@@ -541,18 +541,48 @@ def slot_to_json(key: SlotKey, shape: Sequence[int] | None = None) -> dict[str, 
 
 
 def slots_json(export: Any) -> list[dict[str, Any]]:
-    """Serialize every input slot of a term/event/command export, shapes included.
+    """Serialize the input slots the exported graph actually takes, shapes included.
 
     Shared by all three export kinds so the wire format can only be described in
     one place. ``input_shapes`` is positionally parallel to ``input_slots``; a
     short or absent list degrades to shape-less entries rather than raising, which
     keeps hand-built exports in tests usable.
+
+    Slots the exporter folded away are dropped rather than emitted: a term reading
+    an integer index tensor (mjlab's ``MotionCommand.body_indexes``) declares it as
+    a slot, and ``torch.onnx.export`` then bakes it into the Gather it feeds. The
+    runtime feeds by name, and ORT rejects a feed that is not a graph input
+    outright (``invalid input '…'``), so keeping the slot would break every run of
+    the graph — and there would be nothing to read it from either.
     """
     shapes = getattr(export, "input_shapes", None) or []
-    return [
+    entries = [
         slot_to_json(key, shapes[i] if i < len(shapes) else None)
         for i, key in enumerate(export.input_slots)
     ]
+    graph_inputs = _graph_input_names(getattr(export, "onnx_bytes", None))
+    if graph_inputs is None:
+        return entries
+    return [entry for entry in entries if entry["input"] in graph_inputs]
+
+
+def _graph_input_names(onnx_bytes: bytes | None) -> set[str] | None:
+    """Input names of an exported graph, or None when there is no graph to ask.
+
+    Unparseable bytes answer None rather than raising: a hand-built export in a
+    test carries a placeholder, and every real one came out of
+    ``torch.onnx.export`` a few lines earlier. Filtering nothing degrades to the
+    pre-filter behaviour; refusing to serialize the term does not.
+    """
+    if not onnx_bytes:
+        return None
+    import onnx
+
+    try:
+        model = onnx.load_from_string(onnx_bytes)
+    except Exception:
+        return None
+    return {i.name for i in model.graph.input}
 
 
 def trace_term(

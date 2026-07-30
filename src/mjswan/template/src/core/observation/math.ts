@@ -76,6 +76,16 @@ export function quatApplyInv(quat: ArrayLike<number>, vec: ArrayLike<number>): n
   return [vx - w * tx + cx, vy - w * ty + cy, vz - w * tz + cz];
 }
 
+/** The yaw-only part of `quat` (w, x, y, z) — mjlab's `yaw_quat`. */
+export function yawQuat(quat: ArrayLike<number>): number[] {
+  const w = quat[0] ?? 1;
+  const x = quat[1] ?? 0;
+  const y = quat[2] ?? 0;
+  const z = quat[3] ?? 0;
+  const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+  return [Math.cos(yaw / 2), 0, 0, Math.sin(yaw / 2)];
+}
+
 export function quatToRot6d(quat: ArrayLike<number>): number[] {
   const [w, x, y, z] = normalizeQuat(quat);
   const xx = x * x;

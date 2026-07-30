@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 
+import { quatApply, quatInverse, quatMultiply, yawQuat } from '../observation/math';
 import { getPosition, getQuaternion } from '../scene/scene';
 import { type NpzEntry, loadNpz } from '../scene/npz';
 import { type Bytes, resolveBytes } from '../utils/bytes';
@@ -83,6 +84,37 @@ function hasRenderableMesh(object: THREE.Object3D): boolean {
   return found;
 }
 
+/**
+ * mjlab's `update_relative_body_poses`: place the reference bodies onto the robot
+ * by keeping the robot's anchor x/y (but the *reference's* z) and rotating the
+ * anchor-relative offsets by the yaw between the two anchors.
+ *
+ * Exported for its own test — the tracking terminations measure the robot against
+ * these numbers, so getting the frame wrong terminates plausibly and wrongly.
+ */
+export function reanchorBodyPositions(
+  bodyPosW: Float32Array,
+  anchorPos: ArrayLike<number>,
+  anchorQuat: ArrayLike<number>,
+  robotAnchorPos: ArrayLike<number>,
+  robotAnchorQuat: ArrayLike<number>,
+): Float32Array {
+  const deltaPos = [robotAnchorPos[0] ?? 0, robotAnchorPos[1] ?? 0, anchorPos[2] ?? 0];
+  const deltaOri = yawQuat(quatMultiply(robotAnchorQuat, quatInverse(anchorQuat)));
+  const out = new Float32Array(bodyPosW.length);
+  for (let i = 0; i + 2 < bodyPosW.length; i += 3) {
+    const offset = quatApply(deltaOri, [
+      bodyPosW[i] - (anchorPos[0] ?? 0),
+      bodyPosW[i + 1] - (anchorPos[1] ?? 0),
+      bodyPosW[i + 2] - (anchorPos[2] ?? 0),
+    ]);
+    for (let j = 0; j < 3; j++) {
+      out[i + j] = deltaPos[j] + offset[j];
+    }
+  }
+  return out;
+}
+
 export class TrackingCommand implements CommandTerm {
   private readonly context: CommandTermContext;
   private readonly motions: TrackingMotionConfig[];
@@ -90,6 +122,8 @@ export class TrackingCommand implements CommandTerm {
   private sampleHz: number;
   private readonly ghostRoot: THREE.Group | null;
   private readonly ghostBodies: Map<number, THREE.Group>;
+  /** Model body id by name, filled on demand (see `resolveBodyId`). */
+  private readonly bodyIds = new Map<string, number>();
   private readonly ghostData: import('mujoco').MjData | null;
   private refBodyPosW: Float32Array[];
   private refBodyQuatW: Float32Array[];
@@ -352,6 +386,93 @@ export class TrackingCommand implements CommandTerm {
     }
     const frame = this.refBodyPosW[frameIndex];
     return frame ? frame.slice() : null;
+  }
+
+  /**
+   * mjlab `MotionCommand` state, for the traced graphs that declare a slot on it
+   * (`CommandStateSource`, ADR 0005 §6).
+   *
+   * The tracking task's observations and terminations are ordinary traced terms,
+   * but the command they read is *not* an `OnnxCommand` — a clip lookup is data,
+   * not math, so `motion` stays native. That makes this the only place their
+   * `{command: "motion", field}` slots can be served from, and the numbers have to
+   * be mjlab's: same frame (`time_steps` → `refIdx`), same world frame, same
+   * element order (`cfg.body_names`, which the loader already selected the clip's
+   * columns down to).
+   *
+   * `env_origins` is omitted throughout: the browser runs the single env at the
+   * origin, where mjlab adds a zero.
+   *
+   * An unlisted field returns null and its caller holds the previous value —
+   * mjlab's `MotionCommand` exposes velocity and joint siblings of these that no
+   * traced term on the reference tasks reads.
+   */
+  getStateField(field: string): Float32Array | null {
+    switch (field) {
+      case 'anchor_pos_w':
+        return this.getAnchorPos();
+      case 'anchor_quat_w':
+        return this.getAnchorQuat();
+      case 'body_pos_w':
+        return this.getBodyPosW();
+      case 'robot_anchor_pos_w':
+        return this.robotBodyField('xpos', 3, [this.getAnchorBodyName() ?? '']);
+      case 'robot_anchor_quat_w':
+        return this.robotBodyField('xquat', 4, [this.getAnchorBodyName() ?? '']);
+      case 'robot_body_pos_w':
+        return this.robotBodyField('xpos', 3, this.getBodyNames());
+      case 'body_pos_relative_w':
+        return this.bodyPosRelativeW();
+      default:
+        return null;
+    }
+  }
+
+  /** `mjData.<source>` rows for the named bodies, flattened — mjlab's `body_link_*_w`. */
+  private robotBodyField(
+    source: 'xpos' | 'xquat',
+    stride: number,
+    bodyNames: string[],
+  ): Float32Array | null {
+    const mjData = this.context.mjData;
+    if (!mjData || bodyNames.length === 0) {
+      return null;
+    }
+    const out = new Float32Array(bodyNames.length * stride);
+    for (let i = 0; i < bodyNames.length; i++) {
+      const bodyId = this.resolveBodyId(bodyNames[i]);
+      if (bodyId < 0) {
+        return null;
+      }
+      for (let j = 0; j < stride; j++) {
+        out[i * stride + j] = mjData[source][bodyId * stride + j] ?? 0.0;
+      }
+    }
+    return out;
+  }
+
+  /** The reference bodies re-anchored onto the robot (`reanchorBodyPositions`). */
+  private bodyPosRelativeW(): Float32Array | null {
+    const anchorPos = this.getAnchorPos();
+    const anchorQuat = this.getAnchorQuat();
+    const bodyPos = this.getBodyPosW();
+    const anchorBody = [this.getAnchorBodyName() ?? ''];
+    const robotAnchorPos = this.robotBodyField('xpos', 3, anchorBody);
+    const robotAnchorQuat = this.robotBodyField('xquat', 4, anchorBody);
+    if (!anchorPos || !anchorQuat || !bodyPos || !robotAnchorPos || !robotAnchorQuat) {
+      return null;
+    }
+    return reanchorBodyPositions(bodyPos, anchorPos, anchorQuat, robotAnchorPos, robotAnchorQuat);
+  }
+
+  /** `findBodyIdByName`, memoized: the slots are read every control step. */
+  private resolveBodyId(bodyName: string): number {
+    let bodyId = this.bodyIds.get(bodyName);
+    if (bodyId === undefined) {
+      bodyId = this.findBodyIdByName(bodyName);
+      this.bodyIds.set(bodyName, bodyId);
+    }
+    return bodyId;
   }
 
   private createGhostRoot(): THREE.Group | null {

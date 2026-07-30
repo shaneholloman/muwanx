@@ -71,6 +71,7 @@
  * | `root_link_vel_w`       | lin ++ ang (6)                                    |
  * | `root_link_lin_vel_b`   | `quat⁻¹ · lin_vel_w`                              |
  * | `root_link_ang_vel_b`   | `quat⁻¹ · ang_vel_w`                              |
+ * | `gravity_vec_w`         | the constant `(0, 0, -1)`                         |
  * | `projected_gravity_b`   | `quat⁻¹ · (0, 0, -1)`                             |
  * | `heading_w`             | `atan2((quat · x̂)ᵧ, (quat · x̂)ₓ)`                 |
  * | `site_pos_w`            | `site_xpos[site_ids]`, flattened                  |
@@ -330,6 +331,9 @@ const FIELD_READERS: Record<string, FieldReader> = {
     Float32Array.from(quatApplyInv(quatAt(mjData.xquat, root), angVelW(mjData, root))),
   ),
 
+  // mjlab's is a constant, not `mjModel.opt.gravity`: `entity.py` fills it with
+  // (0, 0, -1) and terms use it as the world's down direction.
+  gravity_vec_w: () => new Float32Array([0, 0, -1]),
   projected_gravity_b: rootField((root, mjData) =>
     Float32Array.from(quatApplyInv(quatAt(mjData.xquat, root), [0, 0, -1])),
   ),

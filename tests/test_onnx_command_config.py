@@ -160,6 +160,33 @@ def test_slot_to_json_command_state():
     }
 
 
+def test_slots_json_drops_a_slot_the_exporter_folded_away():
+    """A declared slot the graph does not take must not reach the config.
+
+    `torch.onnx.export` bakes an integer index tensor into the Gather it feeds, so
+    a term reading one (mjlab's `MotionCommand.body_indexes`) exports a graph
+    without that input. ORT rejects a feed that is not a graph input outright, so
+    shipping the slot would break every run of the graph.
+    """
+    import onnx
+    from onnx import TensorProto, helper
+
+    kept = helper.make_tensor_value_info("robot__heading_w", TensorProto.FLOAT, [1])
+    graph = helper.make_graph(
+        [helper.make_node("Identity", ["robot__heading_w"], ["value"])],
+        "g",
+        [kept],
+        [helper.make_tensor_value_info("value", TensorProto.FLOAT, [1])],
+    )
+    export = _make_export()
+    export.onnx_bytes = onnx.helper.make_model(graph).SerializeToString()
+    export.input_slots = [("robot", "heading_w"), (_COMMAND_NS, "motion.body_indexes")]
+    export.input_shapes = [[1], [14]]
+
+    cfg = command_config(export, onnx_ref="command/twist.onnx")
+    assert [slot["input"] for slot in cfg["input_slots"]] == ["robot__heading_w"]
+
+
 def test_unknown_data_fields_default_to_dynamic():
     # Baking a field that actually varies is silent corruption, so only the
     # model-derived constants are listed and anything else errs toward dynamic.
