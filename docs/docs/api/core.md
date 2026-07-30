@@ -148,7 +148,9 @@ Add a MuJoCo scene. Provide exactly one of `model` or `spec`.
 ### ProjectHandle.add_scene_mjlab
 
 ```python
-def add_scene_mjlab(task_id: str, *, play: bool = False) -> SceneHandle
+def add_scene_mjlab(
+    task_id: str, *, play: bool = False, env_cfg: Any | None = None
+) -> SceneHandle
 ```
 
 Load an mjlab task's MuJoCo spec from the task registry and add it as a scene. Requires `mjlab` to be installed. Automatically applies the task's `viewer`, `events`, and any terrain data.
@@ -159,6 +161,7 @@ Load an mjlab task's MuJoCo spec from the task registry and add it as a scene. R
 |---|---|---|---|
 | `task_id` | `str` | — | mjlab task identifier (e.g. `"go2_flat"`). |
 | `play` | `bool` | `False` | Load mjlab's play/evaluation config instead of the training config. |
+| `env_cfg` | `Any \| None` | `None` | Pre-loaded (and possibly edited) env config to use instead of loading `task_id` fresh. Needed for tracking tasks: mjlab registers them with `commands["motion"].motion_file = ""`, so the caller must fill in the clip path before the env is constructed. |
 
 **Returns** — `SceneHandle`
 

@@ -597,6 +597,20 @@ class TestSaveWebPolicyJson:
         path = out / project_dir / "assets" / scene_id / f"{policy_id}.json"
         return json.loads(path.read_text())
 
+    def test_spec_scene_config_path_matches_written_file(self, tmp_path, minimal_spec):
+        """`_save_web` frees `scene.spec` right after writing `scene.mjz`, and writes
+        `config.json` after that — the recorded path must still be the `.mjz` on disk,
+        or the app 404s on the scene it just shipped."""
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", spec=minimal_spec)
+        out = self._run(builder, tmp_path)
+
+        scene_path = json.loads((out / "assets" / "config.json").read_text())[
+            "projects"
+        ][0]["scenes"][0]["path"]
+        assert scene_path == "s/scene.mjz"
+        assert (out / "main" / "assets" / scene_path).is_file()
+
     # -----------------------------------------------------------------------
     # no-config_path branch
     # -----------------------------------------------------------------------

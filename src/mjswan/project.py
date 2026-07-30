@@ -117,7 +117,13 @@ class ProjectHandle:
         self._config.scenes.append(scene_config)
         return SceneHandle(scene_config, self)
 
-    def add_scene_mjlab(self, task_id: str, *, play: bool = False) -> SceneHandle:
+    def add_scene_mjlab(
+        self,
+        task_id: str,
+        *,
+        play: bool = False,
+        env_cfg: Any | None = None,
+    ) -> SceneHandle:
         """Add a MuJoCo scene from an mjlab task.
 
         Loads the task's MuJoCo spec from the mjlab task registry and adds it
@@ -128,6 +134,11 @@ class ProjectHandle:
             play: Whether to load mjlab's play/evaluation config instead of the
                 training config. This is useful for demos that should match
                 mjlab's randomized play terrain layout.
+            env_cfg: Pre-loaded (and possibly edited) env config to use instead
+                of loading ``task_id`` fresh. Required for tasks whose config is
+                incomplete as registered — mjlab's tracking tasks ship
+                ``commands["motion"].motion_file = ""`` and expect the caller to
+                fill in the clip path before the env is constructed.
 
         Returns:
             SceneHandle for further configuration (add_policy, add_splat, etc.)
@@ -151,7 +162,8 @@ class ProjectHandle:
             ) from e
 
         ensure_mjlab_extensions()
-        env_cfg = load_env_cfg(task_id, play=play)
+        if env_cfg is None:
+            env_cfg = load_env_cfg(task_id, play=play)
         env_cfg.scene.num_envs = 1
         scene = Scene(env_cfg.scene, device="cpu")
         scene.spec.assets.update(_collect_mjlab_scene_assets(env_cfg.scene))
