@@ -776,6 +776,7 @@ def serialize_event(
         "mode": term_cfg.mode,
         "onnx": ref,
         "rand_dim": export.rand_dim,
+        "rand_ranges": export.rand_ranges,
         "input_slots": slots_json(export),
         "write_targets": export.write_targets,
     }
@@ -838,6 +839,7 @@ def _serialize_reset_graph(
         "mode": "reset",
         "onnx": ref,
         "rand_dim": export.rand_dim,
+        "rand_ranges": export.rand_ranges,
         "input_slots": slots_json(export),
         "write_targets": export.write_targets,
     }

@@ -50,6 +50,8 @@ def _make_export() -> CommandExport:
         input_slots=[("robot", "heading_w")],
         input_names=["robot__heading_w"],
         rand_dim=6,
+        # Six draws of mjlab's velocity ranges, as `DrawRecorder` records them.
+        rand_ranges=[[-1.0, 1.0]] * 3 + [[-3.14, 3.14]] * 3,
         output_names=["next_vel_command_b"],
         write_targets=[],
         reference_rand=torch.zeros(6),
@@ -113,6 +115,7 @@ def test_lifting_command_with_entity_write():
         input_slots=[],
         input_names=[],
         rand_dim=7,
+        rand_ranges=[[-0.5, 0.5]] * 7,
         output_names=["next_target_pos", "root_pose__pose", "root_velocity__velocity"],
         write_targets=[
             {"kind": "root_pose", "entity": "cube", "fields": ["pose"]},
@@ -299,9 +302,35 @@ def test_native_command_emits_a_traced_reset_graph(tmp_path):
     assert graph["mode"] == "reset"
     assert graph["onnx"] == "command/motion_reset.onnx"
     assert graph["rand_dim"] == 2  # one draw per joint
+    # The bounds the body drew from, per element. The graph consumes the sampler's
+    # *output*, so it carries no bounds itself and the runtime would otherwise draw
+    # [0, 1) — a whole radian of joint jitter where the term asked for ±0.1.
+    flat = [v for pair in graph["rand_ranges"] for v in pair]
+    assert flat == pytest.approx([-0.1, 0.1, -0.1, 0.1], abs=1e-7)
     assert [t["kind"] for t in graph["write_targets"]] == ["joint_state"]
     assert [s["field"] for s in graph["input_slots"]] == ["joint_pos", "joint_vel"]
     assert (tmp_path / graph["onnx"]).exists()
+
+
+def test_element_bounds_broadcasts_mjlab_per_axis_ranges():
+    """A per-axis range column has to land on the right elements.
+
+    mjlab's `_resample_command` draws a 6-dof pose offset with `ranges[:, 0]`,
+    `ranges[:, 1]` — tensors, not scalars — and an omitted `pose_range` key means a
+    zero-width range for that axis: mjlab draws exactly 0.0 there. Broadcasting the
+    columns wrong would hand those axes somebody else's range.
+    """
+    from mjswan.compile.rng import _element_bounds
+
+    lower = torch.tensor([0.0, 0.0, 0.0, -0.2, -0.2, -0.2])
+    upper = torch.tensor([0.0, 0.0, 0.0, 0.2, 0.2, 0.2])
+    bounds = _element_bounds(torch.Size([1, 6]), lower, upper, (1, 6))
+    assert bounds.flatten().tolist() == pytest.approx(
+        [0, 0, 0, 0, 0, 0, -0.2, 0.2, -0.2, 0.2, -0.2, 0.2], abs=1e-7
+    )
+    # Scalar bounds broadcast to every element of the draw.
+    scalar = _element_bounds(torch.Size([1, 2]), -0.1, 0.1, (1, 2))
+    assert scalar.flatten().tolist() == pytest.approx([-0.1, 0.1, -0.1, 0.1], abs=1e-7)
 
 
 def test_command_without_a_reset_trace_is_unchanged(tmp_path):

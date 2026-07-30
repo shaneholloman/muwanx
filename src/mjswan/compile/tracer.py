@@ -942,6 +942,8 @@ class EventExport:
     input_slots: list[SlotKey]
     input_names: list[str]
     rand_dim: int
+    rand_ranges: list[list[float]]
+    """Per-element ``[low, high]`` for ``rand`` — the runtime draws with these."""
     output_names: list[str]
     write_targets: list[dict[str, Any]]
     """Per write-kind descriptor: what the outputs target (entity, kind, fields)."""
@@ -988,6 +990,7 @@ def trace_event_term(
     output_names, ref_tensors = _flatten_captures(captures)
     ref_rand = rec.rand_vector
     rand_dim = rec.rand_dim
+    rand_ranges = rec.rand_ranges
 
     # 2. Classify recorded reads: dynamic data-field inputs vs baked constants.
     dynamic: dict[SlotKey, torch.Tensor] = {}
@@ -1052,6 +1055,7 @@ def trace_event_term(
         input_slots=dynamic_keys,
         input_names=dyn_input_names,
         rand_dim=rand_dim,
+        rand_ranges=rand_ranges,
         output_names=output_names,
         write_targets=write_targets,
         reference_outputs=tuple(t.detach() for t in ref_tensors),
@@ -1255,6 +1259,8 @@ class CommandExport:
     input_slots: list[SlotKey]
     input_names: list[str]
     rand_dim: int
+    rand_ranges: list[list[float]]
+    """Per-element ``[low, high]`` for ``rand`` — the runtime draws with these."""
     output_names: list[str]
     write_targets: list[dict[str, Any]]
     reference_rand: torch.Tensor
@@ -1293,6 +1299,7 @@ def trace_command_term(
         captures = dict(rec_env.captures)
     ref_rand = rec.rand_vector
     rand_dim = rec.rand_dim
+    rand_ranges = rec.rand_ranges
     _restore_state(term, snap)
 
     output_write_names, _ = _flatten_captures(captures)
@@ -1382,6 +1389,7 @@ def trace_command_term(
         input_slots=dynamic_keys,
         input_names=dyn_names,
         rand_dim=rand_dim,
+        rand_ranges=rand_ranges,
         output_names=output_names,
         write_targets=write_targets,
         reference_rand=ref_rand.detach(),

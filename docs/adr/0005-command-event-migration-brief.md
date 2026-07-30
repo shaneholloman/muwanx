@@ -743,3 +743,16 @@ is described as a model-field randomization, or is native for a stated reason
     against the exported graph's actual inputs, in the one place all six emit sites share.
 23. **`gravity_vec_w` was missing from the slot reader.** mjlab fills it with the constant
     `(0, 0, -1)` (it is not `mjModel.opt.gravity`); the tracking terminations read it.
+24. **`rand` needs its bounds shipped, and never had them.** `ReplayRng` traces with the
+    sampler's *output* (the bounds are deliberately dropped, §2b), so nothing in the graph
+    remembers the range — and the Python side never emitted the `rand_ranges` the TS
+    `SeededRng.randVector` already read, so every traced event and command drew [0, 1) for
+    every element at runtime. On `g1_spinkick` that turned an RSI whose `pose_range` and
+    `velocity_range` are *empty* (mjlab draws exactly 0.0) into up to a metre of root
+    teleport plus a metre per second of velocity on every reset, which then terminated
+    immediately: a robot randomly placed and instantly reset, every frame. `DrawRecorder`
+    now records each draw's broadcast `[low, high]`, `EventExport`/`CommandExport` carry
+    them, all three config emitters ship them, and `validate_command_config` fails a
+    `rand_ranges` whose length is not `rand_dim` — the mismatch that would otherwise fall
+    back to [0, 1) for the tail. Bounds are the term's, not the graph's: anything that
+    reproduces a term body outside mjlab has to carry them explicitly.
