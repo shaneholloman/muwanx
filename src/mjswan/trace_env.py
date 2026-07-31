@@ -62,12 +62,51 @@ def build_single_entity_trace_env(
                 geom.margin = 0.0
         return spec
 
-    entity_cfg = EntityCfg(spec_fn=_spec_fn)
+    # The keyframe is what the browser resets to (`mj_resetDataKeyframe`), so it is
+    # also what `default_joint_pos` has to be: mjlab's default is `{".*": 0.0}`,
+    # which bakes a zero default into every `*_rel` observation and leaves the
+    # policy reading its whole stand pose as error from the first frame.
+    keyframe_pos = _keyframe_joint_pos(_spec_fn())
+    init_state = EntityCfg.InitialStateCfg()
+    if keyframe_pos:
+        init_state = EntityCfg.InitialStateCfg(joint_pos=keyframe_pos)
+    entity_cfg = EntityCfg(spec_fn=_spec_fn, init_state=init_state)
     scene_cfg = SceneCfg(num_envs=1, entities={entity_name: entity_cfg})
     env_cfg = ManagerBasedRlEnvCfg(decimation=1, scene=scene_cfg)
     env = ManagerBasedRlEnv(env_cfg, device=device)
     env.reset()
     return env
+
+
+def _keyframe_joint_pos(spec: Any) -> dict[str, float]:
+    """Per-joint positions from the model's first keyframe, as ``EntityCfg`` wants them.
+
+    mjlab has its own way to say this — ``init_state.joint_pos = None`` — but that
+    path builds ``default_joint_pos`` from the raw float64 keyframe and then fails
+    writing it into float32 ``qpos``. Naming the joints avoids it, and is explicit
+    about the one-dof assumption ``InitialStateCfg.joint_pos`` makes anyway (its
+    values are scalars, so a ball joint has no representation there).
+
+    Returns an empty dict when the model has no keyframe, which leaves mjlab's own
+    ``{".*": 0.0}`` default in place — correct for a model whose zero pose *is* its
+    rest pose.
+    """
+    import re
+
+    import mujoco
+
+    if not spec.keys:
+        return {}
+    model = spec.compile()
+    qpos = model.key_qpos[0]
+    positions: dict[str, float] = {}
+    for joint in range(model.njnt):
+        if model.jnt_type[joint] == mujoco.mjtJoint.mjJNT_FREE:
+            continue  # the root pose, not a joint position
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint)
+        # Keys are regexes to mjlab (`resolve_expr`), and a joint name is not one.
+        positions[re.escape(name)] = float(qpos[model.jnt_qposadr[joint]])
+    return positions
 
 
 __all__ = ["build_single_entity_trace_env"]
