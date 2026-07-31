@@ -14,6 +14,7 @@ from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationT
 
 import mjswan
 from mjswan.envs.mdp.actions import JointPositionActionCfg
+from mjswan.trace_env import build_single_entity_trace_env
 
 # G1 humanoid: per-joint action scale, stiffness, damping (keyed by joint name)
 _G1_SCALE = {
@@ -138,6 +139,13 @@ def setup_builder() -> mjswan.Builder:
     demo_project.add_scene(
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
         name="G1",
+    ).set_trace_env(
+        # The env the policy's observation terms are traced against (ADR 0005 §6).
+        # An mjlab scene brings its own; this one is a plain MJCF, so it needs the
+        # entity built explicitly — from the robot alone, not the scene's floor.
+        build_single_entity_trace_env(
+            lambda: mujoco.MjSpec.from_file("assets/unitree_g1/g1.xml")
+        )
     ).set_viewer(
         mjswan.ViewerConfig(
             lookat=(0.0, 0.0, 0.0),
@@ -173,9 +181,7 @@ def setup_builder() -> mjswan.Builder:
                     "projected_gravity": ObservationTermCfg(
                         func=obs_fns.projected_gravity
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, params={"pos_steps": [0]}
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
                     "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
                     "last_action": ObservationTermCfg(func=obs_fns.last_action),
                     "velocity_cmd": ObservationTermCfg(
