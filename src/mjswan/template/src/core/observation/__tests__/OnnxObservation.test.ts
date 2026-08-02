@@ -37,7 +37,12 @@ class FakeSession implements OnnxSession {
   }
 }
 
-/** Only the two accessors the observation terms use. */
+/**
+ * Only the accessors the observation terms use. `termNames` is modelled alongside
+ * `getCommand` because a `command` term binds its name against it at construction —
+ * a stub that answered lookups but not "which names exist" would let a dangling
+ * name through here while the real manager rejects it.
+ */
 function fakeRunner(overrides: Partial<{
   lastActions: Float32Array;
   commands: Record<string, Float32Array>;
@@ -48,6 +53,7 @@ function fakeRunner(overrides: Partial<{
       commandManager: {
         getCommand: (name: string) =>
           overrides.commands?.[name] ?? new Float32Array(0),
+        termNames: () => Object.keys(overrides.commands ?? {}),
       },
     }),
   } as unknown as PolicyRunner;
@@ -195,6 +201,41 @@ describe('NativeObservation', () => {
       { name: 'velocity_cmd', native: 'command', command_name: 'velocity' },
     );
     expect(obs.size).toBe(3);
+  });
+
+  it('refuses to build when command_name names no command term', () => {
+    // The miss used to arrive as a zero block inside the policy's input vector,
+    // logged nowhere: `getCommand` returns an empty array, `conformToSize` pads it
+    // to the declared width. A slot the scene means to leave empty is `constant`.
+    expect(
+      () =>
+        new NativeObservation(fakeRunner({ commands: { twist: new Float32Array(3) } }), {
+          name: 'velocity_cmd',
+          native: 'command',
+          command_name: 'velocty', // typo
+          size: 3,
+        }),
+    ).toThrow(/velocty.*does not define.*twist/s);
+  });
+
+  it('refuses to build a command term with no command_name at all', () => {
+    expect(
+      () =>
+        new NativeObservation(fakeRunner(), { name: 'velocity_cmd', native: 'command', size: 3 }),
+    ).toThrow(/no command_name/);
+  });
+
+  it('still zero-fills when the embedding runs no CommandManager', () => {
+    // Deliberately not an error: an absent manager is a host that runs no commands,
+    // which is not evidence of a wrong *name*. The build supplied the width.
+    const runner = { getContext: () => null } as unknown as PolicyRunner;
+    const obs = new NativeObservation(runner, {
+      name: 'velocity_cmd',
+      native: 'command',
+      command_name: 'twist',
+      size: 3,
+    });
+    expect(Array.from(obs.compute({} as never) as Float32Array)).toEqual([0, 0, 0]);
   });
 
   it('does not hand out the runtime\'s own buffer to be mutated', () => {

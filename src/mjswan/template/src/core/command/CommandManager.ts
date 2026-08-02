@@ -139,6 +139,11 @@ export class CommandManager {
    * rng the registry-based `new Term(name, config, context)` shape has no room
    * for. Warns and skips (rather than throwing) so one missing session doesn't
    * take down every other command in the policy.
+   *
+   * A skipped term is absent from `termNames()`, so an observation term that reads
+   * it fails to bind and the policy does not load. That split is deliberate: the
+   * command itself is degradable, an observation slice that feeds the network is
+   * not — it would arrive as a zero block at a fixed offset in the input vector.
    */
   private buildOnnxCommand(
     groupName: string,
@@ -208,9 +213,32 @@ export class CommandManager {
     return result;
   }
 
+  /**
+   * The named term's current command vector, or an empty one if there is no such
+   * term.
+   *
+   * The empty return serves callers that guard their own name — `getVelocityCommand`
+   * probes with `terms.has` first. A consumer whose *config* declares the name (an
+   * observation term's `command_name`) must validate it against `termNames()` at
+   * construction instead: mjlab asserts the lookup
+   * (`envs/mdp/observations.py` `generated_commands`), and here an unvalidated miss
+   * is zero-padded to the declared width, handing the policy a block of zeros it
+   * was never trained on with nothing logged.
+   */
   getCommand(groupName: string): Float32Array {
     const term = this.terms.get(groupName);
     return term ? term.getCommand() : new Float32Array(0);
+  }
+
+  /**
+   * Names of the terms this manager holds, in registration order.
+   *
+   * For binding-time validation by a consumer that names a command in its own
+   * config, so the miss surfaces once at load — with the available names in the
+   * message — rather than every frame as `getCommand`'s empty vector.
+   */
+  termNames(): string[] {
+    return Array.from(this.terms.keys());
   }
 
   getTerm(groupName: string): CommandTerm | undefined {

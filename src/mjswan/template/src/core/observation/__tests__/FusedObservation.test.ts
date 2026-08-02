@@ -64,7 +64,12 @@ function fakeRunner(): PolicyRunner {
   return {
     getLastActions: () => new Float32Array([0.5, -0.5]),
     getContext: () => ({
-      commandManager: { getCommand: () => new Float32Array([1, 2, 3]) },
+      commandManager: {
+        getCommand: () => new Float32Array([1, 2, 3]),
+        // The group's `command` input binds its name at construction, so the stub
+        // has to answer which names exist, not only what they read.
+        termNames: () => ['twist'],
+      },
     }),
   } as unknown as PolicyRunner;
 }
@@ -132,6 +137,33 @@ describe('FusedObservation', () => {
     expect(Array.from(held)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it('refuses to build when a native command input names no command term', () => {
+    // A fused group's output *is* the policy's input vector, so an unbound command
+    // input is a zero block at a known offset — the same class of silent breakage
+    // as a missing graph, which this class already throws for.
+    const session = new FakeSession(() => new Float32Array(6));
+    const config: FusedObservationConfig = {
+      ...CFG,
+      native_inputs: [
+        { name: 'actions', native: 'prev_action', input: 'native__actions', size: 2 },
+        {
+          name: 'command',
+          native: 'command',
+          input: 'native__command',
+          size: 3,
+          command_name: 'heading', // the stub only holds `twist`
+        },
+      ],
+    };
+    expect(
+      () =>
+        new FusedObservation(fakeRunner(), config, {
+          session,
+          readSlot: () => new Float32Array([0, 0]),
+        }),
+    ).toThrow(/policy\.command.*heading.*twist/s);
   });
 
   it('conforms a wrong-width graph output to the declared size', async () => {

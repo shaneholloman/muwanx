@@ -98,9 +98,22 @@ function runnerFor(task: TaskFixture, step: () => Step): PolicyRunner {
     const key = nativeByKind.get(kind);
     return Float32Array.from(key ? (step().native[key] ?? []) : []);
   };
+  // The names the fixture's own group declares. `FusedObservation` binds each
+  // `command` input against this set at construction, so deriving it from the
+  // fixture (rather than answering every name) keeps the stub honest: a build that
+  // emitted a command name the scene never defines would fail here too.
+  const commandNames = (task.group.native_inputs ?? [])
+    .filter(native => native.native === 'command')
+    .map(native => native.command_name)
+    .filter((name): name is string => Boolean(name));
   return {
     getLastActions: () => read('prev_action'),
-    getContext: () => ({ commandManager: { getCommand: () => read('command') } }),
+    getContext: () => ({
+      commandManager: {
+        getCommand: () => read('command'),
+        termNames: () => commandNames,
+      },
+    }),
   } as unknown as PolicyRunner;
 }
 

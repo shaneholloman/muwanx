@@ -48,12 +48,59 @@ export function isNativeObservationConfig(
   return native === 'prev_action' || native === 'command' || native === 'constant';
 }
 
+/**
+ * Fail at construction if a `command` term names something no command term provides.
+ *
+ * mjlab asserts this lookup (`envs/mdp/observations.py`, `generated_commands`).
+ * Here the miss used to surface as `CommandManager.getCommand`'s empty vector,
+ * zero-padded to the declared width by `conformToSize` — a block of zeros inside
+ * the policy's input vector, warned about nowhere. A scene that deliberately has no
+ * value for a command slot already has a way to say so (`native: "constant"`, whose
+ * value the build bakes), so a dangling name is always a wiring bug.
+ *
+ * Lives here rather than in either observation class because both bind these names:
+ * this module owns the `native` kinds, and `FusedObservation` feeds the same two as
+ * graph inputs.
+ *
+ * Only checked when a manager is present. An embedding that runs no commands at all
+ * is not evidence of a wrong *name*, so the declared width still stands zero-filled
+ * for it — the same call the width-conforming path has always made.
+ */
+export function assertCommandTermBound(
+  runner: PolicyRunner,
+  label: string,
+  commandName: string | undefined,
+): void {
+  if (!commandName) {
+    throw new Error(
+      `Observation term "${label}" is native:"command" but carries no command_name, ` +
+        'so there is nothing to read. The build always emits one (mjlab takes it as a ' +
+        'required param), which makes this a malformed config rather than a scene ' +
+        'without commands.',
+    );
+  }
+  const manager = runner.getContext()?.commandManager;
+  if (!manager) return;
+  const available = manager.termNames();
+  if (available.includes(commandName)) return;
+  throw new Error(
+    `Observation term "${label}" reads the command "${commandName}", which this scene ` +
+      `does not define. Available: ${available.length ? available.join(', ') : '(none)'}. ` +
+      'Unchecked, this feeds the policy a zero block of the declared width — a ' +
+      'silently wrong input vector — so the scene fails to load instead. A command ' +
+      'slot the scene deliberately does not drive belongs as native:"constant".',
+  );
+}
+
 export class NativeObservation extends ObservationBase<NativeObservationConfig> {
   private readonly constant: Float32Array | null;
   private cachedSize: number | null;
 
   constructor(runner: PolicyRunner, config: NativeObservationConfig) {
     super(runner, config);
+    if (config.native === 'command') {
+      assertCommandTermBound(runner, config.name, config.command_name);
+    }
     this.constant =
       config.native === 'constant' ? Float32Array.from(config.value ?? []) : null;
     this.cachedSize = config.size ?? this.constant?.length ?? null;
@@ -84,6 +131,9 @@ export class NativeObservation extends ObservationBase<NativeObservationConfig> 
       case 'command': {
         const name = this.config.command_name;
         const manager = this.runner.getContext()?.commandManager;
+        // `name` and its presence in the manager are both asserted in the
+        // constructor, so the only case this guard still catches is an embedding
+        // with no CommandManager — whose width the build supplied.
         if (!name || !manager) return new Float32Array(this.cachedSize ?? 0);
         return manager.getCommand(name);
       }
