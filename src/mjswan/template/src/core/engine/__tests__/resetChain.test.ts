@@ -36,7 +36,7 @@ function chainRecording(order: string[], overrides: Partial<ResetChain> = {}): R
       },
     },
     policy: { reset: () => order.push('policy') },
-    commands: { resetTerms: () => order.push('command') },
+    commands: { resetTerms: () => { order.push('command'); } },
     context: CONTEXT,
     ...overrides,
   };
@@ -102,6 +102,26 @@ describe('applyResetTerms', () => {
     expect(seen).toBe(7);
   });
 
+  it('waits for an async command reset before returning to the caller', async () => {
+    // A traced term's reset *is* its resample (mjlab's `CommandTerm.reset` calls
+    // `_resample`), which is an `ort.run()` that may write to the sim. The caller's
+    // `mj_forward` is what publishes those writes, so it must not get there first.
+    const order: string[] = [];
+    await applyResetTerms({
+      events: null,
+      policy: null,
+      commands: {
+        resetTerms: async () => {
+          await settle();
+          order.push('resample');
+        },
+      },
+      context: CONTEXT,
+    });
+    order.push('forward');
+    expect(order).toEqual(['resample', 'forward']);
+  });
+
   it('skips absent managers rather than failing', async () => {
     // `loadPolicyConfig` runs this before a PolicyRunner exists, and a scene may
     // define no events at all.
@@ -109,7 +129,7 @@ describe('applyResetTerms', () => {
     await applyResetTerms({
       events: null,
       policy: null,
-      commands: { resetTerms: () => order.push('command') },
+      commands: { resetTerms: () => { order.push('command'); } },
       context: CONTEXT,
     });
     expect(order).toEqual(['command']);

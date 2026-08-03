@@ -176,9 +176,22 @@ export class CommandManager {
     }
   }
 
-  resetTerms(): void {
+  /**
+   * Reset every term, **in config order**, awaiting each.
+   *
+   * mjlab's `CommandManager.reset` loops `self._terms.items()` and each term's
+   * `reset` *is* its resample (`_resample(env_ids)`), which for a traced term means
+   * an `ort.run()` that may write to the sim. Sequential rather than `Promise.all`
+   * for the reason `EventManager.onReset` is: two terms writing the same element
+   * resolve last-writer-wins by config order in mjlab, and firing them concurrently
+   * would make that resolution order instead.
+   *
+   * Awaited by the reset chain before the step's single forward, so a resample's
+   * writes are published by that forward — as mjlab's are.
+   */
+  async resetTerms(): Promise<void> {
     for (const term of this.terms.values()) {
-      term.reset?.();
+      await term.reset?.();
     }
     this.syncValuesFromTerms();
     this.emit({ type: 'reset', commandId: '*' });
@@ -293,8 +306,8 @@ export class CommandManager {
     });
   }
 
-  resetToDefaults(): void {
-    this.resetTerms();
+  resetToDefaults(): Promise<void> {
+    return this.resetTerms();
   }
 
   addEventListener(listener: CommandEventListener): void {

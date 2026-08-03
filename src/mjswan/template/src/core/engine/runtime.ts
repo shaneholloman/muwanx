@@ -773,12 +773,18 @@ export class mjswanRuntime {
           const postState = this.policyStateBuilder.build();
           const result = this.terminationManager.evaluate(postState, target);
           if (result.done) {
-            // Awaited: the reset events' writes have a reader in this same frame —
-            // the `mj_forward` below, and then the command resample it feeds. Firing
-            // them un-awaited let a command resample against the pre-reset pose, and
-            // put `TrackingCommand.reset`'s `qpos` write ahead of the event's instead
-            // of after it (see `resetChain`).
-            await this.resetSimulationState({ forward: false });
+            // Awaited: everything in here writes state the `mj_forward` below is
+            // what publishes — the reset events, and the command resample that now
+            // runs with them rather than after the forward (see `resetChain`).
+            //
+            // Caught so one failing graph costs a reset, not the run: `resetChain`
+            // propagates deliberately, and the step loop is the caller that has to
+            // keep going.
+            try {
+              await this.resetSimulationState({ forward: false });
+            } catch (error) {
+              console.warn('[mjswanRuntime] reset terms failed:', error);
+            }
             // Last, as in mjlab (`_reset_idx` ends with `termination_manager.reset`);
             // everything before it is ordered inside `resetSimulationState`.
             this.terminationManager.reset();
@@ -879,7 +885,7 @@ export class mjswanRuntime {
           onnxSessions: this.policyGraphs,
           readOnnxSlot: this.readOnnxSlot,
         });
-        this.commandManager.resetTerms();
+        await this.commandManager.resetTerms();
         const motionTerm = this.commandManager.getTerm('motion');
         if (isMotionCommandTerm(motionTerm)) {
           await motionTerm.setSelectedMotion(

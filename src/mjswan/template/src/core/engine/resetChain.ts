@@ -51,9 +51,16 @@ export interface ResetPolicySink {
   reset(state?: PolicyState): void;
 }
 
-/** The command terms reset last — `CommandManager`. */
+/**
+ * The command terms reset last — `CommandManager`.
+ *
+ * Awaited, because a traced term's reset *is* its resample: mjlab's
+ * `CommandTerm.reset` calls `_resample(env_ids)`, which for `OnnxCommand` is an
+ * `ort.run()` that may write to the sim. Those writes have to land before the
+ * caller's forward, which is what publishes them.
+ */
 export interface ResetCommandSink {
-  resetTerms(): void;
+  resetTerms(): void | Promise<void>;
 }
 
 export interface ResetChain {
@@ -82,5 +89,5 @@ export interface ResetChain {
 export async function applyResetTerms(chain: ResetChain): Promise<void> {
   await chain.events?.onReset(chain.context);
   chain.policy?.reset(chain.buildState?.());
-  chain.commands.resetTerms();
+  await chain.commands.resetTerms();
 }
