@@ -839,6 +839,10 @@ export class mjswanRuntime {
     }
 
     if (!this.mjModel || !this.mjData) {
+      // Stays a warning while the load failures below throw: this is a caller-ordering
+      // precondition, not a bad bundle. `loadEnvironment` builds the model before it
+      // reaches here, and every `setPolicy` caller loads a scene first, so it is
+      // unreachable from the shipped app.
       console.warn('Policy config loaded before MuJoCo model is ready.');
       return;
     }
@@ -990,7 +994,24 @@ export class mjswanRuntime {
         pdEnabled: this.policyControl !== null,
       });
     } catch (error) {
-      console.warn('Failed to load policy config:', error);
+      // Rethrown, not warned. Everything inside this try is load-bearing for the
+      // policy: the observation groups, the action control map, the termination
+      // manager, the network itself. Swallowing meant a scene reported a successful
+      // load and then ran with no policy at all — and it disarmed the loud failures
+      // the binding checks depend on (a missing observation graph, a
+      // `generated_commands` name no command term provides), turning "this bundle is
+      // wrong" into one console line.
+      //
+      // The fields are assigned as the load progresses, so a failure partway leaves a
+      // runner with no ONNX module, or a module with no control map. Clear them: either
+      // a policy loaded or there is none, never half of one.
+      this.policyRunner = null;
+      this.policyStateBuilder = null;
+      this.policyControl = null;
+      this.onnxModule = null;
+      this.onnxInputDict = null;
+      this.terminationManager = null;
+      throw error;
     }
   }
 
