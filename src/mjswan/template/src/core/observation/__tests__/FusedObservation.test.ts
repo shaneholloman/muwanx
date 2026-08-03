@@ -139,6 +139,36 @@ describe('FusedObservation', () => {
     warn.mockRestore();
   });
 
+  it('feeds a named action term its own slice', async () => {
+    // Same trap as the per-term handler: the group is fed the whole action vector and
+    // has to narrow it, or the graph receives the head of the wrong term at the right
+    // width. `getLastActions` here is 4 wide; `gripper` is the last element.
+    const session = new FakeSession(() => new Float32Array(6));
+    const runner = {
+      getLastActions: () => Float32Array.from([1, 2, 3, 9]),
+      getContext: () => null,
+    } as unknown as PolicyRunner;
+    const config: FusedObservationConfig = {
+      ...CFG,
+      native_inputs: [
+        {
+          name: 'gripper_action',
+          native: 'prev_action',
+          input: 'native__gripper',
+          size: 1,
+          action_name: 'gripper',
+          action_offset: 3,
+        },
+      ],
+    };
+    const term = new FusedObservation(runner, config, {
+      session,
+      readSlot: () => new Float32Array([0, 0]),
+    });
+    await term.compute({} as never);
+    expect(values(session.calls[0]['native__gripper'])).toEqual([9]);
+  });
+
   it('refuses to build when a native command input names no command term', () => {
     // A fused group's output *is* the policy's input vector, so an unbound command
     // input is a zero block at a known offset — the same class of silent breakage

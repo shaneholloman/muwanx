@@ -104,13 +104,25 @@ def _native_observation_entry(
     may pair ``generated_commands`` with a command that only exists browser-side
     (a native ``UiCommand``), in which case mjlab's own lookup raises and the
     runtime resolves the width from the command itself instead.
+
+    ``action_offset`` rides along when ``last_action`` names a term, because then it
+    is that term's slice of the policy output rather than the whole vector, and the
+    runtime holds the vector whole (see :func:`~mjswan.compile.tracer.
+    action_term_offset`). Unlike ``size`` it is *not* best-effort: falling back to the
+    whole vector is the silently-wrong observation it exists to prevent.
     """
+    from .compile.tracer import action_term_offset
+
     func_name = getattr(func, "__name__", None)
     if func_name == "last_action":
         entry: dict[str, Any] = {"name": name, "native": "prev_action"}
         action_name = params.get("action_name")
         if action_name is not None:
             entry["action_name"] = action_name
+            # Resolved here rather than inside the best-effort `size` probe below: a
+            # swallowed failure would leave the runtime reading the whole action
+            # vector's head instead of this term's slice.
+            entry["action_offset"] = action_term_offset(env, action_name)
     elif func_name == "generated_commands":
         entry = {
             "name": name,

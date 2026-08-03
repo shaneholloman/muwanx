@@ -28,7 +28,7 @@
  */
 
 import { ObservationBase, type ObservationConfig } from './ObservationBase';
-import { assertCommandTermBound } from './NativeObservation';
+import { assertCommandTermBound, sliceStoredActions } from './NativeObservation';
 import { conformToSize } from './pipeline';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import { slotDims, slotInputName } from '../onnx/session';
@@ -44,6 +44,10 @@ export interface FusedNativeInput {
   size: number;
   /** `command` only: which command term to read. */
   command_name?: string;
+  /** `prev_action` only: which action term, when the term names one. */
+  action_name?: string;
+  /** `prev_action` with an `action_name`: where that term's slice starts. */
+  action_offset?: number;
 }
 
 export interface FusedObservationConfig extends ObservationConfig {
@@ -127,7 +131,7 @@ export class FusedObservation extends ObservationBase<FusedObservationConfig> {
   private readNative(native: FusedNativeInput): Float32Array {
     const raw =
       native.native === 'prev_action'
-        ? this.runner.getLastActions()
+        ? sliceStoredActions(this.runner.getLastActions(), native)
         : this.readCommand(native);
     // Copied and conformed: `raw` may be the runtime's own buffer, and the graph
     // declared a fixed width the feed has to match.

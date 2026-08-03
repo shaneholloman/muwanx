@@ -203,6 +203,34 @@ describe('NativeObservation', () => {
     expect(obs.size).toBe(3);
   });
 
+  it('reads only the named action term\'s slice, not the vector head', () => {
+    // Two action terms: `arm` occupies [0,3), `gripper` [3,4). mjlab's
+    // `last_action("gripper")` is `get_term("gripper").raw_action` — the tail. Before
+    // `action_offset` was read this returned [1, 2, 3] truncated to width 1, i.e.
+    // `arm`'s first number: the right width, the wrong term.
+    const obs = new NativeObservation(
+      fakeRunner({ lastActions: Float32Array.from([1, 2, 3, 9]) }),
+      {
+        name: 'gripper_action',
+        native: 'prev_action',
+        action_name: 'gripper',
+        action_offset: 3,
+        size: 1,
+      },
+    );
+    expect(Array.from(obs.compute({} as never) as Float32Array)).toEqual([9]);
+  });
+
+  it('reads the whole vector when the term names no action term', () => {
+    // The bare `mdp.last_action`, which every reference task uses. No offset is
+    // emitted for it, and the whole vector is the right answer.
+    const obs = new NativeObservation(
+      fakeRunner({ lastActions: Float32Array.from([1, 2, 3, 9]) }),
+      { name: 'actions', native: 'prev_action', size: 4 },
+    );
+    expect(Array.from(obs.compute({} as never) as Float32Array)).toEqual([1, 2, 3, 9]);
+  });
+
   it('refuses to build when command_name names no command term', () => {
     // The miss used to arrive as a zero block inside the policy's input vector,
     // logged nowhere: `getCommand` returns an empty array, `conformToSize` pads it

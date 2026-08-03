@@ -36,6 +36,10 @@ export interface NativeObservationConfig extends ObservationConfig {
   value?: number[];
   /** `command` only: which command term to read. */
   command_name?: string;
+  /** `prev_action` only: which action term, when the term names one. */
+  action_name?: string;
+  /** `prev_action` with an `action_name`: where that term's slice starts. */
+  action_offset?: number;
   scale?: ObservationScale;
   clip?: ObservationClip;
 }
@@ -46,6 +50,32 @@ export function isNativeObservationConfig(
 ): entry is NativeObservationConfig {
   const native = (entry as { native?: unknown }).native;
   return native === 'prev_action' || native === 'command' || native === 'constant';
+}
+
+/**
+ * The stored actions, narrowed to one action term's slice.
+ *
+ * `last_action(action_name=…)` is mjlab's `get_term(name).raw_action` — that term's
+ * slice of the policy output, not the whole vector (`envs/mdp/observations.py`). The
+ * build resolves where the slice starts from the live `ActionManager` and emits it as
+ * `action_offset`; an entry without one is the bare `last_action`, which *is* the
+ * whole vector.
+ *
+ * The build emitted `action_name` from the start and nothing here read it, so a
+ * named term got the vector's head instead of its own slice — `conformToSize`
+ * truncates from the front, which made the wrong numbers the right width. Invisible
+ * while every reference task has exactly one action term (the slice and the vector
+ * coincide), wrong the moment one has two.
+ */
+export function sliceStoredActions(
+  actions: Float32Array,
+  config: { action_offset?: number; size?: number },
+): Float32Array {
+  const offset = config.action_offset;
+  if (offset === undefined) return actions;
+  // A view, not a copy: both callers copy before the pipeline mutates, and
+  // `getLastActions()` already hands back a copy of the runtime's buffer.
+  return actions.subarray(offset, offset + (config.size ?? actions.length - offset));
 }
 
 /**
@@ -127,7 +157,7 @@ export class NativeObservation extends ObservationBase<NativeObservationConfig> 
       case 'constant':
         return this.constant ?? new Float32Array(0);
       case 'prev_action':
-        return this.runner.getLastActions();
+        return sliceStoredActions(this.runner.getLastActions(), this.config);
       case 'command': {
         const name = this.config.command_name;
         const manager = this.runner.getContext()?.commandManager;
