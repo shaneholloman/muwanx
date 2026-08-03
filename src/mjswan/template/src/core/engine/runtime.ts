@@ -824,8 +824,14 @@ export class mjswanRuntime {
         this.commandManager.update(target);
         this.commandManager.updateDebugVisuals();
         // Advances `mode="interval"` timers (mjlab's mid-episode randomization) and
-        // the reset gates' step counters.
-        this.eventManager?.tick(target, this.eventContext());
+        // the reset gates' step counters. Awaited so the mode's terms resolve in config
+        // order, and caught for the same reason the reset block is: one failing graph
+        // should cost a frame's events, not the run.
+        try {
+          await this.eventManager?.tick(target, this.eventContext());
+        } catch (error) {
+          console.warn('[mjswanRuntime] interval events failed:', error);
+        }
       }
 
       const elapsed = (performance.now() - loopStart) / 1000;
