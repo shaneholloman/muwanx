@@ -1553,21 +1553,26 @@ def trace_observation_group(
     for term in terms:
         native_kind = _native_observation_kind(term.func)
         if native_kind is not None:
-            value = term.func(env, **term.params).detach()
             entry: dict[str, Any] = {
                 "name": term.name,
                 "native": native_kind,
                 "input": "native__" + re.sub(r"\W", "_", term.name),
-                "size": int(value.reshape(1, -1).shape[-1]),
             }
             if native_kind == "command":
                 entry["command_name"] = term.params["command_name"]
             elif term.params.get("action_name") is not None:
                 action_name = term.params["action_name"]
                 entry["action_name"] = action_name
-                # The runtime is fed the whole action vector, so it needs the offset
-                # to hand the graph this term's slice rather than the vector's head.
+                # The runtime is fed the whole action vector, so it needs the offset to
+                # hand the graph this term's slice rather than the vector's head.
+                #
+                # Resolved *before* the discovery call below, so an unknown term name
+                # reports which terms the scene does define. Called first, mjlab's own
+                # `get_term` raises a bare `KeyError` from inside the term body and the
+                # build never reaches this.
                 entry["action_offset"] = action_term_offset(env, action_name)
+            value = term.func(env, **term.params).detach()
+            entry["size"] = int(value.reshape(1, -1).shape[-1])
             native_inputs.append(entry)
             native_examples.append(value)
             layout.append({"name": term.name, "size": entry["size"]})

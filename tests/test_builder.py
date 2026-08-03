@@ -527,9 +527,36 @@ def _fake_trace_env():
         def __getitem__(self, name):
             return self._entities[name]
 
+    class _ActionTerm:
+        def __init__(self, raw_action):
+            self.raw_action = raw_action
+
+    class _ActionManager:
+        """Two terms, so `last_action(action_name=…)` is a real slice.
+
+        Every buildable mjlab task declares exactly one action term, where a term's
+        slice and the whole vector coincide — so a single-term fake could not tell a
+        correct `action_offset` from a missing one. `arm` takes [0,3) and `gripper`
+        the tail, mirroring `ActionManager.process_action`'s split.
+        """
+
+        def __init__(self):
+            self.action = torch.tensor([[1.0, 2.0, 3.0, 9.0]])
+            self.active_terms = ["arm", "gripper"]
+            self.action_term_dim = [3, 1]
+
+        def get_term(self, name):
+            offset = 0
+            for term_name, dim in zip(self.active_terms, self.action_term_dim):
+                if term_name == name:
+                    return _ActionTerm(self.action[:, offset : offset + dim])
+                offset += dim
+            raise KeyError(name)
+
     class _Env:
         def __init__(self, entities):
             self.scene = _Scene(entities)
+            self.action_manager = _ActionManager()
 
     data = _Data(
         joint_pos=torch.tensor([[0.1, 0.2]]),
@@ -538,6 +565,15 @@ def _fake_trace_env():
         root_link_pos_w=torch.tensor([[0.0, 0.0, 0.5]]),
     )
     return _Env({"robot": _Entity(data)})
+
+
+# Named `last_action`, not `_fake_last_action`: the tracer classifies a native
+# observation by `func.__name__` (`NATIVE_OBSERVATION_FUNCS`), so the name is the thing
+# under test here. Body mirrors mjlab's `envs/mdp/observations.py`.
+def last_action(env, *, action_name=None, **_):
+    if action_name is None:
+        return env.action_manager.action
+    return env.action_manager.get_term(action_name).raw_action
 
 
 def _fake_joint_pos_rel(env, *, entity_name="robot", **_):
@@ -817,6 +853,78 @@ class TestSaveWebPolicyJson:
         assert group["size"] == 2
         assert "scale" not in group
         assert (out / "main" / "assets" / "s" / group["fused"]).exists()
+
+    def test_last_action_with_a_term_name_emits_its_slice_offset(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        # The two-action-term shape, through the real Builder. No mjlab task has it —
+        # all four declare one term — so without this the offset was only ever checked
+        # against a stub action manager, never emitted by a build.
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={
+                        "joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel),
+                        "gripper_action": ObservationTermCfg(
+                            func=last_action, params={"action_name": "gripper"}
+                        ),
+                    }
+                ),
+            },
+        )
+
+        group = self._policy_json(self._run(builder, tmp_path), "Policy")[
+            "observations"
+        ]["policy"]
+        native = next(
+            entry
+            for entry in group["native_inputs"]
+            if entry["name"] == "gripper_action"
+        )
+        assert native["native"] == "prev_action"
+        assert native["action_name"] == "gripper"
+        # `arm` holds [0,3), so `gripper` starts at 3. Without the offset the runtime
+        # feeds the graph `arm`'s first element at `gripper`'s width — the right width,
+        # the wrong term.
+        assert native["action_offset"] == 3
+        assert native["size"] == 1
+        # And the group still fuses around it: the native term is a graph *input*.
+        assert group["layout"] == [
+            {"name": "joint_pos", "size": 2},
+            {"name": "gripper_action", "size": 1},
+        ]
+
+    def test_last_action_naming_no_action_term_fails_the_build(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        # Degrading would hand the runtime the whole action vector's head, which is the
+        # silently-wrong observation the offset exists to prevent.
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene._config.mjlab_env = _fake_trace_env()
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={
+                        "joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel),
+                        "grip": ObservationTermCfg(
+                            func=last_action, params={"action_name": "grippr"}
+                        ),
+                    }
+                ),
+            },
+        )
+        with pytest.raises(ValueError, match=r"does not define.*arm, gripper"):
+            self._run(builder, tmp_path)
 
     def test_per_term_observations_when_the_group_cannot_fuse(
         self, tmp_path, minimal_model, minimal_onnx
