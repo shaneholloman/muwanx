@@ -208,6 +208,7 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder()
     project = builder.add_project(name="Gentle Humanoid Tracking")
     scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         name="Unitree G1",
         spec=mujoco.MjSpec.from_file(
             str(gentle_humanoid_root / "assets" / "g1" / "g1.xml")

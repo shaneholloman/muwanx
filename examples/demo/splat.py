@@ -138,6 +138,7 @@ def setup_builder() -> mjswan.Builder:
     project = builder.add_project(name="Splat Demo")
 
     scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
         name="G1",
     )

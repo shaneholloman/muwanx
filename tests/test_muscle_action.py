@@ -240,7 +240,9 @@ class TestBuilderMuscleValidation:
 
     def _make_builder(self, model, actions, minimal_onnx):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=model
+        )
         scene.add_policy(name="Policy", policy=minimal_onnx, actions=actions)
         return builder
 
@@ -286,7 +288,9 @@ class TestBuilderMuscleValidation:
         self, tmp_path, muscle_spec, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", spec=muscle_spec)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", spec=muscle_spec
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -322,7 +326,9 @@ class TestBuilderMuscleRoundTrip:
         self, tmp_path, muscle_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=muscle_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=muscle_model
+        )
         handle = scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -349,7 +355,9 @@ class TestBuilderMuscleRoundTrip:
         self, tmp_path, muscle_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=muscle_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=muscle_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,

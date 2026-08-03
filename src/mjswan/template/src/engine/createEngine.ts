@@ -142,6 +142,7 @@ class Engine implements MjswanEngine {
         viewer: input.viewer ?? null,
         events: input.events ?? null,
         terrainData: input.terrainData ?? null,
+        controlDt: input.controlDt ?? null,
         graphs: await resolveGraphs(input.graphs),
         plugins: input.plugins,
       };

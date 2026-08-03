@@ -57,6 +57,12 @@ export interface SceneInput {
   /** Declarative reset events (e.g. terrain randomization) + their terrain data. */
   events?: EventConfig[];
   terrainData?: TerrainData;
+  /**
+   * Seconds per control step — the rate the policy acts at, mjlab's
+   * `timestep * decimation`. The model carries only the physics timestep, so a
+   * scene with a policy has to be told this; the build emits it.
+   */
+  controlDt?: number;
   /** Traced event-term graphs (`"event/push_robot.onnx"`), as {@link PolicyInput.graphs}. */
   graphs?: Record<string, Bytes>;
   /** Scene-scoped custom terms (events). */

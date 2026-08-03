@@ -103,7 +103,9 @@ def built_output(tmp_path, minimal_model, minimal_onnx, monkeypatch) -> Path:
         return env.scene["robot"].data.root_link_pos_w[:, 2] < minimum_height
 
     builder = mjswan.Builder()
-    scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+    scene = builder.add_project(name="P").add_scene(
+        control_dt=0.02, name="S", model=minimal_model
+    )
     # A trace env, so the build really traces terms and the artifacts carry the
     # observation/termination entries and their `.onnx` files. Without them the
     # scans below would run over a bundle holding none of the content at issue.

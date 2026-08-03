@@ -500,8 +500,21 @@ def serialize_terminations(
     for name, term_cfg in terminations.items():
         func = term_cfg.func
         if isinstance(func, TerminationBinding):
-            if func.unsupported_reason is None:
-                result[name] = term_cfg.to_dict()
+            if func.unsupported_reason is not None:
+                # Raises rather than dropping, matching how an unexportable observation
+                # is handled (`serialize_observation_term`). A dropped termination is a
+                # reset condition the episode silently never checks, and dropping it
+                # *here* means the runtime never sees the term either, so it cannot warn
+                # the way it does for a term whose graph failed to load. Nobody finds
+                # out. A term genuinely not wanted in the browser belongs out of the
+                # config, not silently discarded from it.
+                raise ValueError(
+                    f"Termination term {name!r} cannot be exported: "
+                    f"{func.unsupported_reason} Dropping it would leave the episode "
+                    "without a reset condition it is configured to have, with nothing "
+                    "logged at build time or in the browser, so the build stops here."
+                )
+            result[name] = term_cfg.to_dict()
             continue
         if _is_native_termination(term_cfg, env):
             result[name] = _native_termination_entry(name, term_cfg, env)

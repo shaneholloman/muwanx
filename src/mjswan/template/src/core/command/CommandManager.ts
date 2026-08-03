@@ -230,8 +230,8 @@ export class CommandManager {
    * The named term's current command vector, or an empty one if there is no such
    * term.
    *
-   * The empty return serves callers that guard their own name — `getVelocityCommand`
-   * probes with `terms.has` first. A consumer whose *config* declares the name (an
+   * The empty return serves a caller that guards its own name by probing `getTerm`
+   * first. A consumer whose *config* declares the name (an
    * observation term's `command_name`) must validate it against `termNames()` at
    * construction instead: mjlab asserts the lookup
    * (`envs/mdp/observations.py` `generated_commands`), and here an unvalidated miss
@@ -260,16 +260,6 @@ export class CommandManager {
 
   getContext(): CommandTermContext | null {
     return this.context;
-  }
-
-  getVelocityCommand(): Float32Array {
-    if (this.terms.has('velocity')) {
-      return this.getCommand('velocity');
-    }
-    if (this.terms.has('twist')) {
-      return this.getCommand('twist');
-    }
-    return new Float32Array([0.5, 0.0, 0.0]);
   }
 
   setValue(id: string, value: number): void {

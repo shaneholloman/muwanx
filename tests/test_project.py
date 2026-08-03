@@ -151,6 +151,16 @@ class TestProjectHandle:
             def reset(self):
                 calls.append(("env_reset",))
 
+            @property
+            def step_dt(self) -> float:
+                """The task's control rate, which `add_scene_mjlab` reads off the env.
+
+                Modelled here because guessing it is what this replaced: a wrong
+                control rate raises nothing at playback, so a fake that omitted it
+                would let a regression through as a `None` control_dt.
+                """
+                return 0.05
+
         def fake_load_env_cfg(task_id: str, play: bool = False):
             calls.append(("load_env_cfg", task_id, play))
             return FakeEnvCfg()
@@ -181,6 +191,9 @@ class TestProjectHandle:
         assert fake_scene_cfg.num_envs == 1
         # The live env (ADR 0005 tracing) is retained on SceneConfig.
         assert scene._config.mjlab_env is not None
+        # And the task's control rate is taken from it, not derived from the model's
+        # physics timestep — the two differ by the task's `decimation`.
+        assert scene._config.control_dt == 0.05
 
 
 # ===========================================================================

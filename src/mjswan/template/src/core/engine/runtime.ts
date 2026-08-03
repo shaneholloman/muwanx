@@ -55,6 +55,14 @@ const DEFAULT_TERM_SEED = 0x5eed;
 const EMPTY_ACTIONS = new Float32Array(0);
 
 /**
+ * Frame pacing for a scene with no policy, where there is no trained control rate to
+ * match — only the viewer's own step budget. A scene *with* a policy carries its rate
+ * in the config (`ResolvedScene.controlDt`) and the build refuses to emit one without
+ * it, so this is never a fallback for a real task.
+ */
+const DEFAULT_VIEWER_CONTROL_DT = 0.02;
+
+/**
  * Encoder bias by joint name, for the slot reader's `joint_pos_biased`.
  *
  * mjlab randomizes `encoder_bias` per episode and `joint_pos_biased` is what a
@@ -120,6 +128,8 @@ export type ResolvedScene = {
   viewer?: ViewerConfig | null;
   events?: EventConfig[] | null;
   terrainData?: TerrainData | null;
+  /** Seconds per control step (mjlab's `step_dt`); the build emits it per scene. */
+  controlDt?: number | null;
   /** Traced event-term graphs, keyed by the model-relative path (ADR 0005 §4). */
   graphs?: Array<{ name: string; data: ArrayBuffer }>;
   /** Scene-scoped custom terms (events). */
@@ -191,7 +201,8 @@ export class mjswanRuntime {
   private running: boolean;
   private timestep: number;
   private decimation: number;
-  private policyCtrlDt: number | null;
+  /** Seconds per control step, from the scene config; null for a policy-less scene. */
+  private controlDt: number | null;
   private loadingScene: Promise<void> | null;
   private resizeObserver: ResizeObserver | null;
   private dragStateManager: DragStateManager | null;
@@ -353,7 +364,7 @@ export class mjswanRuntime {
     this.running = false;
     this.timestep = 0.001;
     this.decimation = 1;
-    this.policyCtrlDt = null;
+    this.controlDt = null;
     this.loadingScene = null;
     this.dragStateManager = null;
     this.dragForceScale = 100.0;
@@ -378,6 +389,9 @@ export class mjswanRuntime {
   async loadEnvironment(scene: ResolvedScene): Promise<void> {
     this.scenePlugins = scene.plugins ?? {};
     this.terrainData = scene.terrainData ?? null;
+    // Read here rather than in `buildSceneFromMjz`, which is handed the model bytes
+    // alone; it needs the rate to derive `decimation` from the model's timestep.
+    this.controlDt = scene.controlDt && scene.controlDt > 0 ? scene.controlDt : null;
     // A fresh scene is a fresh run: reseed so two loads of the same scene draw the
     // same randomness (ADR 0005 §2).
     this.termRng = new SeededRng(this.termSeed);
@@ -561,8 +575,16 @@ export class mjswanRuntime {
       this.syncStaticBodiesFromData();
 
       this.timestep = this.mjModel.opt.timestep || 0.001;
-      const ctrlDtForDec = this.policyCtrlDt ?? 0.02;
-      this.decimation = Math.max(1, Math.round(ctrlDtForDec / this.timestep));
+      // From the task, never inferred. `decimation` used to come from a hardcoded
+      // 0.02 s control step, which is right for the locomotion and manipulation tasks
+      // (0.005 x 4) and wrong for Cartpole (0.01 x 5 = 0.05) — both Cartpole variants
+      // ran 2.5x too fast, silently, because nothing about a wrong control rate
+      // raises. The build emits mjlab's `step_dt` per scene; a scene with no policy
+      // has no rate to get wrong, so it keeps the old default for viewer-only use.
+      this.decimation = Math.max(
+        1,
+        Math.round((this.controlDt ?? DEFAULT_VIEWER_CONTROL_DT) / this.timestep),
+      );
 
       this.lastSimState.bodies.clear();
       this.updateCachedState();
@@ -947,30 +969,13 @@ export class mjswanRuntime {
       this.policyRunner.reset(state);
       this.policyControl = this.buildPolicyControl(config, runner, this.policyStateBuilder);
 
-      // Infer decimation from fps in obs terms (default heuristic targets 0.02s, some tasks train finer).
-      {
-        const obsGroups = config.observations;
-        const allTerms: Array<Record<string, unknown>> = [];
-        if (Array.isArray(obsGroups)) {
-          allTerms.push(...(obsGroups as Array<Record<string, unknown>>));
-        } else if (obsGroups && typeof obsGroups === 'object') {
-          for (const g of Object.values(obsGroups)) {
-            if (Array.isArray(g)) allTerms.push(...(g as Array<Record<string, unknown>>));
-          }
-        }
-        for (const term of allTerms) {
-          if (!term || this.timestep <= 0) continue;
-          if (typeof term.fps === 'number' && term.fps > 0) {
-            this.policyCtrlDt = 1 / term.fps;
-            const newDec = Math.max(1, Math.round(this.policyCtrlDt / this.timestep));
-            if (newDec !== this.decimation) {
-              console.log(`[PolicyRunner] Decimation updated: ${this.decimation} → ${newDec} (fps=${term.fps}, sim_dt=${this.timestep})`);
-              this.decimation = newDec;
-            }
-            break;
-          }
-        }
-      }
+      // A decimation override inferred from an `fps` field on observation entries used
+      // to sit here. It was dead twice over: no observation entry has ever carried
+      // `fps` (the only `fps` the build emits is motion-clip metadata), and the scan
+      // only walked array-shaped groups while a fused group — mandatory for v1, ADR
+      // §4 — is an object. Being the sole writer of the old `policyCtrlDt`, it also
+      // meant the hardcoded 0.02 s was the only path. The rate now comes from the
+      // scene config, resolved before the model is built.
 
       // Initialize termination manager if termination config is present
       if (config.terminations && Object.keys(config.terminations).length > 0) {

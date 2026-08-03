@@ -241,6 +241,49 @@ class TestBuilderValidation:
         with pytest.raises(ValueError, match="Cannot build an empty application"):
             Builder().build(tmp_path / "out")
 
+    def test_scene_with_a_policy_needs_a_control_dt(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        # The runtime derived this from a hardcoded 0.02 s, right for the locomotion and
+        # manipulation tasks (0.005 x 4) and wrong for Cartpole (0.01 x 5), which played
+        # 2.5x too fast in silence. Nothing about a wrong control rate raises at
+        # playback, so the build refuses to guess.
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene.add_policy(name="Policy", policy=minimal_onnx)
+        with pytest.raises(ValueError, match="has policies but no control_dt"):
+            builder.build(tmp_path / "out", build_frontend=False)
+
+    def test_scene_without_a_policy_needs_no_control_dt(self, tmp_path, minimal_model):
+        # A viewer-only scene has no trained rate to match, so requiring one would be
+        # noise. It must not raise for the reason above.
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.build(tmp_path / "out", build_frontend=False)
+
+    def test_non_positive_control_dt_is_rejected(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            name="S", model=minimal_model, control_dt=0.0
+        )
+        scene.add_policy(name="Policy", policy=minimal_onnx)
+        with pytest.raises(ValueError, match="must be a positive number of seconds"):
+            builder.build(tmp_path / "out", build_frontend=False)
+
+    def test_control_dt_reaches_the_scene_entry(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            name="S", model=minimal_model, control_dt=0.05
+        )
+        scene.add_policy(name="Policy", policy=minimal_onnx)
+        builder._save_config_json(tmp_path)
+        config = json.loads((tmp_path / "assets" / "config.json").read_text())
+        assert config["projects"][0]["scenes"][0]["controlDt"] == 0.05
+
     def test_policy_filename_rejects_empty_string(self):
         with pytest.raises(ValueError):
             Builder()._policy_filename("")
@@ -306,13 +349,17 @@ class TestSaveConfigJson:
 
     def test_config_contains_version(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["version"] == mjswan.__version__
 
     def test_config_has_projects_list(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         config = self._read_config(tmp_path)
         assert isinstance(config["projects"], list)
@@ -320,7 +367,9 @@ class TestSaveConfigJson:
 
     def test_project_name_and_id_in_config(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Main Demo").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Main Demo").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         project = self._read_config(tmp_path)["projects"][0]
         assert project["name"] == "Main Demo"
@@ -328,7 +377,9 @@ class TestSaveConfigJson:
 
     def test_config_omits_plugins_when_declarative(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         config = self._read_config(tmp_path)
         assert config["uses_custom_js"] is False
@@ -344,7 +395,9 @@ class TestSaveConfigJson:
             {"e": SimpleNamespace(ts_src="x.ts", ts_name="E")},
         )
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         config = self._read_config(tmp_path)
         assert config["uses_custom_js"] is True
@@ -352,7 +405,9 @@ class TestSaveConfigJson:
 
     def test_scene_path_uses_name2id_with_mjb_for_model(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="My Scene", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="My Scene", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         scene = self._read_config(tmp_path)["projects"][0]["scenes"][0]
         assert scene["name"] == "My Scene"
@@ -360,7 +415,9 @@ class TestSaveConfigJson:
 
     def test_scene_path_uses_mjz_for_spec(self, tmp_path, minimal_spec):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="My Scene", spec=minimal_spec)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="My Scene", spec=minimal_spec
+        )
         builder._save_config_json(tmp_path)
         scene = self._read_config(tmp_path)["projects"][0]["scenes"][0]
         assert scene["path"] == "my_scene/scene.mjz"
@@ -369,7 +426,9 @@ class TestSaveConfigJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(name="Policy", policy=minimal_onnx)
         builder._save_config_json(tmp_path)
         policy = self._read_config(tmp_path)["projects"][0]["scenes"][0]["policies"][0]
@@ -380,7 +439,9 @@ class TestSaveConfigJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(name="Policy", policy=minimal_onnx).add_motion(
             name="Spin Kick",
             source="motion.npz",
@@ -395,8 +456,12 @@ class TestSaveConfigJson:
 
     def test_multiple_projects_all_present_in_config(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Project A").add_scene(name="S", model=minimal_model)
-        builder.add_project(name="Project B").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Project A").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        builder.add_project(name="Project B").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         projects = self._read_config(tmp_path)["projects"]
         assert len(projects) == 2
@@ -405,9 +470,11 @@ class TestSaveConfigJson:
 
     def test_second_project_auto_id_reflected_in_config(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Main").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Main").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder.add_project(name="MuJoCo Menagerie").add_scene(
-            name="S", model=minimal_model
+            control_dt=0.02, name="S", model=minimal_model
         )
         builder._save_config_json(tmp_path)
         projects = self._read_config(tmp_path)["projects"]
@@ -443,7 +510,9 @@ class TestUsesCustomJsFlag:
     def test_clean_build_is_false(self, tmp_path, minimal_model, monkeypatch):
         self._isolate_registries(monkeypatch)
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["uses_custom_js"] is False
 
@@ -457,7 +526,9 @@ class TestUsesCustomJsFlag:
             ts_name="MyTerm", ts_src="/tmp/whatever.ts"
         )
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["uses_custom_js"] is True
 
@@ -471,7 +542,9 @@ class TestUsesCustomJsFlag:
             ts_name="MyTerm", ts_src="/tmp/whatever.ts"
         )
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["uses_custom_js"] is True
 
@@ -490,7 +563,9 @@ class TestUsesCustomJsFlag:
             )
         )
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["uses_custom_js"] is False
 
@@ -641,7 +716,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -662,7 +739,9 @@ class TestSaveWebPolicyJson:
     ):
         pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -684,7 +763,9 @@ class TestSaveWebPolicyJson:
     ):
         pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -714,7 +795,9 @@ class TestSaveWebPolicyJson:
     ):
         pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -730,7 +813,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -745,7 +830,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(name="Policy", policy=minimal_onnx)
         out = self._run(builder, tmp_path)
         policy_id = name2id("Policy")
@@ -757,7 +844,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -773,7 +862,9 @@ class TestSaveWebPolicyJson:
         motion_file.write_bytes(b"motion-bytes")
 
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -807,7 +898,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -827,7 +920,9 @@ class TestSaveWebPolicyJson:
         # scene's live env; no mjswan-side reimplementation is involved.
         pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -862,7 +957,9 @@ class TestSaveWebPolicyJson:
         # against a stub action manager, never emitted by a build.
         pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -907,7 +1004,9 @@ class TestSaveWebPolicyJson:
         # silently-wrong observation the offset exists to prevent.
         pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -934,7 +1033,9 @@ class TestSaveWebPolicyJson:
         # differently (see `_group_is_fusable`).
         pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -970,7 +1071,9 @@ class TestSaveWebPolicyJson:
             json.dumps({"onnx": {"path": "old.onnx"}, "existing_key": "kept"})
         )
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -995,7 +1098,9 @@ class TestSaveWebPolicyJson:
             json.dumps({"onnx": {"path": "old.onnx"}, "existing_key": "kept"})
         )
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -1024,7 +1129,9 @@ class TestSaveWebPolicyJson:
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "old.onnx"}}))
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -1063,7 +1170,9 @@ class TestSaveWebPolicyJson:
             )
         )
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -1080,7 +1189,9 @@ class TestSaveWebPolicyJson:
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "stale.onnx"}}))
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -1096,7 +1207,9 @@ class TestSaveWebPolicyJson:
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "stale.onnx"}}))
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -1115,7 +1228,9 @@ class TestSaveWebPolicyJson:
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "old.onnx"}}))
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -1133,7 +1248,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -1150,7 +1267,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -1168,7 +1287,9 @@ class TestSaveWebPolicyJson:
     ):
         pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -1188,7 +1309,9 @@ class TestSaveWebPolicyJson:
     ):
         pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
@@ -1218,20 +1341,26 @@ class TestSaveWebPolicyJson:
 class TestFullBuild:
     def test_build_creates_assets_config_json(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert (tmp_path / "out" / "assets" / "config.json").exists()
 
     def test_build_with_model_creates_mjb_file(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         scene_dir = tmp_path / "out" / "main" / "assets" / "scene"
         assert (scene_dir / "scene.mjb").exists()
 
     def test_build_with_spec_creates_mjz_file(self, tmp_path, minimal_spec):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="Scene", spec=minimal_spec)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", spec=minimal_spec
+        )
         builder.build(tmp_path / "out")
         scene_dir = tmp_path / "out" / "main" / "assets" / "scene"
         assert (scene_dir / "scene.mjz").exists()
@@ -1240,27 +1369,33 @@ class TestFullBuild:
         self, tmp_path, minimal_model
     ):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert (tmp_path / "out" / "main").is_dir()
 
     def test_build_project_with_id_uses_id_as_directory(self, tmp_path, minimal_model):
         builder = Builder()
         builder.add_project(name="Test", id="demo").add_scene(
-            name="S", model=minimal_model
+            control_dt=0.02, name="S", model=minimal_model
         )
         builder.build(tmp_path / "out")
         assert (tmp_path / "out" / "demo").is_dir()
 
     def test_build_returns_mjswan_app_instance(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         app = builder.build(tmp_path / "out")
         assert isinstance(app, mjswan.MjswanApp)
 
     def test_build_output_excludes_dev_and_test_files(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         out = tmp_path / "out"
         builder.build(out)
         # Dev/test scaffolding (harness, e2e, configs, type shims, fixtures) must
@@ -1322,7 +1457,9 @@ class TestMtHeaders:
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
         monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
         builder = Builder(mt=False)
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         out = tmp_path / "out"
         builder._save_web(out)
         assert not (out / "_headers").exists()
@@ -1332,7 +1469,9 @@ class TestMtHeaders:
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
         monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
         builder = Builder(mt=True)
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         out = tmp_path / "out"
         builder._save_web(out)
         headers_file = out / "_headers"
@@ -1353,7 +1492,9 @@ class TestMtHeaders:
         monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
 
         builder = Builder(mt=False)
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         out = tmp_path / "out"
         builder._save_web(out)
 
@@ -1368,11 +1509,15 @@ class TestMtHeaders:
 class TestFullBuildPhase4:
     def test_second_build_reuses_cached_frontend(self, tmp_path, minimal_model, capsys):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder.build(tmp_path / "out1")  # warms the cache
         capsys.readouterr()
         builder2 = Builder()
-        builder2.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder2.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder2.build(tmp_path / "out2")  # identical inputs → no frontend rebuild
         assert "Reusing cached frontend build" in capsys.readouterr().out
         assert (tmp_path / "out2" / "assets" / "config.json").exists()
@@ -1400,7 +1545,9 @@ class TestFullBuildPhase4:
         )
         out = tmp_path / "out"
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder.build(out)
 
         config = json.loads((out / "assets" / "config.json").read_text())
@@ -1419,19 +1566,25 @@ class TestFullBuildPhase4:
 class TestFullBuildMt:
     def test_mt_false_no_headers_file(self, tmp_path, minimal_model):
         builder = Builder(mt=False)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert not (tmp_path / "out" / "_headers").exists()
 
     def test_mt_false_no_coi_serviceworker(self, tmp_path, minimal_model):
         builder = Builder(mt=False)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert not (tmp_path / "out" / "coi-serviceworker.js").exists()
 
     def test_mt_true_writes_headers_file(self, tmp_path, minimal_model):
         builder = Builder(mt=True)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         headers = tmp_path / "out" / "_headers"
         assert headers.exists()
@@ -1441,13 +1594,17 @@ class TestFullBuildMt:
 
     def test_mt_true_emits_coi_serviceworker(self, tmp_path, minimal_model):
         builder = Builder(mt=True)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert (tmp_path / "out" / "coi-serviceworker.js").exists()
 
     def test_mt_true_injects_sw_script_into_html(self, tmp_path, minimal_model):
         builder = Builder(mt=True)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         html = (tmp_path / "out" / "index.html").read_text()
         assert "coi-serviceworker.js" in html
@@ -1458,7 +1615,9 @@ class TestFullBuildMt:
 class TestFullBuildGtmId:
     def test_gtm_snippet_injected_into_all_html_files(self, tmp_path, minimal_model):
         builder = Builder(gtm_id="GTM-SAMPLE123")
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         out = tmp_path / "out"
         for html_file in [out / "index.html", out / "main" / "index.html"]:
@@ -1469,7 +1628,9 @@ class TestFullBuildGtmId:
 
     def test_no_gtm_without_gtm_id(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         html = (tmp_path / "out" / "index.html").read_text()
         assert "googletagmanager.com" not in html

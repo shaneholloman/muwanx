@@ -62,6 +62,7 @@ class ProjectHandle:
         model: mujoco.MjModel | None = None,
         spec: mujoco.MjSpec | None = None,
         metadata: dict[str, Any] | None = None,
+        control_dt: float | None = None,
     ) -> SceneHandle:
         """Add a MuJoCo scene to this project.
 
@@ -81,6 +82,12 @@ class ProjectHandle:
             model: MuJoCo model for the scene (saved as .mjb).
             spec: MuJoCo spec for the scene (saved as .mjz).
             metadata: Optional metadata dictionary for the scene.
+            control_dt: Seconds per control step — the rate the policy acts at,
+                mjlab's ``timestep * decimation``. Required once the scene carries a
+                policy: the model supplies only the physics ``timestep``, so nothing
+                else can supply this, and a wrong control rate produces no error at
+                playback — only a policy running at a speed it was not trained for.
+                :meth:`add_scene_mjlab` fills it in from the task.
 
         Returns:
             SceneHandle for adding policies and further configuration.
@@ -113,6 +120,7 @@ class ProjectHandle:
             model=model,
             spec=spec,
             metadata=metadata,
+            control_dt=None if control_dt is None else float(control_dt),
         )
         self._config.scenes.append(scene_config)
         return SceneHandle(scene_config, self)
@@ -166,6 +174,12 @@ class ProjectHandle:
         # (which lacks the manager/torch machinery `Entity.data` properties need).
         handle._config.mjlab_env = ManagerBasedRlEnv(env_cfg, device="cpu")
         handle._config.mjlab_env.reset()
+        # The task's own control rate, not a guess. `step_dt` is
+        # `sim.mujoco.timestep * decimation`, and the two disagree across tasks —
+        # Cartpole is 0.01 x 5 = 0.05 while the locomotion tasks are 0.005 x 4 = 0.02
+        # — so anything derived from the model's timestep alone is wrong for some of
+        # them.
+        handle._config.control_dt = float(handle._config.mjlab_env.step_dt)
         viewer_cfg = _adapt_mjlab_viewer_config(getattr(env_cfg, "viewer", None))
         if viewer_cfg is not None:
             handle.set_viewer(viewer_cfg)
