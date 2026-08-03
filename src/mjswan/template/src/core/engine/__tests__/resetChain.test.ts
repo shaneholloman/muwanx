@@ -2,15 +2,16 @@
  * The reset chain's ordering (ADR 0005 §8, mjlab's `_reset_idx`).
  *
  * `runtime.ts` needs the MuJoCo WASM module to instantiate, so the order it used to
- * express inline — `void eventManager.onReset(…)` followed immediately by
- * `commandManager.resetTerms()` — had no test and no way to get one. These cover the
- * extracted sequence, and every one of them passes under `void` except the ordering
- * ones, which is the point: they fail the moment the await is dropped again.
+ * express inline — `void eventManager.onReset(…)`, then `commandManager.resetTerms()`,
+ * with `policyRunner.reset` trailing both — had no test and no way to get one. These
+ * pin the extracted sequence: the ordering cases fail the moment the await is dropped
+ * or the policy reset drifts back past the commands.
  */
 import { describe, expect, it } from 'vitest';
 
-import { applyResetTerms } from '../resetChain';
+import { applyResetTerms, type ResetChain } from '../resetChain';
 import type { EventContext } from '../../event/EventBase';
+import type { PolicyState } from '../../policy/types';
 
 /** The chain only forwards this, so an empty scene context is enough. */
 const CONTEXT = {
@@ -25,21 +26,34 @@ function settle(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-describe('applyResetTerms', () => {
-  it('resets the command terms only after the reset events have landed', async () => {
-    const order: string[] = [];
-    const events = {
+/** A chain with every sink recording into `order`, overridable per test. */
+function chainRecording(order: string[], overrides: Partial<ResetChain> = {}): ResetChain {
+  return {
+    events: {
       onReset: async () => {
         await settle();
         order.push('event');
       },
-    };
-    const commands = { resetTerms: () => order.push('command') };
+    },
+    policy: { reset: () => order.push('policy') },
+    commands: { resetTerms: () => order.push('command') },
+    context: CONTEXT,
+    ...overrides,
+  };
+}
 
-    await applyResetTerms(events, commands, CONTEXT);
+describe('applyResetTerms', () => {
+  it('runs event -> policy -> command, mjlab\'s _reset_idx order', async () => {
+    const order: string[] = [];
+    await applyResetTerms(chainRecording(order));
+    // Before this chain existed: ['command', 'event', 'policy'] — the events fired
+    // un-awaited and the policy reset trailed the command reset.
+    expect(order).toEqual(['event', 'policy', 'command']);
+  });
 
-    // Un-awaited (`void events.onReset()`) gives ['command', 'event'] — mjlab runs
-    // `event_manager.apply(mode="reset")` to completion first.
+  it('resets the command terms only after the reset events have landed', async () => {
+    const order: string[] = [];
+    await applyResetTerms(chainRecording(order, { policy: null }));
     expect(order).toEqual(['event', 'command']);
   });
 
@@ -48,15 +62,16 @@ describe('applyResetTerms', () => {
     // async) and `TrackingCommand.reset` writes `qpos` too (synchronous). mjlab
     // assigns in `_reset_idx` order, so the command's value is the survivor.
     const qpos = [0];
-    const events = {
-      onReset: async () => {
-        await settle();
-        qpos[0] = 1;
+    await applyResetTerms({
+      events: {
+        onReset: async () => {
+          await settle();
+          qpos[0] = 1;
+        },
       },
-    };
-    const commands = { resetTerms: () => { qpos[0] = 2; } };
-
-    await applyResetTerms(events, commands, CONTEXT);
+      commands: { resetTerms: () => { qpos[0] = 2; } },
+      context: CONTEXT,
+    });
     // Settle *after* the call as well: an un-awaited event write lands here rather
     // than before the assertion, so without this the test passes either way.
     await settle();
@@ -66,21 +81,52 @@ describe('applyResetTerms', () => {
     expect(qpos[0]).toBe(2);
   });
 
-  it('still resets the command terms when the scene has no event manager', async () => {
+  it('builds the policy state after the events, not before', async () => {
+    // Why `buildState` is a thunk. mjlab resets the observation manager inside
+    // `_reset_idx`, after the reset events have written the initial state, so the
+    // history it primes from is the post-event one.
+    const qpos = [0];
+    let seen: number | null = null;
+    await applyResetTerms({
+      events: {
+        onReset: async () => {
+          await settle();
+          qpos[0] = 7;
+        },
+      },
+      policy: { reset: state => { seen = (state?.jointPos?.[0] as number) ?? null; } },
+      commands: { resetTerms: () => {} },
+      context: CONTEXT,
+      buildState: () => ({ jointPos: Float32Array.from(qpos) }) as unknown as PolicyState,
+    });
+    expect(seen).toBe(7);
+  });
+
+  it('skips absent managers rather than failing', async () => {
+    // `loadPolicyConfig` runs this before a PolicyRunner exists, and a scene may
+    // define no events at all.
     const order: string[] = [];
-    await applyResetTerms(null, { resetTerms: () => order.push('command') }, CONTEXT);
+    await applyResetTerms({
+      events: null,
+      policy: null,
+      commands: { resetTerms: () => order.push('command') },
+      context: CONTEXT,
+    });
     expect(order).toEqual(['command']);
   });
 
-  it('propagates a failing reset event instead of resetting commands on top of it', async () => {
+  it('propagates a failing reset event instead of resetting on top of it', async () => {
     // The caller decides what a failed reset means (the step loop lets it surface,
-    // the sync public verb logs it). Swallowing it here would reset the commands
-    // against a half-applied scene and report nothing.
-    let reset = false;
-    const events = { onReset: () => Promise.reject(new Error('graph missing')) };
+    // the sync public verb logs it). Swallowing it here would reset the policy and
+    // commands against a half-applied scene and report nothing.
+    const order: string[] = [];
     await expect(
-      applyResetTerms(events, { resetTerms: () => { reset = true; } }, CONTEXT),
+      applyResetTerms(
+        chainRecording(order, {
+          events: { onReset: () => Promise.reject(new Error('graph missing')) },
+        }),
+      ),
     ).rejects.toThrow('graph missing');
-    expect(reset).toBe(false);
+    expect(order).toEqual([]);
   });
 });

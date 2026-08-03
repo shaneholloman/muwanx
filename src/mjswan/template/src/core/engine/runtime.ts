@@ -481,20 +481,19 @@ export class mjswanRuntime {
    */
   resetSimulation(): void {
     // Stays synchronous — ADR 0004 keeps the engine's public verbs sync. The sim
-    // state and the policy carry reset before this returns; the reset events and
-    // command terms land a frame or two later, the accepted lag of ADR 0005 §8. The
-    // step loop awaits them instead, because there the writes have a reader in the
-    // same frame (`mj_forward`, then the command resample).
+    // state and the policy's ORT carry reset before this returns; the ordered terms
+    // (reset events, then the policy and command resets) land after the events'
+    // inference, the accepted lag of ADR 0005 §8. The step loop awaits them instead,
+    // because there the writes have a reader in the same frame (`mj_forward`, then
+    // the command resample).
     //
-    // The state built below is unaffected by the deferred `mj_forward`:
-    // `PolicyStateBuilder.build` reads only `qpos`/`qvel`, both already restored.
+    // The deferral is bounded by one reset's inference — tens of microseconds against
+    // a 20 ms control step — and resolves through the microtask queue even when a
+    // scene has no reset events at all, so the stored actions are zeroed well before
+    // the loop's next physics step either way.
     void this.resetSimulationState().catch((error) => {
       console.warn('[mjswanRuntime] reset terms failed:', error);
     });
-    if (this.policyRunner && this.policyStateBuilder) {
-      const state = this.policyStateBuilder.build();
-      this.policyRunner.reset(state);
-    }
     console.log('[mjswanRuntime] Simulation reset');
   }
 
@@ -780,11 +779,9 @@ export class mjswanRuntime {
             // put `TrackingCommand.reset`'s `qpos` write ahead of the event's instead
             // of after it (see `resetChain`).
             await this.resetSimulationState({ forward: false });
+            // Last, as in mjlab (`_reset_idx` ends with `termination_manager.reset`);
+            // everything before it is ordered inside `resetSimulationState`.
             this.terminationManager.reset();
-            if (this.policyRunner) {
-              const resetState = this.policyStateBuilder.build();
-              this.policyRunner.reset(resetState);
-            }
           }
         }
 
@@ -1288,7 +1285,15 @@ export class mjswanRuntime {
     this.onnxTimeStep = 0;
     this.lastSimState.bodies.clear();
 
-    await applyResetTerms(this.eventManager, this.commandManager, this.eventContext());
+    await applyResetTerms({
+      events: this.eventManager,
+      policy: this.policyRunner,
+      commands: this.commandManager,
+      context: this.eventContext(),
+      // Read after the events land, which is why it is a thunk. Null on the
+      // `loadPolicyConfig` path, where no runner exists yet.
+      buildState: () => this.policyStateBuilder?.build(),
+    });
 
     // Re-checked rather than relying on the narrowing above: the scene can be
     // disposed while the reset events are in flight.
