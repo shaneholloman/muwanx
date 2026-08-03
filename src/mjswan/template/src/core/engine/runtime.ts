@@ -25,6 +25,7 @@ import {
   updateCameraFromData,
 } from './viewer_config';
 import { resolveActionClip, stepPhysics, type ResolvedActionTerm } from '../action/applyAction';
+import { applyResetTerms } from './resetChain';
 import { Observations } from '../observation/observations';
 import { TerminationManager } from '../termination/TerminationManager';
 import { Terminations } from '../termination/terminations';
@@ -479,7 +480,17 @@ export class mjswanRuntime {
    * Can be called from UI components via the CommandManager
    */
   resetSimulation(): void {
-    this.resetSimulationState();
+    // Stays synchronous — ADR 0004 keeps the engine's public verbs sync. The sim
+    // state and the policy carry reset before this returns; the reset events and
+    // command terms land a frame or two later, the accepted lag of ADR 0005 §8. The
+    // step loop awaits them instead, because there the writes have a reader in the
+    // same frame (`mj_forward`, then the command resample).
+    //
+    // The state built below is unaffected by the deferred `mj_forward`:
+    // `PolicyStateBuilder.build` reads only `qpos`/`qvel`, both already restored.
+    void this.resetSimulationState().catch((error) => {
+      console.warn('[mjswanRuntime] reset terms failed:', error);
+    });
     if (this.policyRunner && this.policyStateBuilder) {
       const state = this.policyStateBuilder.build();
       this.policyRunner.reset(state);
@@ -763,7 +774,12 @@ export class mjswanRuntime {
           const postState = this.policyStateBuilder.build();
           const result = this.terminationManager.evaluate(postState, target);
           if (result.done) {
-            this.resetSimulationState({ forward: false });
+            // Awaited: the reset events' writes have a reader in this same frame —
+            // the `mj_forward` below, and then the command resample it feeds. Firing
+            // them un-awaited let a command resample against the pre-reset pose, and
+            // put `TrackingCommand.reset`'s `qpos` write ahead of the event's instead
+            // of after it (see `resetChain`).
+            await this.resetSimulationState({ forward: false });
             this.terminationManager.reset();
             if (this.policyRunner) {
               const resetState = this.policyStateBuilder.build();
@@ -847,8 +863,9 @@ export class mjswanRuntime {
       this.initialQpos = Array.isArray(config.initial_qpos) ? (config.initial_qpos as number[]) : null;
       this.initialQvel = Array.isArray(config.initial_qvel) ? (config.initial_qvel as number[]) : null;
       // `resetSimulationState` does the forward; a second one here would be
-      // redundant work on every policy load.
-      this.resetSimulationState();
+      // redundant work on every policy load. Awaited — this path is already async,
+      // so the reset terms may as well land before the commands are rebuilt below.
+      await this.resetSimulationState();
 
       // Initialize commands from policy config if present
       if (config.commands && typeof config.commands === 'object') {
@@ -1227,14 +1244,21 @@ export class mjswanRuntime {
   }
 
   /**
-   * Put the sim back to its initial state and fire `mode="reset"` events.
+   * Put the sim back to its initial state, fire `mode="reset"` events, then reset
+   * the command terms — in that order, which is mjlab's (see `resetChain`).
+   *
+   * Async because the ordering is: the events' writes have to land before anything
+   * reads or overwrites them. The sim state and the policy's own ORT carry still
+   * reset **synchronously**, before the first `await`, so a caller that cannot await
+   * (the public `resetSimulation()`) still gets an immediately-reset sim and only the
+   * term half arrives late.
    *
    * `forward: false` when the caller runs its own `mj_forward` right after — the
    * step loop does, because ADR 0005 §8 allows exactly one forward per step and
    * mjlab spends it *after* the reset block (`ManagerBasedRlEnv.step`), covering
    * the reset write and the decimation loop's one-substep staleness in one call.
    */
-  private resetSimulationState({ forward = true }: { forward?: boolean } = {}): void {
+  private async resetSimulationState({ forward = true }: { forward?: boolean } = {}): Promise<void> {
     if (!this.mjModel || !this.mjData) {
       return;
     }
@@ -1255,19 +1279,20 @@ export class mjswanRuntime {
         qvel[i] = this.initialQvel[i];
       }
     }
-    // Not awaited: `resetSimulationState` is synchronous and so is the public
-    // `resetSimulation()`. An ONNX reset term's write therefore lands a frame or
-    // two late — the same accepted one-frame lag as the rest of the async
-    // boundary (ADR 0005 §8), and the alternative is making reset async all the
-    // way out through the engine API.
-    void this.eventManager?.onReset(this.eventContext());
-    this.commandManager.resetTerms();
+    // The policy's own carry, reset with the sim state rather than with the terms:
+    // it reads nothing from the scene, so there is no order to respect and a caller
+    // that cannot await should still see it cleared immediately.
     if (this.onnxModule) {
       this.onnxInputDict = this.onnxModule.initInput();
     }
     this.onnxTimeStep = 0;
     this.lastSimState.bodies.clear();
-    if (forward) {
+
+    await applyResetTerms(this.eventManager, this.commandManager, this.eventContext());
+
+    // Re-checked rather than relying on the narrowing above: the scene can be
+    // disposed while the reset events are in flight.
+    if (forward && this.mjModel && this.mjData) {
       this.mujoco.mj_forward(this.mjModel, this.mjData);
       this.updateCachedState();
     }
