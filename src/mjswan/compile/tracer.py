@@ -426,6 +426,15 @@ class ConstantTerm(ValueError):
     """
 
 
+class ConstantGroup(ValueError):
+    """Every term in a group is native or constant, so the group has no graph.
+
+    Not an error: the per-term path serializes each of these on its own (a native
+    marker, or a baked ``native: constant``). The fused path raises this so the
+    caller can fall back to it rather than fusing an empty graph.
+    """
+
+
 class UntraceableTerm(ValueError):
     """A term that read state the tracer could not follow into the graph.
 
@@ -1424,6 +1433,7 @@ class GroupTermSpec:
     clip: tuple[float, float] | None = None
     scale: Any = None
     """Per-term scale — a float, or a sequence broadcast over the term's width."""
+    native_size: int | None = None
 
 
 @dataclass
@@ -1514,6 +1524,32 @@ class _GroupModule(nn.Module):
         return torch.cat(pieces, dim=-1)
 
 
+def _native_example(term: GroupTermSpec, env: Any) -> torch.Tensor:
+    """Example value fixing a native term's graph-input width.
+
+    A native term is an input, not a body, so only its width matters — but the
+    width has to be fixed at export time. The live env is asked first; a trace env
+    built by :func:`mjswan.trace_env.build_single_entity_trace_env` has no action
+    terms and no command manager, so ``last_action`` comes back empty and
+    ``generated_commands`` raises. Both widths live browser-side there, and the
+    build hands them down as ``native_size``.
+    """
+    try:
+        value = term.func(env, **term.params).detach()
+    except Exception:  # noqa: BLE001 — a trace env legitimately has neither
+        value = None
+    if value is not None and value.reshape(1, -1).shape[-1] > 0:
+        return value
+    if term.native_size:
+        return torch.zeros(1, term.native_size)
+    raise ValueError(
+        f"Observation term {term.name!r} is native, but neither the trace env nor "
+        "the policy config gives its width. Set the policy's "
+        "`policy_joint_names`/`policy_num_actions` (for `last_action`), or declare "
+        "the command's UI inputs (for `generated_commands`)."
+    )
+
+
 def _scale_tensor(scale: Any, like: torch.Tensor) -> torch.Tensor:
     """A term's ``scale`` as a tensor broadcastable over its output."""
     if isinstance(scale, torch.Tensor):
@@ -1560,7 +1596,7 @@ def trace_observation_group(
     for term in terms:
         native_kind = _native_observation_kind(term.func)
         if native_kind is not None:
-            value = term.func(env, **term.params).detach()
+            value = _native_example(term, env)
             entry: dict[str, Any] = {
                 "name": term.name,
                 "native": native_kind,
@@ -1610,7 +1646,7 @@ def trace_observation_group(
         )
 
     if not dynamic:
-        raise ValueError(
+        raise ConstantGroup(
             f"Observation group {name!r} reads no time-varying state; every term is "
             "native or constant, so there is no graph to run."
         )

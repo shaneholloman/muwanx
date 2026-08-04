@@ -19,6 +19,7 @@ MyoFinger XMLs are fetched at runtime from upstream, so this example adds no
 Python dependency on ``myo_sim``.
 """
 
+import os
 from pathlib import Path
 from urllib.request import urlretrieve
 
@@ -44,11 +45,11 @@ INITIAL_QPOS = [0.0, 0.3, 0.3, 0.3]
 INITIAL_QVEL = [0.0] * NUM_JOINTS
 
 _MYOFINGER_BASE = "https://raw.githubusercontent.com/MyoHub/myo_sim/main/finger"
-_CACHE_DIR = Path.home() / ".cache" / "mjswan" / "myofinger"
+_CACHE_DIR = Path(__file__).parent / "assets" / "myofinger"
 
 
 def _fetch_myofinger() -> Path:
-    """Download MyoFinger XMLs into the user cache; return the entry-point XML."""
+    """Download MyoFinger XMLs next to this demo; return the entry-point XML."""
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     for name in ("myofinger_v0.xml", "finger_v0.xml"):
         target = _CACHE_DIR / name
@@ -117,10 +118,13 @@ def setup_builder() -> mjswan.Builder:
         )
     )
 
-    handle = scene.add_policy(
+    scene.add_policy(
         name="Random Action",
         policy=_build_policy(),
         policy_joint_names=[],
+        policy_num_actions=NUM_MUSCLES,
+        initial_qpos=INITIAL_QPOS,
+        initial_qvel=INITIAL_QVEL,
         observations={
             "policy": ObservationGroupCfg(
                 terms={
@@ -143,16 +147,17 @@ def setup_builder() -> mjswan.Builder:
         },
     )
 
-    handle._config.policy_num_actions = NUM_MUSCLES
-    handle._config.initial_qpos = INITIAL_QPOS
-    handle._config.initial_qvel = INITIAL_QVEL
-
     return builder
 
 
 def main():
+    """Environment variables:
+    MJSWAN_NO_LAUNCH: Set to '1' to skip launching the browser
+    """
     builder = setup_builder()
     app = builder.build()
+    if os.getenv("MJSWAN_NO_LAUNCH") == "1":
+        return
     app.launch()
 
 

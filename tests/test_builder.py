@@ -611,6 +611,32 @@ class TestSaveWebPolicyJson:
         assert scene_path == "s/scene.mjz"
         assert (out / "main" / "assets" / scene_path).is_file()
 
+    def test_terms_without_a_trace_env_name_the_missing_call(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """A plain `add_scene` scene has no env to trace against until it is given one.
+
+        The tracer used to reach `None.scene` and raise `AttributeError` from four
+        frames down, which says nothing about the one line the author is missing.
+        """
+
+        def joint_pos(env):
+            return env.scene["robot"].data.joint_pos
+
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={"joint_pos": ObservationTermCfg(func=joint_pos)}
+                )
+            },
+        )
+        with pytest.raises(ValueError, match="set_trace_env"):
+            self._run(builder, tmp_path)
+
     # -----------------------------------------------------------------------
     # no-config_path branch
     # -----------------------------------------------------------------------

@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .command import CommandTermConfig
+from .command import ButtonConfig, CommandTermConfig
 from .envs.mdp.events import EventBinding
 from .envs.mdp.observations import ObservationBinding
 from .envs.mdp.terminations import TerminationBinding
@@ -121,9 +121,13 @@ def _native_observation_entry(
         return None
 
     try:
-        entry["size"] = _tensor_width(func(env, **params))
+        width = _tensor_width(func(env, **params))
     except Exception:  # noqa: BLE001 — best-effort; runtime resolves it instead
-        pass
+        width = 0
+    if width:
+        # A zero width is the trace env answering "I have no action manager", not a
+        # term of no width; shipping it would fix the runtime's buffer at nothing.
+        entry["size"] = width
     return entry
 
 
@@ -269,8 +273,52 @@ def _group_is_fusable(group: ObservationGroupCfg) -> bool:
     return True
 
 
+def policy_native_sizes(
+    data: dict[str, Any], commands: dict[str, CommandTermConfig] | None
+) -> dict[str, int]:
+    """Widths of the native observation terms, keyed as :func:`_native_size` reads them.
+
+    ``last_action`` and ``generated_commands`` read env-level state, and a trace env
+    built for a plain ``add_scene()`` scene has neither an action term nor the
+    command (a browser-only ``UiCommand``). A fused graph still needs a fixed
+    width, so it comes from the policy's own config: the action count the runtime
+    will drive, and the command's value-bearing UI inputs (buttons carry no value —
+    see ``UiCommand.getCommand``).
+    """
+    sizes: dict[str, int] = {}
+    num_actions = data.get("policy_num_actions") or len(
+        data.get("policy_joint_names") or ()
+    )
+    if num_actions:
+        sizes["prev_action"] = int(num_actions)
+    for name, cmd in (commands or {}).items():
+        if cmd.ui is None:
+            continue
+        width = sum(1 for inp in cmd.ui.inputs if not isinstance(inp, ButtonConfig))
+        if not width:
+            continue
+        sizes[f"command:{name}"] = width
+    return sizes
+
+
+def _native_size(
+    term_cfg: ObservationTermCfg, native_sizes: dict[str, int]
+) -> int | None:
+    """Declared width for a native term, or ``None`` if it isn't native."""
+    func_name = getattr(term_cfg.func, "__name__", None)
+    if func_name == "last_action":
+        return native_sizes.get("prev_action")
+    if func_name == "generated_commands":
+        return native_sizes.get(f"command:{term_cfg.params['command_name']}")
+    return None
+
+
 def _fused_group_entry(
-    group: ObservationGroupCfg, env: Any, out_dir: Path, group_name: str
+    group: ObservationGroupCfg,
+    env: Any,
+    out_dir: Path,
+    group_name: str,
+    native_sizes: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Trace the group as one graph and return the fused config entry."""
     from .compile.tracer import (
@@ -286,6 +334,7 @@ def _fused_group_entry(
             params=_resolved_params(term_cfg.params, env),
             clip=tuple(term_cfg.clip) if term_cfg.clip else None,
             scale=term_cfg.scale,
+            native_size=_native_size(term_cfg, native_sizes or {}),
         )
         for name, term_cfg in group.terms.items()
     ]
@@ -373,7 +422,11 @@ def _raycast_descriptors(export: Any, env: Any) -> dict[str, Any]:
 
 
 def serialize_observation_group(
-    group: ObservationGroupCfg, env: Any, out_dir: Path, group_name: str = "policy"
+    group: ObservationGroupCfg,
+    env: Any,
+    out_dir: Path,
+    group_name: str = "policy",
+    native_sizes: dict[str, int] | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """Serialize an observation group — one fused graph where possible, else per term.
 
@@ -382,8 +435,16 @@ def serialize_observation_group(
     cost is the entire expense, and a slot two terms share gets marshalled twice.
     See the companion brief §4b for the measurements.
     """
+    from .compile.tracer import ConstantGroup
+
     if _group_is_fusable(group):
-        return _fused_group_entry(group, env, out_dir, group_name)
+        try:
+            return _fused_group_entry(group, env, out_dir, group_name, native_sizes)
+        except ConstantGroup:
+            # Whether a group has any time-varying term is only knowable by tracing
+            # it, so this cannot join `_group_is_fusable`'s static checks. A padding
+            # group (a policy input the browser has no live value for) lands here.
+            pass
     result = []
     for name, term_cfg in group.terms.items():
         entry = serialize_observation_term(
