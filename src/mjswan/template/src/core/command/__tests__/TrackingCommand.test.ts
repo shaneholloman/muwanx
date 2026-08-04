@@ -5,9 +5,11 @@
  * one part of that which can be silently wrong: the re-anchoring frame, mjlab's
  * `update_relative_body_poses`.
  */
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 
-import { reanchorBodyPositions } from '../TrackingCommand';
+import { TrackingCommand, reanchorBodyPositions } from '../TrackingCommand';
+import type { CommandConfigEntry, CommandTermContext } from '../types';
 
 function close(actual: Float32Array, expected: number[]): void {
   expect(actual.length).toBe(expected.length);
@@ -36,5 +38,84 @@ describe('reanchorBodyPositions', () => {
     close(reanchorBodyPositions(bodies, [0, 0, 0], [1, 0, 0, 0], [0, 0, 0], [1, 0, 0, 0]), [
       1, 2, 3, -1, 0, 0.5,
     ]);
+  });
+});
+
+/**
+ * The `ref_*` look-ahead window — the slots a policy trained on a window of the
+ * reference trajectory reads, which mjlab's own `MotionCommand` has no equivalent
+ * of (it exposes the current frame only).
+ *
+ * A wrong window is silent: the policy still runs, just tracking the wrong part of
+ * the clip. So the offset→frame mapping, the edge clamping, and the not-ready
+ * fallback are all pinned. No model is needed — the reference buffers are the
+ * command's own state, and a null `mjModel` skips the ghost skeleton.
+ */
+function trackingCommand(timeSteps: number[], frames: number): TrackingCommand {
+  const config = {
+    name: 'TrackingCommand',
+    time_steps: timeSteps,
+  } as unknown as CommandConfigEntry;
+  const context = {
+    mujoco: {},
+    mjModel: null,
+    mjData: null,
+    scene: new THREE.Scene(),
+  } as unknown as CommandTermContext;
+  const term = new TrackingCommand('motion', config, context);
+  term.refLen = frames;
+  term.nJoints = 2;
+  // Frame i is identifiable in every field: position (i, 0, 0), joints (i, -i).
+  term.refRootPos = Array.from({ length: frames }, (_, i) => Float32Array.from([i, 0, 0]));
+  term.refRootQuat = Array.from({ length: frames }, () => Float32Array.from([1, 0, 0, 0]));
+  term.refJointPos = Array.from({ length: frames }, (_, i) => Float32Array.from([i, -i]));
+  // `isReady()` also needs a selected motion; the window never reads its contents.
+  (term as unknown as { selectedMotion: unknown }).selectedMotion = {};
+  return term;
+}
+
+describe('TrackingCommand ref window', () => {
+  it('samples each field at every time_steps offset, in order', () => {
+    const term = trackingCommand([0, 2, -1], 10);
+    term.refIdx = 5;
+    // Offsets 0/+2/-1 of frame 5 -> frames 5, 7, 4.
+    close(term.getStateField('ref_root_pos_w')!, [5, 0, 0, 7, 0, 0, 4, 0, 0]);
+    close(term.getStateField('ref_joint_pos')!, [5, -5, 7, -7, 4, -4]);
+  });
+
+  it('clamps a window running off either end rather than wrapping', () => {
+    const term = trackingCommand([-4, 0, 4], 3);
+    term.refIdx = 0;
+    // Wrapping would read frame 2 for the -4 offset, i.e. the end of the clip as
+    // the recent past. Clamping repeats frame 0.
+    close(term.getStateField('ref_root_pos_w')!, [0, 0, 0, 0, 0, 0, 2, 0, 0]);
+  });
+
+  it('reports readiness, and falls back to finite values before a clip loads', () => {
+    const term = trackingCommand([0, 1], 2);
+    (term as unknown as { selectedMotion: unknown }).selectedMotion = null;
+    close(term.getStateField('is_ready')!, [0]);
+    close(term.getStateField('ref_root_pos_w')!, [0, 0, 0, 0, 0, 0]);
+    // Identity quats, not zeros: the term normalizes these, and a zero quat is NaN.
+    close(term.getStateField('ref_root_quat_w')!, [1, 0, 0, 0, 1, 0, 0, 0]);
+
+    (term as unknown as { selectedMotion: unknown }).selectedMotion = {};
+    close(term.getStateField('is_ready')!, [1]);
+  });
+
+  it('defaults to the current frame alone when no time_steps are configured', () => {
+    const config = { name: 'TrackingCommand' } as unknown as CommandConfigEntry;
+    const context = {
+      mujoco: {},
+      mjModel: null,
+      mjData: null,
+      scene: new THREE.Scene(),
+    } as unknown as CommandTermContext;
+    const term = new TrackingCommand('motion', config, context);
+    term.refLen = 4;
+    term.refIdx = 2;
+    term.refRootPos = Array.from({ length: 4 }, (_, i) => Float32Array.from([i, 0, 0]));
+    (term as unknown as { selectedMotion: unknown }).selectedMotion = {};
+    close(term.getStateField('ref_root_pos_w')!, [2, 0, 0]);
   });
 });

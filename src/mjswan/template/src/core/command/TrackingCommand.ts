@@ -138,6 +138,8 @@ export class TrackingCommand implements CommandTerm {
   private justReset: boolean;
   private referenceVisible: boolean;
   private readonly samplingMode: string;
+  /** Look-ahead/look-back offsets the `ref_*` window state fields are sampled at. */
+  private readonly timeSteps: number[];
   /** Traced reference-state-initialization jitter, or null when the task jitters nothing. */
   private readonly resetJitter: OnnxEvent | null;
   refJointPos: Float32Array[];
@@ -168,6 +170,9 @@ export class TrackingCommand implements CommandTerm {
     this.justReset = true;
     this.referenceVisible = true;
     this.samplingMode = typeof config.sampling_mode === 'string' ? config.sampling_mode : 'start';
+    this.timeSteps = Array.isArray(config.time_steps)
+      ? (config.time_steps as unknown[]).map((step) => Math.trunc(Number(step) || 0))
+      : [0];
     this.resetJitter = this.buildResetJitter(config.reset_graph);
     this.refJointPos = [];
     this.refRootPos = [];
@@ -406,9 +411,23 @@ export class TrackingCommand implements CommandTerm {
    * An unlisted field returns null and its caller holds the previous value —
    * mjlab's `MotionCommand` exposes velocity and joint siblings of these that no
    * traced term on the reference tasks reads.
+   *
+   * The `ref_*` fields and `is_ready` are the look-ahead window (`time_steps`),
+   * which mjlab's `MotionCommand` has no equivalent of — it exposes the current
+   * frame only. A policy trained on a window of the reference trajectory needs the
+   * whole window as one graph input, so each is the offsets' frames concatenated
+   * in `time_steps` order, and the traced term slices out the offsets it wants.
    */
   getStateField(field: string): Float32Array | null {
     switch (field) {
+      case 'is_ready':
+        return new Float32Array([this.isReady() ? 1.0 : 0.0]);
+      case 'ref_root_pos_w':
+        return this.refWindow(this.refRootPos, 3);
+      case 'ref_root_quat_w':
+        return this.refWindow(this.refRootQuat, 4, true);
+      case 'ref_joint_pos':
+        return this.refWindow(this.refJointPos, this.nJoints);
       case 'anchor_pos_w':
         return this.getAnchorPos();
       case 'anchor_quat_w':
@@ -426,6 +445,35 @@ export class TrackingCommand implements CommandTerm {
       default:
         return null;
     }
+  }
+
+  /**
+   * One `ref_*` field sampled at every `time_steps` offset, concatenated.
+   *
+   * Offsets are clamped into the clip rather than wrapped, so a window that runs
+   * off either end repeats the first/last frame — a loop-agnostic edge the policy
+   * also saw in training. Not ready → zeros (identity quats for `normalize`), which
+   * the `is_ready` gate gets multiplied away; the point is only that it is finite
+   * and the right width, since the group layout is fixed at load.
+   */
+  private refWindow(frames: Float32Array[], stride: number, quat = false): Float32Array {
+    const out = new Float32Array(this.timeSteps.length * stride);
+    if (quat) {
+      for (let i = 0; i < this.timeSteps.length; i++) out[i * stride] = 1.0;
+    }
+    if (!this.isReady()) {
+      return out;
+    }
+    for (let i = 0; i < this.timeSteps.length; i++) {
+      const index = Math.min(this.refLen - 1, Math.max(0, this.refIdx + this.timeSteps[i]));
+      const frame = frames[index];
+      if (!frame) continue;
+      const values = quat ? normalizeQuat(frame) : frame;
+      for (let j = 0; j < stride && j < values.length; j++) {
+        out[i * stride + j] = values[j];
+      }
+    }
+    return out;
   }
 
   /** `mjData.<source>` rows for the named bodies, flattened — mjlab's `body_link_*_w`. */
