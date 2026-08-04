@@ -9,6 +9,9 @@ export type EventConfig = {
    * See `OnnxEventConfig` in `./OnnxEvent` for the authoritative shape.
    */
   mode?: 'startup' | 'reset' | 'interval';
+  /** Set by the build for a term it could not trace; `reason` says why. */
+  native?: boolean;
+  reason?: string;
   onnx?: string;
   rand_dim?: number;
   input_slots?: OnnxInputSlot[];

@@ -21,6 +21,7 @@ export class SeededRng {
   private s1 = 0;
   private s2 = 0;
   private s3 = 0;
+  private warnedRangeless = false;
 
   constructor(readonly seed: number) {
     // SplitMix32 expansion: derive four non-zero state words from one seed.
@@ -66,10 +67,19 @@ export class SeededRng {
    * Fill an ONNX `rand` input: `n` uniform draws, each scaled to its own range.
    *
    * A traced term consumes `rand` in the order its draws were recorded at build
-   * time; `ranges` is the matching per-element `[low, high]` list from the
-   * term's config. With no ranges the draws are plain [0, 1).
+   * time; `ranges` is the matching per-element `[low, high]` list from the term's
+   * config (`rand_ranges`). An element with no range falls back to [0, 1), which
+   * is only ever right by accident — mjlab's ranges are typically centred on zero
+   * and often zero-width — so it warns once rather than quietly jittering.
    */
   randVector(n: number, ranges?: ReadonlyArray<readonly [number, number]>): Float32Array {
+    if (n > 0 && (ranges?.length ?? 0) < n && !this.warnedRangeless) {
+      this.warnedRangeless = true;
+      console.warn(
+        `[SeededRng] a term asked for ${n} draws but declared ${ranges?.length ?? 0} ` +
+          'rand_ranges; the rest fall back to [0, 1). Rebuild the bundle.',
+      );
+    }
     const out = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       const range = ranges?.[i];

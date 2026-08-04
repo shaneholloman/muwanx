@@ -1,8 +1,11 @@
 """RNG spy/replay for the parity harness (ADR 0005 §2 companion brief §2b).
 
-**Build/test-time only — never ships to the browser.** Unrelated to the
-orchestrator-owned seeded PRNG that governs mjswan's *runtime* randomness and
-its bit-for-bit session replay (ADR 0005 §2); do not conflate the two.
+**Build-time only.** Unrelated to the orchestrator-owned seeded PRNG that governs
+mjswan's *runtime* randomness and its bit-for-bit session replay (ADR 0005 §2); do
+not conflate the two. One thing recorded here does travel to the browser, in the
+term's config rather than in code: the per-draw ``[low, high]`` bounds
+(``rand_ranges``), which the traced graph itself cannot carry — see
+:attr:`DrawRecorder.rand_ranges`.
 
 Event/Command term bodies take ``rand`` as an explicit ONNX input rather than
 drawing their own randomness (ADR 0005 §2). So the parity harness cannot run
@@ -45,6 +48,7 @@ class DrawRecorder:
     def __init__(self, func: Callable[..., Any]):
         self._globals = getattr(func, "__globals__", {})
         self._draws: list[torch.Tensor] = []
+        self._bounds: list[torch.Tensor] = []
         self._saved: dict[str, Callable[..., Any]] = {}
 
     def __enter__(self) -> DrawRecorder:
@@ -66,6 +70,7 @@ class DrawRecorder:
             out = real(*args, **kwargs)
             if isinstance(out, torch.Tensor):
                 self._draws.append(out.detach().reshape(-1).clone())
+                self._bounds.append(_element_bounds(out.shape, *args, **kwargs))
             return out
 
         return spy
@@ -80,6 +85,41 @@ class DrawRecorder:
         if not self._draws:
             return torch.zeros(0)
         return torch.cat(self._draws)
+
+    @property
+    def rand_ranges(self) -> list[list[float]]:
+        """Per-element ``[low, high]`` of the flat ``rand`` vector, in draw order.
+
+        The bounds are what :class:`ReplayRng` drops on the floor when it traces —
+        the graph consumes the sampler's *output*, so nothing in it remembers the
+        range. That makes these the only record of it, and the runtime cannot draw
+        a term's randomness without them: a ``pose_range`` of ``{}`` is mjlab
+        drawing exactly zero, which a rangeless [0, 1) draw turns into a robot
+        teleported up to a metre per reset.
+        """
+        if not self._bounds:
+            return []
+        stacked = torch.cat(self._bounds)
+        return [[float(low), float(high)] for low, high in stacked.tolist()]
+
+
+def _element_bounds(shape: torch.Size, *args: Any, **kwargs: Any) -> torch.Tensor:
+    """``(numel, 2)`` of the ``[low, high]`` behind each element of one draw.
+
+    ``sample_uniform(lower, upper, size)`` takes bounds that either are scalars or
+    broadcast against ``size`` (mjlab passes a per-axis column for a 6-dof pose
+    range and a scalar pair for joint offsets), so they are broadcast the same way
+    here and flattened in the draw's own element order.
+    """
+    lower = kwargs.get("lower", args[0] if len(args) > 0 else 0.0)
+    upper = kwargs.get("upper", args[1] if len(args) > 1 else 1.0)
+    as_column = [
+        torch.broadcast_to(torch.as_tensor(bound, dtype=torch.float32).cpu(), shape)
+        .reshape(-1, 1)
+        .clone()
+        for bound in (lower, upper)
+    ]
+    return torch.cat(as_column, dim=1)
 
 
 class ReplayRng:

@@ -170,6 +170,11 @@ describe('createSlotReader — entity data fields', () => {
     close(read({ entity: 'robot', field: 'root_link_ang_vel_b' }), [0.2, -0.1, 0.3]);
   });
 
+  it('gravity_vec_w is mjlab\'s constant down direction', () => {
+    // mjlab fills it with (0, 0, -1) rather than reading mjModel.opt.gravity.
+    close(read({ entity: 'robot', field: 'gravity_vec_w' }), [0, 0, -1]);
+  });
+
   it('projected_gravity_b is world -z in the body frame', () => {
     // Yaw-only rotation leaves gravity along -z.
     close(read({ entity: 'robot', field: 'projected_gravity_b' }), [0, 0, -1]);

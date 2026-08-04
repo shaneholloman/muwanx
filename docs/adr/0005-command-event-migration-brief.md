@@ -63,6 +63,7 @@
 | `TrackingCommand` RSI jitter traced; no `Math.random()` left | **done** — mjlab's play cfg for the tracking task clears `pose_range`/`velocity_range` and sets `sampling_mode="start"` but leaves `joint_position_range=(-0.1, 0.1)`, so exactly one of the three TS sampling sites was live — and it also omitted mjlab's clip to `soft_joint_pos_limits`, so a large enough jitter could seed an episode outside the robot's own limits. All three are now mjlab's own `sample_uniform`/`quat_from_euler_xyz`/`quat_mul` in a traced graph (`motion_rsi_offset`): mjlab perturbs the reference frame before writing it, this perturbs it after and reads it back off `asset.data` — numerically the same, and it keeps the motion clip out of the graph, so no new tracer feature was needed. `rand_dim=41` (6+6+29), all three `entity_write` kinds, `max|Δ|=0` over 16 replayed draws, verified end-to-end from the real `Mjlab-Tracking-Flat-Unitree-G1` play cfg. The seam is `CommandBinding.reset_trace`: a *native* command keeps its TS class (a motion-clip lookup is a data lookup, not term math) while its randomization is traced, emitted in `serialize_event`'s entry shape so the browser runs it through the existing `OnnxEvent`. The one draw that stays native is the uniform initial-frame index — a clip index — now from the seeded PRNG so a session replays |
 | §3a `SliderCommandConfig` extension | **done** — `adjustable_range` on a slider config (Python `SliderRangeConfig` → `SliderCommandConfig.adjustable_range` → `CommandDescriptor.adjustableRange`), rendered by the control panel as a companion "Max \<label>" slider that clamps the value slider's displayed range to `[-value, value]`. Entirely presentational, as the brief specified: it has no command id, so there is nothing for `CommandControls.set` to address and nothing reaches the policy — asserted in `ControlPanel/__tests__/SliderRange.test.ts`, since a version that *did* call `set` would silently feed the policy a bogus command. Narrowing the reach past the current value pulls the command in with it rather than leaving the thumb off the track. The velocity joystick declares one per axis, bounded by that task's own `cfg.ranges`, matching mjlab's play GUI |
 | Non-mjlab-task scenes (`add_scene()` + custom obs/term/event) | **done** — `mjswan.trace_env.build_single_entity_trace_env()` builds a minimal live env from a single entity's spec (reusing mjlab's own `Entity`/`Scene`, no reimplemented kinematics), attached via `SceneHandle.set_trace_env()`. `examples/demo/{main,splat,muscle}.py` and `examples/tutorial/minimum_policy.py` all migrated onto mjlab's real functions + a few self-authored ones and verified against real traces |
+| `examples/demo/gentle_humanoid` (deployed demo, bespoke tracking obs) | **done** — the last DSL consumer, and the one that needed engine surface rather than a rewrite: its 11 terms read a *window* of the reference trajectory and a *sparse* proprioceptive history, neither of which existed post-DSL. Three generic additions, then `dsl_terms.py` → `terms.py` as ordinary traced bodies. (1) `TrackingCommand` serves `ref_root_pos_w`/`ref_root_quat_w`/`ref_joint_pos` as one flattened window over a configured `time_steps`, plus `is_ready`; mjlab's `MotionCommand` exposes the current frame only, so a look-ahead policy had no slot to read. One slot per field rather than per offset — the term slices the offsets it wants, and static indices bake in. Offsets clamp into the clip rather than wrapping. (2) Per-term history in the runtime (`HistoryObservation`): the build already emitted `history_length` and **nothing read it**, so per-term history was silently dropped for every policy, not just this one. `history_steps` generalises it to sparse offsets — this policy stacks 9 frames reaching 21 back, where a dense count would give 21. A group carrying either does not fuse. (3) `TraceCommandManager` (`build_single_entity_trace_env(commands=...)`) lets a term trace against a command the browser owns: a `UiCommand` has no Python side, and `compliance` does arithmetic on its value, so it is a traced body whose slot resolves against `UiCommand.getStateField`. Verified end-to-end: real build off the demo's own repo pin, 11 terms → 1590 observation values, exactly the checkpoint's `[1, 1590]` input |
 | Sensor input slots (`builtin_sensor`, `projected_gravity_from_sensor`) | **done** — a whole-sensor read is its own slot namespace (`_SENSOR_NS`), served through a proxy that subclasses the real sensor's class so mjlab's `assert isinstance(sensor, BuiltinSensor)` still holds. Unblocked all four Velocity-Flat/Rough G1/Go1 tasks (previously failed to serialize at all); full 16-step numeric parity, max\|Δ\|=0 |
 | Command-state input slots (`object_to_goal_distance`) | **done** — `_COMMAND_NS` slot mirroring the sensor one (same class-subclassing proxy, via `__getattribute__` since command state lives in the instance `__dict__`). Unblocked Lift-Cube-Yam's `cube_to_goal` |
 | Dynamic-vs-constant field classification | **inverted (correctness fix)** — the allowlist named the *dynamic* fields, so any unlisted field was silently baked as a constant. That froze `site_pos_w` in Lift-Cube-Yam's `ee_to_cube` (parity caught it at max\|Δ\|≈4e-2). Now only the model-derived constants are listed (`_STATIC_DATA_FIELDS`) and anything unrecognized errs toward a graph input — a missing runtime input fails loudly instead of returning stale values forever |
@@ -726,6 +727,50 @@ slots, and the model-field startup-DR track — all three rows above. `mode="sta
 for Velocity and Lift is closed: every startup event on the reference tasks either traces,
 is described as a model-field randomization, or is native for a stated reason
 (`randomize_terrain`, `encoder_bias`).
+
+**Findings from the first browser run of a traced tracking task**
+(`g1_spinkick`, `Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation`):
+
+20. **ORT-Web serializes runs process-wide, and the engine has several independent
+    callers.** Its wasm binding holds one *module-global* active-run slot, so a second
+    `run()` started before the first resolves throws `Session already started` and the
+    first lands on `Session mismatch` — across different sessions too. The policy net
+    (step loop), the fused observation/termination graphs, and the reset-time event
+    graphs are all separately async, and `TrackingCommand`'s RSI jitter is deliberately
+    fire-and-forget (§8's accepted lag), so overlap is the normal case, not a race. Every
+    ORT call now goes through `core/onnx/runQueue.ts`. Costs nothing: the backend is
+    single-threaded (`numThreads = 1`), so these never ran in parallel anyway.
+21. **A native command still has to serve its traced slots.** `motion` stays a native
+    `TrackingCommand` (a clip lookup is data, not math — §4b), but the tracking task's
+    observations and terminations are ordinary traced terms that read
+    `{command: "motion", field}` slots off it. Only `OnnxCommand` implemented
+    `getStateField`, so every such slot read as unavailable and the fused graphs held
+    their previous vectors — the policy ran on a frozen command. `TrackingCommand` now
+    implements `CommandStateSource` for the fields mjlab's own terms read, including
+    `body_pos_relative_w` (mjlab's `update_relative_body_poses` yaw re-anchoring).
+    Generally: a native command term is only native *to the runtime*; the traced terms
+    around it still see it as a state source.
+22. **Declared slots the exporter folds away must not reach the config.**
+    `MotionCommand.body_indexes` is an integer index tensor; `torch.onnx.export` bakes it
+    into the Gather it feeds, so the graph has no such input — and ORT rejects a feed
+    that is not a graph input (`invalid input '…'`), which would have broken every run of
+    the graph once the slot became readable. `slots_json` now filters the declared slots
+    against the exported graph's actual inputs, in the one place all six emit sites share.
+23. **`gravity_vec_w` was missing from the slot reader.** mjlab fills it with the constant
+    `(0, 0, -1)` (it is not `mjModel.opt.gravity`); the tracking terminations read it.
+24. **`rand` needs its bounds shipped, and never had them.** `ReplayRng` traces with the
+    sampler's *output* (the bounds are deliberately dropped, §2b), so nothing in the graph
+    remembers the range — and the Python side never emitted the `rand_ranges` the TS
+    `SeededRng.randVector` already read, so every traced event and command drew [0, 1) for
+    every element at runtime. On `g1_spinkick` that turned an RSI whose `pose_range` and
+    `velocity_range` are *empty* (mjlab draws exactly 0.0) into up to a metre of root
+    teleport plus a metre per second of velocity on every reset, which then terminated
+    immediately: a robot randomly placed and instantly reset, every frame. `DrawRecorder`
+    now records each draw's broadcast `[low, high]`, `EventExport`/`CommandExport` carry
+    them, all three config emitters ship them, and `validate_command_config` fails a
+    `rand_ranges` whose length is not `rand_dim` — the mismatch that would otherwise fall
+    back to [0, 1) for the tail. Bounds are the term's, not the graph's: anything that
+    reproduces a term body outside mjlab has to carry them explicitly.
 
 **Then:** the manager-dependency audit — Action→Observation, Command→Observation, and the
 Termination→reset chain checked against mjlab 1.3.0's own source rather than from memory.

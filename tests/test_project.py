@@ -19,6 +19,72 @@ from mjswan.project import _collect_mjlab_scene_assets
 from mjswan.scene import SceneConfig
 
 
+class _FakeSceneCfg:
+    def __init__(self):
+        self.num_envs = 16
+        self.terrain = None
+        self.entities = {}
+
+
+class _FakeEnvCfg:
+    def __init__(self):
+        self.scene = _FakeSceneCfg()
+        self.viewer = None
+        self.events = None
+
+
+def _install_fake_mjlab(monkeypatch, minimal_spec) -> tuple[list[tuple], _FakeEnvCfg]:
+    """Stub out mjlab's Scene/env/registry; return the call log and the cfg the
+    fake registry hands back from load_env_cfg."""
+    calls: list[tuple] = []
+    registry_env_cfg = _FakeEnvCfg()
+
+    class FakeScene:
+        def __init__(self, scene_cfg, device: str):
+            calls.append(("scene", scene_cfg, device))
+            self.spec = minimal_spec
+            self.terrain = None
+
+    class FakeManagerBasedRlEnv:
+        """Stands in for mjlab's real env — ADR 0005 needs a live env (held
+        on SceneConfig.mjlab_env) to trace term bodies at build time."""
+
+        def __init__(self, env_cfg, device: str):
+            calls.append(("env", env_cfg, device))
+
+        def reset(self):
+            calls.append(("env_reset",))
+
+        @property
+        def step_dt(self) -> float:
+            """The task's control rate, which `add_scene_mjlab` reads off the env.
+
+            Modelled here because guessing it is what this replaced: a wrong
+            control rate raises nothing at playback, so a fake that omitted it
+            would let a regression through as a `None` control_dt.
+            """
+            return 0.05
+
+    def fake_load_env_cfg(task_id: str, play: bool = False):
+        calls.append(("load_env_cfg", task_id, play))
+        return registry_env_cfg
+
+    mjlab_scene_module = ModuleType("mjlab.scene")
+    mjlab_scene_module.Scene = FakeScene
+    mjlab_envs_module = ModuleType("mjlab.envs")
+    mjlab_envs_module.ManagerBasedRlEnv = FakeManagerBasedRlEnv
+    mjlab_registry_module = ModuleType("mjlab.tasks.registry")
+    mjlab_registry_module.load_env_cfg = fake_load_env_cfg
+
+    monkeypatch.setitem(sys.modules, "mjlab", ModuleType("mjlab"))
+    monkeypatch.setitem(sys.modules, "mjlab.scene", mjlab_scene_module)
+    monkeypatch.setitem(sys.modules, "mjlab.envs", mjlab_envs_module)
+    monkeypatch.setitem(sys.modules, "mjlab.tasks", ModuleType("mjlab.tasks"))
+    monkeypatch.setitem(sys.modules, "mjlab.tasks.registry", mjlab_registry_module)
+
+    return calls, registry_env_cfg
+
+
 # ===========================================================================
 # SceneConfig — scene_filename property
 # ===========================================================================
@@ -30,6 +96,11 @@ class TestSceneConfig:
     def test_scene_filename_is_mjb_when_model_provided(self, minimal_model):
         cfg = SceneConfig(name="Test", model=minimal_model)
         assert cfg.scene_filename == "scene.mjb"
+
+    def test_scene_filename_survives_the_build_releasing_the_spec(self, minimal_spec):
+        cfg = SceneConfig(name="Test", spec=minimal_spec)
+        cfg.spec = None  # what Builder._save_web does after writing scene.mjz
+        assert cfg.scene_filename == "scene.mjz"
 
 
 # ===========================================================================
@@ -120,80 +191,38 @@ class TestProjectHandle:
     def test_add_scene_mjlab_passes_play_flag_to_load_env_cfg(
         self, monkeypatch, minimal_spec
     ):
-        calls: list[tuple[str, object, object]] = []
-
-        class FakeSceneCfg:
-            def __init__(self):
-                self.num_envs = 16
-                self.terrain = None
-                self.entities = {}
-
-        fake_scene_cfg = FakeSceneCfg()
-
-        class FakeEnvCfg:
-            scene = fake_scene_cfg
-            viewer = None
-            events = None
-
-        class FakeScene:
-            def __init__(self, scene_cfg, device: str):
-                calls.append(("scene", scene_cfg, device))
-                self.spec = minimal_spec
-                self.terrain = None
-
-        class FakeManagerBasedRlEnv:
-            """Stands in for mjlab's real env — ADR 0005 needs a live env (held
-            on SceneConfig.mjlab_env) to trace term bodies at build time."""
-
-            def __init__(self, env_cfg, device: str):
-                calls.append(("env", env_cfg, device))
-
-            def reset(self):
-                calls.append(("env_reset",))
-
-            @property
-            def step_dt(self) -> float:
-                """The task's control rate, which `add_scene_mjlab` reads off the env.
-
-                Modelled here because guessing it is what this replaced: a wrong
-                control rate raises nothing at playback, so a fake that omitted it
-                would let a regression through as a `None` control_dt.
-                """
-                return 0.05
-
-        def fake_load_env_cfg(task_id: str, play: bool = False):
-            calls.append(("load_env_cfg", task_id, play))
-            return FakeEnvCfg()
-
-        mjlab_module = ModuleType("mjlab")
-        mjlab_scene_module = ModuleType("mjlab.scene")
-        mjlab_scene_module.Scene = FakeScene
-        mjlab_envs_module = ModuleType("mjlab.envs")
-        mjlab_envs_module.ManagerBasedRlEnv = FakeManagerBasedRlEnv
-        mjlab_tasks_module = ModuleType("mjlab.tasks")
-        mjlab_registry_module = ModuleType("mjlab.tasks.registry")
-        mjlab_registry_module.load_env_cfg = fake_load_env_cfg
-
-        monkeypatch.setitem(sys.modules, "mjlab", mjlab_module)
-        monkeypatch.setitem(sys.modules, "mjlab.scene", mjlab_scene_module)
-        monkeypatch.setitem(sys.modules, "mjlab.envs", mjlab_envs_module)
-        monkeypatch.setitem(sys.modules, "mjlab.tasks", mjlab_tasks_module)
-        monkeypatch.setitem(sys.modules, "mjlab.tasks.registry", mjlab_registry_module)
+        calls, registry_env_cfg = _install_fake_mjlab(monkeypatch, minimal_spec)
 
         project = Builder().add_project(name="P")
         scene = project.add_scene_mjlab("Mjlab-Velocity-Rough-Unitree-G1", play=True)
 
         assert isinstance(scene, mjswan.SceneHandle)
         assert [c[0] for c in calls] == ["load_env_cfg", "scene", "env", "env_reset"]
-        assert calls[1] == ("scene", fake_scene_cfg, "cpu")
-        assert calls[2][0] == "env"
-        assert calls[2][2] == "cpu"
-        assert fake_scene_cfg.num_envs == 1
+        assert calls[0] == ("load_env_cfg", "Mjlab-Velocity-Rough-Unitree-G1", True)
+        assert calls[1] == ("scene", registry_env_cfg.scene, "cpu")
+        assert calls[2] == ("env", registry_env_cfg, "cpu")
+        assert registry_env_cfg.scene.num_envs == 1
         # The live env (ADR 0005 tracing) is retained on SceneConfig.
         assert scene._config.mjlab_env is not None
         # And the task's control rate is taken from it, not derived from the model's
         # physics timestep — the two differ by the task's `decimation`.
         assert scene._config.control_dt == 0.05
+
+    def test_add_scene_mjlab_uses_supplied_env_cfg(self, monkeypatch, minimal_spec):
+        """Tracking tasks register with `commands["motion"].motion_file = ""`, so the
+        caller has to hand in a cfg with the clip path already filled in — loading the
+        task fresh here would build the tracing env against the empty path."""
+        calls, _ = _install_fake_mjlab(monkeypatch, minimal_spec)
+        caller_env_cfg = _FakeEnvCfg()
+
+        project = Builder().add_project(name="P")
+        project.add_scene_mjlab(
+            "Mjlab-Tracking-Flat-Unitree-G1", env_cfg=caller_env_cfg
+        )
+
+        assert [c[0] for c in calls] == ["scene", "env", "env_reset"]
+        assert calls[1] == ("env", caller_env_cfg, "cpu")
+        assert caller_env_cfg.scene.num_envs == 1
 
 
 # ===========================================================================

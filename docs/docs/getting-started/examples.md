@@ -111,11 +111,19 @@ scene.add_policy(
     policy=onnx.load("robot/locomotion.onnx"),
     config_path="robot/locomotion.json",
     commands={
-        "velocity": mjswan.ui_command([
-            mjswan.Slider("lin_vel_x", "Forward",  range=(-2.0, 2.0), default=0.5, step=0.05),
-            mjswan.Slider("lin_vel_y", "Lateral",  range=(-0.5, 0.5), default=0.0, step=0.05),
-            mjswan.Slider("ang_vel_z", "Yaw Rate", range=(-1.0, 1.0), default=0.0, step=0.05),
-        ]),
+        "velocity": mjswan.ui_command(
+            [
+                mjswan.Slider(
+                    "lin_vel_x", "Forward", range=(-2.0, 2.0), default=0.5, step=0.05
+                ),
+                mjswan.Slider(
+                    "lin_vel_y", "Lateral", range=(-0.5, 0.5), default=0.0, step=0.05
+                ),
+                mjswan.Slider(
+                    "ang_vel_z", "Yaw Rate", range=(-1.0, 1.0), default=0.0, step=0.05
+                ),
+            ]
+        ),
     },
 )
 ```
@@ -156,7 +164,7 @@ scene = project.add_scene(
 )
 scene.add_splat(
     "Lab",
-    source="lab.spz",   # bundled into dist/
+    source="lab.spz",  # bundled into dist/
     scale=1.35,
     z_offset=0.71,
 )
@@ -205,7 +213,7 @@ scene.add_splat(
     source="lab.spz",
     scale=1.35,
     z_offset=0.71,
-    control=True,   # shows calibration controls in the viewer
+    control=True,  # shows calibration controls in the viewer
 )
 ```
 

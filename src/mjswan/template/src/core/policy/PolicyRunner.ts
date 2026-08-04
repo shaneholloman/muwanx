@@ -4,6 +4,7 @@ import {
   isFusedObservationConfig,
   type FusedObservationConfig,
 } from '../observation/FusedObservation';
+import { HistoryObservation, historyOffsets } from '../observation/HistoryObservation';
 import {
   NativeObservation,
   isNativeObservationConfig,
@@ -289,7 +290,7 @@ export class PolicyRunner {
     this.historyNeedsPrime = {};
     this.defaultObsKey = null;
 
-    const buildObservation = (entry: ObservationConfigEntry): ObservationBase => {
+    const buildTerm = (entry: ObservationConfigEntry): ObservationBase => {
       // ONNX-traced and natively-computed terms (ADR 0005) bypass the class
       // registry: they are one generic handler each, configured entirely by data,
       // so `entry.name` is the term's own identity rather than a class to look up.
@@ -304,6 +305,19 @@ export class PolicyRunner {
         throw new Error(`Unknown observation type: ${entry.name}`);
       }
       return new ObsClass(this, entry);
+    };
+
+    // Per-term history wraps the term (mjlab stacks per term, before concatenating);
+    // the legacy registry classes take `history_steps` themselves, so only the
+    // ONNX/native entries the build emits `history_length`/`history_offsets` for are
+    // wrapped here.
+    const buildObservation = (entry: ObservationConfigEntry): ObservationBase => {
+      const base = buildTerm(entry);
+      const offsets =
+        isOnnxObservationConfig(entry) || isNativeObservationConfig(entry)
+          ? historyOffsets(entry)
+          : null;
+      return offsets ? new HistoryObservation(this, entry, base, offsets) : base;
     };
 
     for (const [key, value] of Object.entries(obsConfig)) {

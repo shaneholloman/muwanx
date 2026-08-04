@@ -459,6 +459,7 @@ class Builder:
         trace fails the build loudly").
         """
         from ._onnx_build import (
+            policy_native_sizes,
             serialize_command,
             serialize_observation_group,
             serialize_terminations,
@@ -476,6 +477,16 @@ class Builder:
         )
         if not config_path and not has_mdp:
             return None
+
+        if env is None and (policy.observations or policy.terminations):
+            raise ValueError(
+                f"Policy {policy.name!r} on scene {scene_dir.name!r} has "
+                "observation/termination terms to trace, but the scene has no trace "
+                "env to trace them against. `add_scene_mjlab` supplies one; a plain "
+                "`add_scene` scene needs it explicitly: "
+                "`scene.set_trace_env(build_single_entity_trace_env(spec_fn))` "
+                "(ADR 0005 §6)."
+            )
 
         data: dict = {}
         if config_path:
@@ -526,6 +537,7 @@ class Builder:
                 for name, cmd in policy.commands.items()
             }
         if policy.observations:
+            native_sizes = policy_native_sizes(data, policy.commands)
             obs_config = data.get("observations", {})
             for key, group in policy.observations.items():
                 # Avoid overwriting existing groups (e.g. an ONNX "policy"
@@ -536,12 +548,20 @@ class Builder:
                 # `target_key` names the fused graph too, so two groups in one
                 # policy cannot overwrite each other's `obs/<group>.onnx`.
                 obs_config[target_key] = serialize_observation_group(
-                    group, env, scene_dir, target_key
+                    group, env, scene_dir, target_key, native_sizes
                 )
             data["observations"] = obs_config
         if policy.actions:
+            # The term *set* is the Python one, but each term is merged field-wise
+            # over the authored config (`config_path`). That config is the policy's
+            # own, and for a motor-actuator robot it is where the PD gains the
+            # runtime needs live — the model carries none. `to_dict` omits the
+            # fields a term leaves unset, so a scene can tweak, say, the offset
+            # without restating the gains.
+            authored = data.get("actions", {})
             data["actions"] = {
-                name: cfg.to_dict() for name, cfg in policy.actions.items()
+                name: {**authored.get(name, {}), **cfg.to_dict()}
+                for name, cfg in policy.actions.items()
             }
         if policy.terminations:
             terminations = serialize_terminations(policy.terminations, env, scene_dir)

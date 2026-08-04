@@ -60,6 +60,17 @@ class UiCommand implements CommandTerm {
     return { inputs: this.inputs };
   }
 
+  /**
+   * The UI value as a traced graph's `{command, field: 'command'}` slot.
+   *
+   * A term that only *forwards* a command is native (`NativeObservation`), but one
+   * that does arithmetic on it is a traced body like any other, and its slot has to
+   * resolve here — this command exists browser-side only, so there is nowhere else.
+   */
+  getStateField(field: string): Float32Array | null {
+    return field === 'command' ? this.getCommand() : null;
+  }
+
   reset(): void {
     for (const input of this.inputs) {
       if (input.type === 'slider') {

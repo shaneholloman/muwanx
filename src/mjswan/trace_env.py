@@ -16,12 +16,44 @@ from __future__ import annotations
 from typing import Any, Callable
 
 
+class TraceCommandManager:
+    """Stand-in ``CommandManager`` serving trace-time values for browser-side commands.
+
+    A traced term may read a command the *browser* owns and the trace env cannot
+    build: a ``UiCommand`` (a slider has no Python side at all), or a native
+    ``TrackingCommand`` whose clip lookup is data rather than math. The tracer only
+    needs each read to hand back a real tensor of the right shape — the values bake
+    nothing, they become graph *inputs* the runtime serves from the live command
+    (``getStateField``). So a plain object with the right tensor attributes is
+    enough, and this is what makes ``env.command_manager.get_term(name)`` find it.
+
+    ``get_command(name)`` returns the term's ``command`` attribute, as mjlab's own
+    ``CommandManager`` does.
+    """
+
+    def __init__(self, terms: dict[str, Any]):
+        self._terms = dict(terms)
+
+    def get_term(self, name: str) -> Any:
+        if name not in self._terms:
+            raise KeyError(
+                f"Trace env has no command {name!r}; it knows "
+                f"{sorted(self._terms)}. Pass it to "
+                "`build_single_entity_trace_env(commands=...)`."
+            )
+        return self._terms[name]
+
+    def get_command(self, name: str) -> Any:
+        return self.get_term(name).command
+
+
 def build_single_entity_trace_env(
     spec_fn: Callable[[], Any],
     *,
     entity_name: str = "robot",
     device: str = "cpu",
     zero_geom_margins: bool = True,
+    commands: dict[str, Any] | None = None,
 ) -> Any:
     """Build a minimal single-entity ``ManagerBasedRlEnv`` for ONNX tracing.
 
@@ -47,10 +79,17 @@ def build_single_entity_trace_env(
             so zeroing them is safe here. Set ``False`` if your spec is
             already margin-clean and you want the geoms untouched for some
             other reason.
+        commands: Trace-time stand-ins for commands the browser owns, keyed by the
+            name traced terms read (``env.command_manager.get_term(name)``). See
+            :class:`TraceCommandManager`; omit when no term reads a command.
 
     Returns:
         A live ``mjlab.envs.ManagerBasedRlEnv``, already ``reset()``.
     """
+    import warp
+
+    warp.config.quiet = True
+
     from mjlab.entity import EntityCfg
     from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
     from mjlab.scene import SceneCfg
@@ -62,12 +101,55 @@ def build_single_entity_trace_env(
                 geom.margin = 0.0
         return spec
 
-    entity_cfg = EntityCfg(spec_fn=_spec_fn)
+    # The keyframe is what the browser resets to (`mj_resetDataKeyframe`), so it is
+    # also what `default_joint_pos` has to be: mjlab's default is `{".*": 0.0}`,
+    # which bakes a zero default into every `*_rel` observation and leaves the
+    # policy reading its whole stand pose as error from the first frame.
+    keyframe_pos = _keyframe_joint_pos(_spec_fn())
+    init_state = EntityCfg.InitialStateCfg()
+    if keyframe_pos:
+        init_state = EntityCfg.InitialStateCfg(joint_pos=keyframe_pos)
+    entity_cfg = EntityCfg(spec_fn=_spec_fn, init_state=init_state)
     scene_cfg = SceneCfg(num_envs=1, entities={entity_name: entity_cfg})
     env_cfg = ManagerBasedRlEnvCfg(decimation=1, scene=scene_cfg)
     env = ManagerBasedRlEnv(env_cfg, device=device)
     env.reset()
+    if commands:
+        # After reset(): mjlab builds its own (empty) manager during construction,
+        # and this env is never stepped, so nothing else consults it.
+        env.command_manager = TraceCommandManager(commands)
     return env
 
 
-__all__ = ["build_single_entity_trace_env"]
+def _keyframe_joint_pos(spec: Any) -> dict[str, float]:
+    """Per-joint positions from the model's first keyframe, as ``EntityCfg`` wants them.
+
+    mjlab has its own way to say this — ``init_state.joint_pos = None`` — but that
+    path builds ``default_joint_pos`` from the raw float64 keyframe and then fails
+    writing it into float32 ``qpos``. Naming the joints avoids it, and is explicit
+    about the one-dof assumption ``InitialStateCfg.joint_pos`` makes anyway (its
+    values are scalars, so a ball joint has no representation there).
+
+    Returns an empty dict when the model has no keyframe, which leaves mjlab's own
+    ``{".*": 0.0}`` default in place — correct for a model whose zero pose *is* its
+    rest pose.
+    """
+    import re
+
+    import mujoco
+
+    if not spec.keys:
+        return {}
+    model = spec.compile()
+    qpos = model.key_qpos[0]
+    positions: dict[str, float] = {}
+    for joint in range(model.njnt):
+        if model.jnt_type[joint] == mujoco.mjtJoint.mjJNT_FREE:
+            continue  # the root pose, not a joint position
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint)
+        # Keys are regexes to mjlab (`resolve_expr`), and a joint name is not one.
+        positions[re.escape(name)] = float(qpos[model.jnt_qposadr[joint]])
+    return positions
+
+
+__all__ = ["TraceCommandManager", "build_single_entity_trace_env"]

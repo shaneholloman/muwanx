@@ -708,6 +708,46 @@ class TestSaveWebPolicyJson:
         path = out / project_dir / "assets" / scene_id / f"{policy_id}.json"
         return json.loads(path.read_text())
 
+    def test_spec_scene_config_path_matches_written_file(self, tmp_path, minimal_spec):
+        """`_save_web` frees `scene.spec` right after writing `scene.mjz`, and writes
+        `config.json` after that — the recorded path must still be the `.mjz` on disk,
+        or the app 404s on the scene it just shipped."""
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", spec=minimal_spec)
+        out = self._run(builder, tmp_path)
+
+        scene_path = json.loads((out / "assets" / "config.json").read_text())[
+            "projects"
+        ][0]["scenes"][0]["path"]
+        assert scene_path == "s/scene.mjz"
+        assert (out / "main" / "assets" / scene_path).is_file()
+
+    def test_terms_without_a_trace_env_name_the_missing_call(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """A plain `add_scene` scene has no env to trace against until it is given one.
+
+        The tracer used to reach `None.scene` and raise `AttributeError` from four
+        frames down, which says nothing about the one line the author is missing.
+        """
+
+        def joint_pos(env):
+            return env.scene["robot"].data.joint_pos
+
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={"joint_pos": ObservationTermCfg(func=joint_pos)}
+                )
+            },
+        )
+        with pytest.raises(ValueError, match="set_trace_env"):
+            self._run(builder, tmp_path)
+
     # -----------------------------------------------------------------------
     # no-config_path branch
     # -----------------------------------------------------------------------
@@ -1184,6 +1224,53 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         assert "new_action" in data["actions"]
         assert "old_action" not in data["actions"]
+
+    def test_config_path_action_fields_survive_a_partial_override(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """A term names what it changes; the rest of the authored entry stays.
+
+        For a motor-actuator robot the PD gains live in the policy's own config —
+        the model has none — so a scene that only wants a different offset must not
+        have to restate them.
+        """
+        config_file = tmp_path / "policy_cfg.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "onnx": {"path": "old.onnx"},
+                    "actions": {
+                        "joint_pos": {
+                            "type": "joint_position",
+                            "scale": {"j": 0.5},
+                            "stiffness": {"j": 40.0},
+                            "damping": {"j": 2.5},
+                        }
+                    },
+                }
+            )
+        )
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            config_path=str(config_file),
+            actions={
+                "joint_pos": JointPositionActionCfg(
+                    actuator_names=(".*",), offset={"j": 0.25}
+                )
+            },
+        )
+        entry = self._policy_json(self._run(builder, tmp_path), "Policy")["actions"][
+            "joint_pos"
+        ]
+        assert entry["offset"] == {"j": 0.25}
+        assert entry["stiffness"] == {"j": 40.0}
+        assert entry["damping"] == {"j": 2.5}
+        assert entry["scale"] == {"j": 0.5}
 
     def test_config_path_onnx_path_updated(self, tmp_path, minimal_model, minimal_onnx):
         config_file = tmp_path / "policy_cfg.json"

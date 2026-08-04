@@ -229,10 +229,13 @@ class SceneConfig:
     :func:`mjswan.trace_env.build_single_entity_trace_env`. Python-build-time-
     only state; never part of the scene's serialized JSON output."""
 
-    @property
-    def scene_filename(self) -> str:
-        """Return the scene filename based on which field is set."""
-        return "scene.mjz" if self.spec is not None else "scene.mjb"
+    def __post_init__(self) -> None:
+        # Fixed at construction, not derived on access: `Builder._save_web` drops
+        # `spec`/`model` right after writing the asset (to keep peak memory down),
+        # so a spec scene read later would otherwise claim the `.mjb` name while
+        # `scene.mjz` sits on disk — and `config.json` is written after that.
+        self.scene_filename = "scene.mjz" if self.spec is not None else "scene.mjb"
+        """Filename of the scene asset, from whichever of spec/model was provided."""
 
 
 class SceneHandle:
@@ -264,6 +267,7 @@ class SceneHandle:
         actions: Mapping[str, ActionTermCfg] | Mapping[str, Any] | None = None,
         terminations: dict[str, TerminationTermCfg] | dict[str, Any] | None = None,
         policy_joint_names: list[str] | None = None,
+        policy_num_actions: int | None = None,
         default_joint_pos: list[float] | None = None,
         encoder_bias: list[float] | None = None,
         initial_qpos: list[float] | None = None,
@@ -289,6 +293,9 @@ class SceneHandle:
                 mjlab ``ActionTermCfg`` subclass instances.
             terminations: Termination term configurations.  Accepts both
                 mjswan and mjlab ``TerminationTermCfg`` instances.
+            policy_num_actions: Output width for policies whose action count
+                cannot be inferred from ``policy_joint_names`` (e.g.
+                muscle-driven policies driving actuators, not joints).
             initial_qpos: Optional initial qpos payload serialized into the
                 generated policy config JSON.
             initial_qvel: Optional initial qvel payload serialized into the
@@ -348,6 +355,7 @@ class SceneHandle:
             actions=adapted_actions,
             terminations=adapted_terminations,
             policy_joint_names=policy_joint_names,
+            policy_num_actions=policy_num_actions,
             default_joint_pos=default_joint_pos,
             encoder_bias=encoder_bias,
             initial_qpos=initial_qpos,

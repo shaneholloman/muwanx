@@ -89,11 +89,11 @@ builder = mjswan.Builder()
 project = builder.add_project(name="mjlab Examples")
 
 env_cfg = load_env_cfg("Mjlab-Velocity-Flat-Anymal-C")
-env_cfg.scene.num_envs = 1            # single environment for the viewer
+env_cfg.scene.num_envs = 1  # single environment for the viewer
 scene_obj = Scene(env_cfg.scene, device="cpu")
 
 project.add_scene(
-    spec=scene_obj.spec,              # MjSpec from mjlab
+    spec=scene_obj.spec,  # MjSpec from mjlab
     name="ANYmal C",
 )
 

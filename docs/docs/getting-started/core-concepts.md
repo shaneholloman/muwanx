@@ -81,9 +81,9 @@ Add one or more splats to a scene using `add_splat()`. You must supply exactly o
 # Recommended: bundle the .spz file into the app
 scene.add_splat(
     "Lab Environment",
-    source="lab.spz",        # copied into dist/ at build time
-    scale=1.35,              # converts splat units → meters
-    z_offset=0.71,           # vertical shift to align ground planes
+    source="lab.spz",  # copied into dist/ at build time
+    scale=1.35,  # converts splat units → meters
+    z_offset=0.71,  # vertical shift to align ground planes
 )
 
 # Alternative: reference an external URL (not bundled)
@@ -153,11 +153,17 @@ scene.add_policy(
     name="Locomotion",
     policy=onnx.load("locomotion.onnx"),
     commands={
-        "velocity": mjswan.ui_command([
-            mjswan.Slider("lin_vel_x", "Forward Velocity", range=(-1.0, 1.0), default=0.5),
-            mjswan.Slider("lin_vel_y", "Lateral Velocity", range=(-0.5, 0.5), default=0.0),
-            mjswan.Slider("ang_vel_z", "Yaw Rate",         range=(-1.0, 1.0), default=0.0),
-        ]),
+        "velocity": mjswan.ui_command(
+            [
+                mjswan.Slider(
+                    "lin_vel_x", "Forward Velocity", range=(-1.0, 1.0), default=0.5
+                ),
+                mjswan.Slider(
+                    "lin_vel_y", "Lateral Velocity", range=(-0.5, 0.5), default=0.0
+                ),
+                mjswan.Slider("ang_vel_z", "Yaw Rate", range=(-1.0, 1.0), default=0.0),
+            ]
+        ),
     },
 )
 ```

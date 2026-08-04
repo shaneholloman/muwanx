@@ -121,103 +121,6 @@ def _fix_unitree_mujoco_macos() -> None:
     )
 
 
-# fmt: off
-_G1_JOINT_SCALE = {
-    "left_hip_pitch_joint":       0.5475464629911068,
-    "left_hip_roll_joint":        0.35066146637882434,
-    "left_hip_yaw_joint":         0.5475464629911068,
-    "left_knee_joint":            0.35066146637882434,
-    "left_ankle_pitch_joint":     0.43857731392336724,
-    "left_ankle_roll_joint":      0.43857731392336724,
-    "right_hip_pitch_joint":      0.5475464629911068,
-    "right_hip_roll_joint":       0.35066146637882434,
-    "right_hip_yaw_joint":        0.5475464629911068,
-    "right_knee_joint":           0.35066146637882434,
-    "right_ankle_pitch_joint":    0.43857731392336724,
-    "right_ankle_roll_joint":     0.43857731392336724,
-    "waist_yaw_joint":            0.5475464629911068,
-    "waist_roll_joint":           0.43857731392336724,
-    "waist_pitch_joint":          0.43857731392336724,
-    "left_shoulder_pitch_joint":  0.43857731392336724,
-    "left_shoulder_roll_joint":   0.43857731392336724,
-    "left_shoulder_yaw_joint":    0.43857731392336724,
-    "left_elbow_joint":           0.43857731392336724,
-    "left_wrist_roll_joint":      0.43857731392336724,
-    "left_wrist_pitch_joint":     0.07450087032950714,
-    "left_wrist_yaw_joint":       0.07450087032950714,
-    "right_shoulder_pitch_joint": 0.43857731392336724,
-    "right_shoulder_roll_joint":  0.43857731392336724,
-    "right_shoulder_yaw_joint":   0.43857731392336724,
-    "right_elbow_joint":          0.43857731392336724,
-    "right_wrist_roll_joint":     0.43857731392336724,
-    "right_wrist_pitch_joint":    0.07450087032950714,
-    "right_wrist_yaw_joint":      0.07450087032950714,
-}
-_G1_JOINT_STIFFNESS = {
-    "left_hip_pitch_joint":       40.17923863450712,
-    "left_hip_roll_joint":        99.09842777666111,
-    "left_hip_yaw_joint":         40.17923863450712,
-    "left_knee_joint":            99.09842777666111,
-    "left_ankle_pitch_joint":     28.50124619574858,
-    "left_ankle_roll_joint":      28.50124619574858,
-    "right_hip_pitch_joint":      40.17923863450712,
-    "right_hip_roll_joint":       99.09842777666111,
-    "right_hip_yaw_joint":        40.17923863450712,
-    "right_knee_joint":           99.09842777666111,
-    "right_ankle_pitch_joint":    28.50124619574858,
-    "right_ankle_roll_joint":     28.50124619574858,
-    "waist_yaw_joint":            40.17923863450712,
-    "waist_roll_joint":           28.50124619574858,
-    "waist_pitch_joint":          28.50124619574858,
-    "left_shoulder_pitch_joint":  14.25062309787429,
-    "left_shoulder_roll_joint":   14.25062309787429,
-    "left_shoulder_yaw_joint":    14.25062309787429,
-    "left_elbow_joint":           14.25062309787429,
-    "left_wrist_roll_joint":      14.25062309787429,
-    "left_wrist_pitch_joint":     16.77832748089279,
-    "left_wrist_yaw_joint":       16.77832748089279,
-    "right_shoulder_pitch_joint": 14.25062309787429,
-    "right_shoulder_roll_joint":  14.25062309787429,
-    "right_shoulder_yaw_joint":   14.25062309787429,
-    "right_elbow_joint":          14.25062309787429,
-    "right_wrist_roll_joint":     14.25062309787429,
-    "right_wrist_pitch_joint":    16.77832748089279,
-    "right_wrist_yaw_joint":      16.77832748089279,
-}
-_G1_JOINT_DAMPING = {
-    "left_hip_pitch_joint":       2.557889775413375,
-    "left_hip_roll_joint":        6.308801853496639,
-    "left_hip_yaw_joint":         2.557889775413375,
-    "left_knee_joint":            6.308801853496639,
-    "left_ankle_pitch_joint":     1.814445686584846,
-    "left_ankle_roll_joint":      1.814445686584846,
-    "right_hip_pitch_joint":      2.557889775413375,
-    "right_hip_roll_joint":       6.308801853496639,
-    "right_hip_yaw_joint":        2.557889775413375,
-    "right_knee_joint":           6.308801853496639,
-    "right_ankle_pitch_joint":    1.814445686584846,
-    "right_ankle_roll_joint":     1.814445686584846,
-    "waist_yaw_joint":            2.557889775413375,
-    "waist_roll_joint":           1.814445686584846,
-    "waist_pitch_joint":          1.814445686584846,
-    "left_shoulder_pitch_joint":  0.907222843292423,
-    "left_shoulder_roll_joint":   0.907222843292423,
-    "left_shoulder_yaw_joint":    0.907222843292423,
-    "left_elbow_joint":           0.907222843292423,
-    "left_wrist_roll_joint":      0.907222843292423,
-    "left_wrist_pitch_joint":     1.06814150219,
-    "left_wrist_yaw_joint":       1.06814150219,
-    "right_shoulder_pitch_joint": 0.907222843292423,
-    "right_shoulder_roll_joint":  0.907222843292423,
-    "right_shoulder_yaw_joint":   0.907222843292423,
-    "right_elbow_joint":          0.907222843292423,
-    "right_wrist_roll_joint":     0.907222843292423,
-    "right_wrist_pitch_joint":    1.06814150219,
-    "right_wrist_yaw_joint":      1.06814150219,
-}
-# fmt: on
-
-
 def _add_g1_scene(project) -> None:
     g1_scene = project.add_scene(
         control_dt=0.02,  # 50 Hz control step
@@ -247,13 +150,6 @@ def _add_g1_scene(project) -> None:
         control=True,
     )
 
-    g1_actions = {
-        "joint_pos": JointPositionActionCfg(
-            scale=_G1_JOINT_SCALE,
-            stiffness=_G1_JOINT_STIFFNESS,
-            damping=_G1_JOINT_DAMPING,
-        )
-    }
     g1_terminations = {
         "bad_orientation": TerminationTermCfg(
             func=term_fns.bad_orientation, params={"limit_angle": 1.0}
@@ -267,7 +163,6 @@ def _add_g1_scene(project) -> None:
         policy=onnx.load("assets/unitree_g1/locomotion.onnx"),
         name="Locomotion",
         config_path="assets/unitree_g1/locomotion.json",
-        actions=g1_actions,
         terminations=g1_terminations,
         commands={
             "velocity": mjswan.velocity_command(
@@ -301,23 +196,16 @@ def _add_g1_scene(project) -> None:
         policy=onnx.load("assets/unitree_g1/balance.onnx"),
         name="Balance",
         config_path="assets/unitree_g1/balance.json",
-        actions=g1_actions,
         terminations=g1_terminations,
         observations={
             "observation": ObservationGroupCfg(
                 terms={
-                    "base_ang_vel": ObservationTermCfg(
-                        func=obs_fns.base_ang_vel, history_length=1
-                    ),
+                    "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity, history_length=1
+                        func=obs_fns.projected_gravity
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, history_length=1
-                    ),
-                    "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel, history_length=1
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+                    "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
                     "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }
             )
@@ -456,22 +344,9 @@ def _add_go1_scene(project) -> None:
         )
     )
 
-    # NOTE: himloco uses an interleaved history format (dict with "interleaved": true)
-    # that is not yet expressible via ObservationGroupCfg. observations remains in himloco.json.
-    go1_scene.add_policy(
-        policy=onnx.load("assets/unitree_go1/himloco.onnx"),
-        name="HiMLoco",
-        config_path="assets/unitree_go1/himloco.json",
-        actions={
-            "joint_pos": JointPositionActionCfg(
-                scale=0.25,
-                stiffness=40.0,
-                damping=1.0,
-            )
-        },
-        commands={"velocity": mjswan.velocity_command()},
-    )
-
+    # HiMLoco is not shown: its config asks for an interleaved group-level history
+    # (`{history_steps: 6, interleaved: true}`), and the runtime stores that flag
+    # without applying it — the stack it feeds the policy is frame-major either way.
     go1_scene.add_policy(
         policy=onnx.load("assets/unitree_go1/decap.onnx"),
         name="Decap",
@@ -487,20 +362,17 @@ def _add_go1_scene(project) -> None:
             "obs_history": ObservationGroupCfg(
                 terms={
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity, history_length=1
+                        func=obs_fns.projected_gravity
                     ),
                     "velocity_cmd": ObservationTermCfg(
                         func=obs_fns.generated_commands,
                         params={"command_name": "velocity"},
                         scale=(2.0, 2.0, 0.25),
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, history_length=1
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
                     "joint_vel": ObservationTermCfg(
                         func=obs_fns.joint_vel_rel,
                         scale=0.05,
-                        history_length=1,
                     ),
                     "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }

@@ -426,6 +426,15 @@ class ConstantTerm(ValueError):
     """
 
 
+class ConstantGroup(ValueError):
+    """Every term in a group is native or constant, so the group has no graph.
+
+    Not an error: the per-term path serializes each of these on its own (a native
+    marker, or a baked ``native: constant``). The fused path raises this so the
+    caller can fall back to it rather than fusing an empty graph.
+    """
+
+
 class UntraceableTerm(ValueError):
     """A term that read state the tracer could not follow into the graph.
 
@@ -541,18 +550,48 @@ def slot_to_json(key: SlotKey, shape: Sequence[int] | None = None) -> dict[str, 
 
 
 def slots_json(export: Any) -> list[dict[str, Any]]:
-    """Serialize every input slot of a term/event/command export, shapes included.
+    """Serialize the input slots the exported graph actually takes, shapes included.
 
     Shared by all three export kinds so the wire format can only be described in
     one place. ``input_shapes`` is positionally parallel to ``input_slots``; a
     short or absent list degrades to shape-less entries rather than raising, which
     keeps hand-built exports in tests usable.
+
+    Slots the exporter folded away are dropped rather than emitted: a term reading
+    an integer index tensor (mjlab's ``MotionCommand.body_indexes``) declares it as
+    a slot, and ``torch.onnx.export`` then bakes it into the Gather it feeds. The
+    runtime feeds by name, and ORT rejects a feed that is not a graph input
+    outright (``invalid input '…'``), so keeping the slot would break every run of
+    the graph — and there would be nothing to read it from either.
     """
     shapes = getattr(export, "input_shapes", None) or []
-    return [
+    entries = [
         slot_to_json(key, shapes[i] if i < len(shapes) else None)
         for i, key in enumerate(export.input_slots)
     ]
+    graph_inputs = _graph_input_names(getattr(export, "onnx_bytes", None))
+    if graph_inputs is None:
+        return entries
+    return [entry for entry in entries if entry["input"] in graph_inputs]
+
+
+def _graph_input_names(onnx_bytes: bytes | None) -> set[str] | None:
+    """Input names of an exported graph, or None when there is no graph to ask.
+
+    Unparseable bytes answer None rather than raising: a hand-built export in a
+    test carries a placeholder, and every real one came out of
+    ``torch.onnx.export`` a few lines earlier. Filtering nothing degrades to the
+    pre-filter behaviour; refusing to serialize the term does not.
+    """
+    if not onnx_bytes:
+        return None
+    import onnx
+
+    try:
+        model = onnx.load_from_string(onnx_bytes)
+    except Exception:
+        return None
+    return {i.name for i in model.graph.input}
 
 
 def trace_term(
@@ -912,6 +951,8 @@ class EventExport:
     input_slots: list[SlotKey]
     input_names: list[str]
     rand_dim: int
+    rand_ranges: list[list[float]]
+    """Per-element ``[low, high]`` for ``rand`` — the runtime draws with these."""
     output_names: list[str]
     write_targets: list[dict[str, Any]]
     """Per write-kind descriptor: what the outputs target (entity, kind, fields)."""
@@ -958,6 +999,7 @@ def trace_event_term(
     output_names, ref_tensors = _flatten_captures(captures)
     ref_rand = rec.rand_vector
     rand_dim = rec.rand_dim
+    rand_ranges = rec.rand_ranges
 
     # 2. Classify recorded reads: dynamic data-field inputs vs baked constants.
     dynamic: dict[SlotKey, torch.Tensor] = {}
@@ -1022,6 +1064,7 @@ def trace_event_term(
         input_slots=dynamic_keys,
         input_names=dyn_input_names,
         rand_dim=rand_dim,
+        rand_ranges=rand_ranges,
         output_names=output_names,
         write_targets=write_targets,
         reference_outputs=tuple(t.detach() for t in ref_tensors),
@@ -1225,6 +1268,8 @@ class CommandExport:
     input_slots: list[SlotKey]
     input_names: list[str]
     rand_dim: int
+    rand_ranges: list[list[float]]
+    """Per-element ``[low, high]`` for ``rand`` — the runtime draws with these."""
     output_names: list[str]
     write_targets: list[dict[str, Any]]
     reference_rand: torch.Tensor
@@ -1263,6 +1308,7 @@ def trace_command_term(
         captures = dict(rec_env.captures)
     ref_rand = rec.rand_vector
     rand_dim = rec.rand_dim
+    rand_ranges = rec.rand_ranges
     _restore_state(term, snap)
 
     output_write_names, _ = _flatten_captures(captures)
@@ -1352,6 +1398,7 @@ def trace_command_term(
         input_slots=dynamic_keys,
         input_names=dyn_names,
         rand_dim=rand_dim,
+        rand_ranges=rand_ranges,
         output_names=output_names,
         write_targets=write_targets,
         reference_rand=ref_rand.detach(),
@@ -1417,6 +1464,7 @@ class GroupTermSpec:
     clip: tuple[float, float] | None = None
     scale: Any = None
     """Per-term scale — a float, or a sequence broadcast over the term's width."""
+    native_size: int | None = None
 
 
 @dataclass
@@ -1507,6 +1555,34 @@ class _GroupModule(nn.Module):
         return torch.cat(pieces, dim=-1)
 
 
+def _native_example(term: GroupTermSpec, env: Any) -> torch.Tensor:
+    """Example value fixing a native term's graph-input width.
+
+    A native term is an input, not a body, so only its width matters — but the
+    width has to be fixed at export time. The live env is asked first; a trace env
+    built by :func:`mjswan.trace_env.build_single_entity_trace_env` has no action
+    terms and no command manager, so ``last_action`` comes back empty and
+    ``generated_commands`` raises. Both widths live browser-side there, and the
+    build hands them down as ``native_size``.
+    """
+    try:
+        value = term.func(env, **term.params).detach()
+    except Exception:  # noqa: BLE001 — a trace env legitimately has neither
+        value = None
+    if value is not None and value.reshape(1, -1).shape[-1] > 0:
+        return value
+    if term.native_size:
+        return torch.zeros(1, term.native_size)
+    raise ValueError(
+        f"Observation term {term.name!r} is native, but neither the trace env nor "
+        "the policy config gives its width. Set the policy's "
+        "`policy_joint_names`/`policy_num_actions` (for `last_action`), or declare "
+        "the command's UI inputs (for `generated_commands`). A term-scoped "
+        "`last_action` has no config answer at all — it needs a trace env whose "
+        "action manager holds the term."
+    )
+
+
 def _scale_tensor(scale: Any, like: torch.Tensor) -> torch.Tensor:
     """A term's ``scale`` as a tensor broadcastable over its output."""
     if isinstance(scale, torch.Tensor):
@@ -1571,7 +1647,7 @@ def trace_observation_group(
                 # `get_term` raises a bare `KeyError` from inside the term body and the
                 # build never reaches this.
                 entry["action_offset"] = action_term_offset(env, action_name)
-            value = term.func(env, **term.params).detach()
+            value = _native_example(term, env)
             entry["size"] = int(value.reshape(1, -1).shape[-1])
             native_inputs.append(entry)
             native_examples.append(value)
@@ -1612,7 +1688,7 @@ def trace_observation_group(
         )
 
     if not dynamic:
-        raise ValueError(
+        raise ConstantGroup(
             f"Observation group {name!r} reads no time-varying state; every term is "
             "native or constant, so there is no graph to run."
         )

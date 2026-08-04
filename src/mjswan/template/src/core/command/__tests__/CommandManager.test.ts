@@ -145,3 +145,49 @@ describe('CommandManager: OnnxCommand registration', () => {
     expect(runFn).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * A `UiCommand`'s value as a traced graph's slot. A term that merely forwards a
+ * command is native, but one that does arithmetic on it is a traced body whose
+ * `{command, field: 'command'}` slot has to resolve against the UI command itself —
+ * this command has no Python side to read it from.
+ */
+describe('CommandManager: UiCommand state field', () => {
+  const context = {
+    mujoco: {} as unknown as CommandTermContext['mujoco'],
+    mjModel: null,
+    mjData: null,
+    scene: {} as unknown as CommandTermContext['scene'],
+  };
+  const config: CommandsConfig = {
+    compliance: {
+      name: 'UiCommand',
+      ui: {
+        inputs: [
+          { type: 'checkbox', name: 'enabled', label: 'Enabled', default: true },
+          { type: 'slider', name: 'force', label: 'Force', min: 10, max: 20, default: 12, step: 0.5 },
+        ],
+      },
+    },
+  } as unknown as CommandsConfig;
+
+  it('serves the UI values under the `command` field, and nothing else', () => {
+    const mgr = new CommandManager();
+    mgr.initialize(config, context as CommandTermContext);
+    const term = mgr.getTerm('compliance') as unknown as {
+      getStateField(field: string): Float32Array | null;
+    };
+    expect(Array.from(term.getStateField('command')!)).toEqual([1, 12]);
+    expect(term.getStateField('vel_command_b')).toBeNull();
+  });
+
+  it('tracks a slider change, so the graph sees the live value', () => {
+    const mgr = new CommandManager();
+    mgr.initialize(config, context as CommandTermContext);
+    mgr.setValue('compliance:force', 18);
+    const term = mgr.getTerm('compliance') as unknown as {
+      getStateField(field: string): Float32Array | null;
+    };
+    expect(Array.from(term.getStateField('command')!)).toEqual([1, 18]);
+  });
+});

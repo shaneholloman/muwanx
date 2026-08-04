@@ -15,6 +15,8 @@ supply ``rand``, thread dynamic reads, and apply any ``entity_write``:
   ONNX I/O tensors and persist state across frames (brief §3a).
 - ``command_field`` — which state field is the command value.
 - ``rand_dim``      — how many seeded PRNG draws to feed as ``rand``.
+- ``rand_ranges``   — the ``[low, high]`` each of those draws comes from (the graph
+  consumes the sampler's output, so it carries no bounds of its own).
 - ``input_slots``   — time-varying runtime reads threaded as graph inputs.
 - ``write_targets`` — any ``entity_write`` (cube/root pose+velocity) the graph emits.
 """
@@ -44,6 +46,7 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
         "onnx",
         "command_field",
         "rand_dim",
+        "rand_ranges",
         "state_fields",
         "input_slots",
         "write_targets",
@@ -55,6 +58,18 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
         "onnx": {"type": "string"},
         "command_field": {"type": "string"},
         "rand_dim": {"type": "integer", "minimum": 0},
+        # One [low, high] per element of `rand`, in draw order. The traced graph
+        # consumes the sampler's *output*, so the bounds live nowhere else and the
+        # runtime would otherwise draw [0, 1) for every element.
+        "rand_ranges": {
+            "type": "array",
+            "items": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 2,
+                "maxItems": 2,
+            },
+        },
         "state_fields": {
             "type": "array",
             "items": {
@@ -168,6 +183,7 @@ def command_config(
         "onnx": onnx_ref,
         "command_field": export.command_field,
         "rand_dim": export.rand_dim,
+        "rand_ranges": export.rand_ranges,
         "state_fields": export.state_fields,
         "input_slots": slots_json(export),
         "write_targets": export.write_targets,
@@ -219,6 +235,7 @@ def validate_command_config(cfg: dict[str, Any]) -> list[str]:
         "onnx": str,
         "command_field": str,
         "rand_dim": int,
+        "rand_ranges": list,
         "state_fields": list,
         "input_slots": list,
         "write_targets": list,
@@ -231,6 +248,15 @@ def validate_command_config(cfg: dict[str, Any]) -> list[str]:
 
     if cfg.get("name") != "OnnxCommand":
         errors.append("'name' must be 'OnnxCommand' (the registry key)")
+
+    # One [low, high] per rand element, or the runtime silently draws [0, 1) for
+    # the ones it has no range for — which for a zero-width range (mjlab's empty
+    # `pose_range`) is the difference between "no jitter" and a metre of it.
+    ranges = cfg.get("rand_ranges")
+    if isinstance(ranges, list) and len(ranges) != cfg.get("rand_dim", 0):
+        errors.append(
+            f"rand_ranges has {len(ranges)} entries, rand_dim is {cfg.get('rand_dim')}"
+        )
 
     names: set[str] = set()
     for sf in cfg.get("state_fields", []):
