@@ -517,8 +517,16 @@ class Builder:
                 )
             data["observations"] = obs_config
         if policy.actions:
+            # The term *set* is the Python one, but each term is merged field-wise
+            # over the authored config (`config_path`). That config is the policy's
+            # own, and for a motor-actuator robot it is where the PD gains the
+            # runtime needs live — the model carries none. `to_dict` omits the
+            # fields a term leaves unset, so a scene can tweak, say, the offset
+            # without restating the gains.
+            authored = data.get("actions", {})
             data["actions"] = {
-                name: cfg.to_dict() for name, cfg in policy.actions.items()
+                name: {**authored.get(name, {}), **cfg.to_dict()}
+                for name, cfg in policy.actions.items()
             }
         if policy.terminations:
             terminations = serialize_terminations(policy.terminations, env, scene_dir)

@@ -121,105 +121,6 @@ def _fix_unitree_mujoco_macos() -> None:
     )
 
 
-# fmt: off
-_G1_JOINT_SCALE = {
-    "left_hip_pitch_joint":       0.5475464629911068,
-    "left_hip_roll_joint":        0.35066146637882434,
-    "left_hip_yaw_joint":         0.5475464629911068,
-    "left_knee_joint":            0.35066146637882434,
-    "left_ankle_pitch_joint":     0.43857731392336724,
-    "left_ankle_roll_joint":      0.43857731392336724,
-    "right_hip_pitch_joint":      0.5475464629911068,
-    "right_hip_roll_joint":       0.35066146637882434,
-    "right_hip_yaw_joint":        0.5475464629911068,
-    "right_knee_joint":           0.35066146637882434,
-    "right_ankle_pitch_joint":    0.43857731392336724,
-    "right_ankle_roll_joint":     0.43857731392336724,
-    "waist_yaw_joint":            0.5475464629911068,
-    "waist_roll_joint":           0.43857731392336724,
-    "waist_pitch_joint":          0.43857731392336724,
-    "left_shoulder_pitch_joint":  0.43857731392336724,
-    "left_shoulder_roll_joint":   0.43857731392336724,
-    "left_shoulder_yaw_joint":    0.43857731392336724,
-    "left_elbow_joint":           0.43857731392336724,
-    "left_wrist_roll_joint":      0.43857731392336724,
-    "left_wrist_pitch_joint":     0.07450087032950714,
-    "left_wrist_yaw_joint":       0.07450087032950714,
-    "right_shoulder_pitch_joint": 0.43857731392336724,
-    "right_shoulder_roll_joint":  0.43857731392336724,
-    "right_shoulder_yaw_joint":   0.43857731392336724,
-    "right_elbow_joint":          0.43857731392336724,
-    "right_wrist_roll_joint":     0.43857731392336724,
-    "right_wrist_pitch_joint":    0.07450087032950714,
-    "right_wrist_yaw_joint":      0.07450087032950714,
-}
-_G1_JOINT_STIFFNESS = {
-    "left_hip_pitch_joint":       40.17923863450712,
-    "left_hip_roll_joint":        99.09842777666111,
-    "left_hip_yaw_joint":         40.17923863450712,
-    "left_knee_joint":            99.09842777666111,
-    "left_ankle_pitch_joint":     28.50124619574858,
-    "left_ankle_roll_joint":      28.50124619574858,
-    "right_hip_pitch_joint":      40.17923863450712,
-    "right_hip_roll_joint":       99.09842777666111,
-    "right_hip_yaw_joint":        40.17923863450712,
-    "right_knee_joint":           99.09842777666111,
-    "right_ankle_pitch_joint":    28.50124619574858,
-    "right_ankle_roll_joint":     28.50124619574858,
-    "waist_yaw_joint":            40.17923863450712,
-    "waist_roll_joint":           28.50124619574858,
-    "waist_pitch_joint":          28.50124619574858,
-    "left_shoulder_pitch_joint":  14.25062309787429,
-    "left_shoulder_roll_joint":   14.25062309787429,
-    "left_shoulder_yaw_joint":    14.25062309787429,
-    "left_elbow_joint":           14.25062309787429,
-    "left_wrist_roll_joint":      14.25062309787429,
-    "left_wrist_pitch_joint":     16.77832748089279,
-    "left_wrist_yaw_joint":       16.77832748089279,
-    "right_shoulder_pitch_joint": 14.25062309787429,
-    "right_shoulder_roll_joint":  14.25062309787429,
-    "right_shoulder_yaw_joint":   14.25062309787429,
-    "right_elbow_joint":          14.25062309787429,
-    "right_wrist_roll_joint":     14.25062309787429,
-    "right_wrist_pitch_joint":    16.77832748089279,
-    "right_wrist_yaw_joint":      16.77832748089279,
-}
-_G1_JOINT_DAMPING = {
-    "left_hip_pitch_joint":       2.557889775413375,
-    "left_hip_roll_joint":        6.308801853496639,
-    "left_hip_yaw_joint":         2.557889775413375,
-    "left_knee_joint":            6.308801853496639,
-    "left_ankle_pitch_joint":     1.814445686584846,
-    "left_ankle_roll_joint":      1.814445686584846,
-    "right_hip_pitch_joint":      2.557889775413375,
-    "right_hip_roll_joint":       6.308801853496639,
-    "right_hip_yaw_joint":        2.557889775413375,
-    "right_knee_joint":           6.308801853496639,
-    "right_ankle_pitch_joint":    1.814445686584846,
-    "right_ankle_roll_joint":     1.814445686584846,
-    "waist_yaw_joint":            2.557889775413375,
-    "waist_roll_joint":           1.814445686584846,
-    "waist_pitch_joint":          1.814445686584846,
-    "left_shoulder_pitch_joint":  0.907222843292423,
-    "left_shoulder_roll_joint":   0.907222843292423,
-    "left_shoulder_yaw_joint":    0.907222843292423,
-                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
-                    "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
-    "left_elbow_joint":           0.907222843292423,
-    "left_wrist_roll_joint":      0.907222843292423,
-    "left_wrist_pitch_joint":     1.06814150219,
-    "left_wrist_yaw_joint":       1.06814150219,
-    "right_shoulder_pitch_joint": 0.907222843292423,
-    "right_shoulder_roll_joint":  0.907222843292423,
-    "right_shoulder_yaw_joint":   0.907222843292423,
-    "right_elbow_joint":          0.907222843292423,
-    "right_wrist_roll_joint":     0.907222843292423,
-    "right_wrist_pitch_joint":    1.06814150219,
-    "right_wrist_yaw_joint":      1.06814150219,
-}
-# fmt: on
-
-
 def _add_g1_scene(project) -> None:
     g1_scene = project.add_scene(
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
@@ -248,13 +149,6 @@ def _add_g1_scene(project) -> None:
         control=True,
     )
 
-    g1_actions = {
-        "joint_pos": JointPositionActionCfg(
-            scale=_G1_JOINT_SCALE,
-            stiffness=_G1_JOINT_STIFFNESS,
-            damping=_G1_JOINT_DAMPING,
-        )
-    }
     g1_terminations = {
         "bad_orientation": TerminationTermCfg(
             func=term_fns.bad_orientation, params={"limit_angle": 1.0}
@@ -268,7 +162,6 @@ def _add_g1_scene(project) -> None:
         policy=onnx.load("assets/unitree_g1/locomotion.onnx"),
         name="Locomotion",
         config_path="assets/unitree_g1/locomotion.json",
-        actions=g1_actions,
         terminations=g1_terminations,
         commands={
             "velocity": mjswan.velocity_command(
@@ -302,7 +195,6 @@ def _add_g1_scene(project) -> None:
         policy=onnx.load("assets/unitree_g1/balance.onnx"),
         name="Balance",
         config_path="assets/unitree_g1/balance.json",
-        actions=g1_actions,
         terminations=g1_terminations,
         observations={
             "observation": ObservationGroupCfg(
@@ -311,6 +203,8 @@ def _add_g1_scene(project) -> None:
                     "projected_gravity": ObservationTermCfg(
                         func=obs_fns.projected_gravity
                     ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+                    "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
                     "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }
             )

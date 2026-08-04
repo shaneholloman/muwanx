@@ -1008,6 +1008,51 @@ class TestSaveWebPolicyJson:
         assert "new_action" in data["actions"]
         assert "old_action" not in data["actions"]
 
+    def test_config_path_action_fields_survive_a_partial_override(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """A term names what it changes; the rest of the authored entry stays.
+
+        For a motor-actuator robot the PD gains live in the policy's own config —
+        the model has none — so a scene that only wants a different offset must not
+        have to restate them.
+        """
+        config_file = tmp_path / "policy_cfg.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "onnx": {"path": "old.onnx"},
+                    "actions": {
+                        "joint_pos": {
+                            "type": "joint_position",
+                            "scale": {"j": 0.5},
+                            "stiffness": {"j": 40.0},
+                            "damping": {"j": 2.5},
+                        }
+                    },
+                }
+            )
+        )
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            config_path=str(config_file),
+            actions={
+                "joint_pos": JointPositionActionCfg(
+                    actuator_names=(".*",), offset={"j": 0.25}
+                )
+            },
+        )
+        entry = self._policy_json(self._run(builder, tmp_path), "Policy")["actions"][
+            "joint_pos"
+        ]
+        assert entry["offset"] == {"j": 0.25}
+        assert entry["stiffness"] == {"j": 40.0}
+        assert entry["damping"] == {"j": 2.5}
+        assert entry["scale"] == {"j": 0.5}
+
     def test_config_path_onnx_path_updated(self, tmp_path, minimal_model, minimal_onnx):
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "stale.onnx"}}))
