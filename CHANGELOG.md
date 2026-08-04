@@ -20,12 +20,16 @@ shortcuts were removed outright (no alias) — see Removed.**
 - `Builder.add_project_mjlab(task_id, ...)` — instance-method counterpart to the
   `Builder.from_mjlab` classmethod factory, for adding an mjlab task to a builder
   that already has other projects. `from_mjlab` now delegates to it.
-- Declarative-DSL primitives so more observations compose without custom
-  TypeScript (see ADR 0003, #79): `mjswan.dsl` gains `div` / `sqrt` / `sum_` /
-  `slice_` / `history` / `normalize` / `quat_to_rot6d_columns` and the
-  motion-reference sources `tracking_ref_root_pos` / `tracking_ref_root_quat` /
-  `tracking_ref_joint_pos` / `tracking_is_ready`; `NodeRef` supports `/`. The
-  Gentle Humanoid demo's observations are now fully declarative.
+- `ObservationTermCfg.history_steps` — sparse look-back offsets for a term, e.g.
+  `(0, 1, 2, 4, 8, 16)`, where mjlab's `history_length` can only count frames.
+  The runtime now stacks per-term history at all (previously the build emitted
+  `history_length` and nothing read it, so per-term history was dropped).
+- Look-ahead reference slots on the built-in `TrackingCommand`: `ref_root_pos_w`,
+  `ref_root_quat_w`, `ref_joint_pos` (each the reference trajectory sampled at the
+  command's `time_steps` offsets) and `is_ready`, for policies trained on a window
+  of the clip rather than the current frame alone.
+- `build_single_entity_trace_env(commands=...)` and `TraceCommandManager`, so a
+  traced term can read a command that exists browser-side only.
 
 ### Changed
 
