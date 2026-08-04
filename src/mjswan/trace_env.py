@@ -16,12 +16,44 @@ from __future__ import annotations
 from typing import Any, Callable
 
 
+class TraceCommandManager:
+    """Stand-in ``CommandManager`` serving trace-time values for browser-side commands.
+
+    A traced term may read a command the *browser* owns and the trace env cannot
+    build: a ``UiCommand`` (a slider has no Python side at all), or a native
+    ``TrackingCommand`` whose clip lookup is data rather than math. The tracer only
+    needs each read to hand back a real tensor of the right shape — the values bake
+    nothing, they become graph *inputs* the runtime serves from the live command
+    (``getStateField``). So a plain object with the right tensor attributes is
+    enough, and this is what makes ``env.command_manager.get_term(name)`` find it.
+
+    ``get_command(name)`` returns the term's ``command`` attribute, as mjlab's own
+    ``CommandManager`` does.
+    """
+
+    def __init__(self, terms: dict[str, Any]):
+        self._terms = dict(terms)
+
+    def get_term(self, name: str) -> Any:
+        if name not in self._terms:
+            raise KeyError(
+                f"Trace env has no command {name!r}; it knows "
+                f"{sorted(self._terms)}. Pass it to "
+                "`build_single_entity_trace_env(commands=...)`."
+            )
+        return self._terms[name]
+
+    def get_command(self, name: str) -> Any:
+        return self.get_term(name).command
+
+
 def build_single_entity_trace_env(
     spec_fn: Callable[[], Any],
     *,
     entity_name: str = "robot",
     device: str = "cpu",
     zero_geom_margins: bool = True,
+    commands: dict[str, Any] | None = None,
 ) -> Any:
     """Build a minimal single-entity ``ManagerBasedRlEnv`` for ONNX tracing.
 
@@ -47,10 +79,17 @@ def build_single_entity_trace_env(
             so zeroing them is safe here. Set ``False`` if your spec is
             already margin-clean and you want the geoms untouched for some
             other reason.
+        commands: Trace-time stand-ins for commands the browser owns, keyed by the
+            name traced terms read (``env.command_manager.get_term(name)``). See
+            :class:`TraceCommandManager`; omit when no term reads a command.
 
     Returns:
         A live ``mjlab.envs.ManagerBasedRlEnv``, already ``reset()``.
     """
+    import warp
+
+    warp.config.quiet = True
+
     from mjlab.entity import EntityCfg
     from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
     from mjlab.scene import SceneCfg
@@ -75,6 +114,10 @@ def build_single_entity_trace_env(
     env_cfg = ManagerBasedRlEnvCfg(decimation=1, scene=scene_cfg)
     env = ManagerBasedRlEnv(env_cfg, device=device)
     env.reset()
+    if commands:
+        # After reset(): mjlab builds its own (empty) manager during construction,
+        # and this env is never stepped, so nothing else consults it.
+        env.command_manager = TraceCommandManager(commands)
     return env
 
 
@@ -109,4 +152,4 @@ def _keyframe_joint_pos(spec: Any) -> dict[str, float]:
     return positions
 
 
-__all__ = ["build_single_entity_trace_env"]
+__all__ = ["TraceCommandManager", "build_single_entity_trace_env"]
