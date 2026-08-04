@@ -572,9 +572,13 @@ mjswan.ui_command(inputs: list[CommandInput]) -> CommandTermConfig
 Build a `CommandTermConfig` whose value is driven by manual UI inputs (sliders, buttons, checkboxes). Pass the result to `add_policy(commands={...})`.
 
 ```python
-target_cmd = mjswan.ui_command([
-    mjswan.Slider("target_height", "Target Height (m)", range=(0.3, 1.8), default=1.0),
-])
+target_cmd = mjswan.ui_command(
+    [
+        mjswan.Slider(
+            "target_height", "Target Height (m)", range=(0.3, 1.8), default=1.0
+        ),
+    ]
+)
 scene.add_policy(name="PD", policy=model, commands={"target": target_cmd})
 ```
 

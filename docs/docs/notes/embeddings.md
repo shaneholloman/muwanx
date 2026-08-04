@@ -51,6 +51,7 @@ from google.colab import output
 PORT = 8000
 DIRECTORY = "dist"  # directory produced by builder.build()
 
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIRECTORY, **kwargs)
@@ -61,9 +62,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         super().end_headers()
 
+
 def start_server():
     with socketserver.TCPServer(("", PORT), Handler) as httpd:
         httpd.serve_forever()
+
 
 thread = threading.Thread(target=start_server, daemon=True)
 thread.start()

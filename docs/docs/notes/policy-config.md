@@ -51,12 +51,16 @@ obs = {
     "policy": ObservationGroupCfg(
         terms={
             "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
-            "projected_gravity": ObservationTermCfg(func=obs_fns.projected_gravity_isaac),
+            "projected_gravity": ObservationTermCfg(
+                func=obs_fns.projected_gravity_isaac
+            ),
             "joint_pos": ObservationTermCfg(
-                func=obs_fns.joint_positions_isaac, scale=1.0,
+                func=obs_fns.joint_positions_isaac,
+                scale=1.0,
             ),
             "joint_vel": ObservationTermCfg(
-                func=obs_fns.joint_vel_rel, scale=0.05,
+                func=obs_fns.joint_vel_rel,
+                scale=0.05,
             ),
             "last_action": ObservationTermCfg(func=obs_fns.previous_actions),
             "velocity_cmd": ObservationTermCfg(
@@ -115,9 +119,9 @@ actions = {
         actuator_names=(".*",),
         scale=0.25,
         offset=0.0,
-        use_default_offset=True,     # action=0 commands the default pose
-        stiffness=40.0,              # kp (scalar, per-joint list, or dict by joint name)
-        damping=1.0,                 # kd
+        use_default_offset=True,  # action=0 commands the default pose
+        stiffness=40.0,  # kp (scalar, per-joint list, or dict by joint name)
+        damping=1.0,  # kd
     ),
 }
 
@@ -139,10 +143,14 @@ actions = {
 
 ```python
 commands = {
-    "velocity": mjswan.velocity_command(),           # standard 3-DoF locomotion
-    "target": mjswan.ui_command([                    # arbitrary UI inputs
-        mjswan.Slider("target_height", "Target Height (m)", range=(0.3, 1.8), default=1.0),
-    ]),
+    "velocity": mjswan.velocity_command(),  # standard 3-DoF locomotion
+    "target": mjswan.ui_command(
+        [  # arbitrary UI inputs
+            mjswan.Slider(
+                "target_height", "Target Height (m)", range=(0.3, 1.8), default=1.0
+            ),
+        ]
+    ),
 }
 ```
 
@@ -158,7 +166,7 @@ from mjswan.managers.termination_manager import TerminationTermCfg
 
 terminations = {
     "time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True),
-    "fallen":   TerminationTermCfg(
+    "fallen": TerminationTermCfg(
         func=term_fns.bad_orientation,
         params={"limit_angle": 1.0},
     ),
