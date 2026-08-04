@@ -29,12 +29,25 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import fixture from './fixtures/rollout/rollout.json';
-import { FusedObservation, type FusedObservationConfig } from '../../observation/FusedObservation';
+import { CommandManager } from '../../command/CommandManager';
+import type {
+  CommandConfigEntry,
+  CommandTerm,
+  CommandTermConstructor,
+  CommandTermContext,
+  CommandsConfig,
+} from '../../command/types';
+import type { FusedObservationConfig } from '../../observation/FusedObservation';
 import { createOnnxSession, type OnnxSession, type SlotReader } from '../../onnx/session';
 import { createSlotReader, type SlotReaderContext } from '../../onnx/slotReader';
 import { TerminationManager } from '../../termination/TerminationManager';
-import type { PolicyRunner } from '../../policy/PolicyRunner';
-import type { PolicyState, TerminationConfigEntry } from '../../policy/types';
+import { PolicyRunner } from '../../policy/PolicyRunner';
+import type {
+  PolicyConfig,
+  PolicyRunnerContext,
+  PolicyState,
+  TerminationConfigEntry,
+} from '../../policy/types';
 
 const FIXTURES = join(__dirname, 'fixtures/rollout');
 
@@ -82,26 +95,83 @@ function contextFor(task: TaskFixture, step: Step): SlotReaderContext {
   return { mjModel, mjData } as unknown as SlotReaderContext;
 }
 
-/**
- * Stands in for the orchestrator's env-level state: the policy's own last output
- * and a live command term. Both are native by design (no graph computes them), so
- * the fixture supplies mjlab's values and the comparison stays about the graph and
- * the pipeline. Their own computation is covered by the `PolicyRunner` and
- * `OnnxCommand` suites.
- */
-function runnerFor(task: TaskFixture, step: () => Step): PolicyRunner {
-  const nativeByKind = new Map<string, string>();
-  for (const native of task.group.native_inputs ?? []) {
-    nativeByKind.set(native.native, native.input);
-  }
-  const read = (kind: string): Float32Array => {
-    const key = nativeByKind.get(kind);
-    return Float32Array.from(key ? (step().native[key] ?? []) : []);
+/** Reads one native input's fixture value for the current step. */
+function nativeReader(task: TaskFixture, step: () => Step, kind: string): () => Float32Array {
+  const entry = (task.group.native_inputs ?? []).find(native => native.native === kind);
+  return () => Float32Array.from(entry ? (step().native[entry.input] ?? []) : []);
+}
+
+/** A command term serving one fixture value, registered like any plugin term. */
+function fixtureCommandClass(read: () => Float32Array): CommandTermConstructor {
+  return class FixtureCommand implements CommandTerm {
+    constructor(
+      _termName: string,
+      _config: CommandConfigEntry,
+      _context: CommandTermContext,
+    ) {}
+
+    getCommand(): Float32Array {
+      return read();
+    }
   };
-  return {
-    getLastActions: () => read('prev_action'),
-    getContext: () => ({ commandManager: { getCommand: () => read('command') } }),
-  } as unknown as PolicyRunner;
+}
+
+/**
+ * The real `PolicyRunner` and `CommandManager`, wired as `runtime.ts` wires them.
+ *
+ * This used to be a hand-written stub answering `getLastActions`/`getCommand`
+ * straight from the fixture — which left the two manager dependencies the
+ * observation vector genuinely has (Action→Observation and Command→Observation) as
+ * the only part of the chain this test did not run. mjlab's numbers still come from
+ * the fixture, since nothing here recomputes a policy or a command term, but they now
+ * travel the runtime's path to reach the graph: through `setLastActions` into the
+ * runner's own buffer and back out of `getLastActions`, and through a term registered
+ * under the name the build wrote into the config, found by `getCommand`'s lookup.
+ *
+ * The runner also builds the fused observation itself rather than the test
+ * constructing one, so `buildObservationGroups` / `registerGroup` / `buildFrame` — the
+ * layout and width bookkeeping around the graph — are under test too.
+ */
+async function harnessFor(
+  taskId: string,
+  task: TaskFixture,
+  step: () => Step,
+  readSlot: SlotReader,
+): Promise<PolicyRunner> {
+  const commandManager = new CommandManager();
+  // Registered under the names the build emitted, through the real registry path, so
+  // both `getCommand`'s lookup and `FusedObservation`'s construction-time name binding
+  // run against a real manager instead of an object that answers everything.
+  const commands: CommandsConfig = {};
+  for (const native of task.group.native_inputs ?? []) {
+    if (native.native === 'command' && native.command_name) {
+      commands[native.command_name] = { name: 'FixtureCommand' };
+    }
+  }
+  commandManager.initialize(commands, {} as unknown as CommandTermContext, {
+    FixtureCommand: fixtureCommandClass(nativeReader(task, step, 'command')),
+  });
+
+  const sessions = new Map<string, OnnxSession>([
+    [task.group.fused, await sessionFor(taskId, task.group.fused)],
+  ]);
+  const runner = new PolicyRunner(
+    {
+      policy_num_actions: task.num_actions,
+      observations: { policy: task.group },
+    } as unknown as PolicyConfig,
+    {
+      onnxSessions: { get: (path: string) => sessions.get(path) } as never,
+      readOnnxSlot: readSlot,
+    },
+  );
+  await runner.init({
+    mujoco: null,
+    mjModel: null,
+    mjData: null,
+    commandManager,
+  } as unknown as PolicyRunnerContext);
+  return runner;
 }
 
 /** float32 through the graph, so compare at float32 resolution. */
@@ -118,7 +188,7 @@ const EMPTY_STATE = {} as PolicyState;
 describe.each(Object.keys(TASKS))('rollout parity vs mjlab — %s', taskId => {
   const task = TASKS[taskId];
   let current: Step = task.steps[0];
-  let observation: FusedObservation;
+  let runner: PolicyRunner;
   let terminations: TerminationManager;
 
   const readSlot: SlotReader = slot =>
@@ -126,12 +196,17 @@ describe.each(Object.keys(TASKS))('rollout parity vs mjlab — %s', taskId => {
       jointBias: name => task.encoder_bias[name] ?? 0,
     })(slot);
 
+  /** mjlab's `action_manager.action` for the current step, stored as the runtime does. */
+  const readActions = nativeReader(task, () => current, 'prev_action');
+
+  /** Advance to one fixture step, pushing its action through the real runner. */
+  const seek = (step: Step): void => {
+    current = step;
+    runner.setLastActions(readActions());
+  };
+
   beforeAll(async () => {
-    const runner = runnerFor(task, () => current);
-    observation = new FusedObservation(runner, task.group, {
-      session: await sessionFor(taskId, task.group.fused),
-      readSlot,
-    });
+    runner = await harnessFor(taskId, task, () => current, readSlot);
 
     // Every traced termination's graph, keyed the way the config references it —
     // so the manager resolves them exactly as the runtime does.
@@ -152,8 +227,11 @@ describe.each(Object.keys(TASKS))('rollout parity vs mjlab — %s', taskId => {
 
   it('reproduces mjlab’s observation vector at every step', async () => {
     for (const [index, step] of task.steps.entries()) {
-      current = step;
-      const vector = await observation.compute(EMPTY_STATE);
+      seek(step);
+      // Through the runner, not a directly-built `FusedObservation`: the group's
+      // layout, its declared width, and the two native reads all sit between the
+      // graph and this vector.
+      const vector = await runner.collectObservations(EMPTY_STATE);
       expectClose(vector, step.obs, `step ${index}`);
     }
     // A group whose graph silently returned zeros would pass a vector of zeros
@@ -163,9 +241,32 @@ describe.each(Object.keys(TASKS))('rollout parity vs mjlab — %s', taskId => {
     expect(first.some((v, i) => Math.abs(v - last[i]) > 1e-6)).toBe(true);
   }, 120_000);
 
+  it('keeps the native inputs that make the manager wiring observable', () => {
+    // A guard on the harness rather than on the runtime. The Action→Observation and
+    // Command→Observation paths are only under test on a task whose group *has* those
+    // native inputs — Velocity-Flat-G1 does, Cartpole's group has none — so a
+    // regenerated fixture that lost them, or a `command` input that lost its
+    // `command_name`, would silently stop exercising them while every other assertion
+    // here still passed.
+    const natives = task.group.native_inputs ?? [];
+    const command = natives.find(native => native.native === 'command');
+    if (command) {
+      expect(command.command_name, 'a command input must name its term').toBeTruthy();
+      // Found by name in the real manager, which is what `getCommand` resolves.
+      expect(runner.getContext()?.commandManager?.termNames()).toContain(command.command_name);
+    }
+    if (natives.some(native => native.native === 'prev_action')) {
+      expect(runner.getNumActions()).toBe(task.num_actions);
+      expect(readActions().length).toBe(task.num_actions);
+    }
+    // Cartpole legitimately has neither; assert that is still why, so this reads as a
+    // fixture property rather than a skipped check.
+    if (natives.length === 0) expect(taskId).toBe('Mjlab-Cartpole-Balance');
+  });
+
   it('reproduces every termination verdict at every step', async () => {
     for (const [index, step] of task.steps.entries()) {
-      current = step;
+      seek(step);
       // `evaluate()` is synchronous and ORT is not, so a call kicks the graph and
       // reports the *previous* verdict — the runtime accepts that one-frame lag
       // (ADR 0005 §8). Reading this state's verdict therefore takes kick → drain →

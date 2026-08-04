@@ -45,6 +45,7 @@ def setup_builder() -> mjswan.Builder:
     )
 
     demo_project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
         name="G1",
     ).set_trace_env(

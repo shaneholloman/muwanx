@@ -247,7 +247,7 @@ describe('OnnxCommand: resample timer (scalar, ADR §5)', () => {
     expect(resampleFrames).toBe(2);
   });
 
-  it('reset() forces a resample on the next frame', async () => {
+  it('reset() resamples immediately; the frame\'s update only refreshes', async () => {
     const session = new FakeSession(() => velocityOutputs(0, 0, 0));
     const cmd = new OnnxCommand(
       'twist',
@@ -261,10 +261,17 @@ describe('OnnxCommand: resample timer (scalar, ADR §5)', () => {
     await settle();
     expect(session.calls[1].resample_mask.data[0]).toBe(0);
 
-    cmd.reset();
+    // mjlab's `CommandTerm.reset` *is* `_resample`, and `_reset_idx` runs it before
+    // the step's single forward — so the run happens here, not on the next frame.
+    await cmd.reset();
+    expect(session.calls.length).toBe(3);
+    expect(session.calls[2].resample_mask.data[0]).toBe(1);
+
+    // The frame's later `update()` is then `_update_command` alone, which is how
+    // mjlab splits the two across the forward.
     cmd.update(0.1);
     await settle();
-    expect(session.calls[2].resample_mask.data[0]).toBe(1);
+    expect(session.calls[3].resample_mask.data[0]).toBe(0);
   });
 
   it('without resampling_time_range, resamples only on reset', async () => {

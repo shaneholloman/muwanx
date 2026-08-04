@@ -150,6 +150,11 @@ export class CommandManager {
    * rng the registry-based `new Term(name, config, context)` shape has no room
    * for. Warns and skips (rather than throwing) so one missing session doesn't
    * take down every other command in the policy.
+   *
+   * A skipped term is absent from `termNames()`, so an observation term that reads
+   * it fails to bind and the policy does not load. That split is deliberate: the
+   * command itself is degradable, an observation slice that feeds the network is
+   * not — it would arrive as a zero block at a fixed offset in the input vector.
    */
   private buildOnnxCommand(
     groupName: string,
@@ -182,9 +187,22 @@ export class CommandManager {
     }
   }
 
-  resetTerms(): void {
+  /**
+   * Reset every term, **in config order**, awaiting each.
+   *
+   * mjlab's `CommandManager.reset` loops `self._terms.items()` and each term's
+   * `reset` *is* its resample (`_resample(env_ids)`), which for a traced term means
+   * an `ort.run()` that may write to the sim. Sequential rather than `Promise.all`
+   * for the reason `EventManager.onReset` is: two terms writing the same element
+   * resolve last-writer-wins by config order in mjlab, and firing them concurrently
+   * would make that resolution order instead.
+   *
+   * Awaited by the reset chain before the step's single forward, so a resample's
+   * writes are published by that forward — as mjlab's are.
+   */
+  async resetTerms(): Promise<void> {
     for (const term of this.terms.values()) {
-      term.reset?.();
+      await term.reset?.();
     }
     this.syncValuesFromTerms();
     this.emit({ type: 'reset', commandId: '*' });
@@ -219,9 +237,32 @@ export class CommandManager {
     return result;
   }
 
+  /**
+   * The named term's current command vector, or an empty one if there is no such
+   * term.
+   *
+   * The empty return serves a caller that guards its own name by probing `getTerm`
+   * first. A consumer whose *config* declares the name (an
+   * observation term's `command_name`) must validate it against `termNames()` at
+   * construction instead: mjlab asserts the lookup
+   * (`envs/mdp/observations.py` `generated_commands`), and here an unvalidated miss
+   * is zero-padded to the declared width, handing the policy a block of zeros it
+   * was never trained on with nothing logged.
+   */
   getCommand(groupName: string): Float32Array {
     const term = this.terms.get(groupName);
     return term ? term.getCommand() : new Float32Array(0);
+  }
+
+  /**
+   * Names of the terms this manager holds, in registration order.
+   *
+   * For binding-time validation by a consumer that names a command in its own
+   * config, so the miss surfaces once at load — with the available names in the
+   * message — rather than every frame as `getCommand`'s empty vector.
+   */
+  termNames(): string[] {
+    return Array.from(this.terms.keys());
   }
 
   getTerm(groupName: string): CommandTerm | undefined {
@@ -230,16 +271,6 @@ export class CommandManager {
 
   getContext(): CommandTermContext | null {
     return this.context;
-  }
-
-  getVelocityCommand(): Float32Array {
-    if (this.terms.has('velocity')) {
-      return this.getCommand('velocity');
-    }
-    if (this.terms.has('twist')) {
-      return this.getCommand('twist');
-    }
-    return new Float32Array([0.5, 0.0, 0.0]);
   }
 
   setValue(id: string, value: number): void {
@@ -276,8 +307,8 @@ export class CommandManager {
     });
   }
 
-  resetToDefaults(): void {
-    this.resetTerms();
+  resetToDefaults(): Promise<void> {
+    return this.resetTerms();
   }
 
   addEventListener(listener: CommandEventListener): void {

@@ -455,6 +455,27 @@ def test_unsupported_observation_binding_fails_rather_than_dropping():
         serialize_observation_term("height_scan", term, object(), None, None)
 
 
+def test_unsupported_termination_binding_fails_rather_than_dropping():
+    """Same treatment as the observation above, for the same reason.
+
+    An unexportable termination used to be dropped from the config with nothing
+    logged — and dropped *at build time*, so the runtime never saw the term either
+    and could not warn the way it does for a term whose graph failed to load. The
+    episode then silently never checks a reset condition it is configured to have.
+    """
+    from mjswan._onnx_build import serialize_terminations
+    from mjswan.envs.mdp.terminations import TerminationBinding
+    from mjswan.managers.termination_manager import TerminationTermCfg
+
+    terms = {
+        "illegal_contact": TerminationTermCfg(
+            func=TerminationBinding(ts_name="", unsupported_reason="no contact sensor.")
+        )
+    }
+    with pytest.raises(ValueError, match="without a reset condition"):
+        serialize_terminations(terms, object(), None)
+
+
 def test_structured_sensor_fields_become_one_slot_each():
     """mjlab's `RayCastSensor` traces per field, not as one opaque blob.
 

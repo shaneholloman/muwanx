@@ -17,7 +17,9 @@
  * Native terms — `prev_action` and a generated command — are graph inputs rather
  * than bodies: they read env-level state the runtime already holds, so feeding
  * them in keeps the output complete instead of something the caller must splice
- * offsets into.
+ * offsets into. A `command` input's name is bound at construction
+ * (`assertCommandTermBound`), because an unbound one would otherwise arrive as a
+ * zero block inside the policy's input vector.
  *
  * History stays out. It is state across frames, which a stateless graph cannot
  * hold, and the build refuses to fuse a group whose terms carry their own
@@ -26,6 +28,7 @@
  */
 
 import { ObservationBase, type ObservationConfig } from './ObservationBase';
+import { assertCommandTermBound, sliceStoredActions } from './NativeObservation';
 import { conformToSize } from './pipeline';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import { slotDims, slotInputName } from '../onnx/session';
@@ -41,6 +44,10 @@ export interface FusedNativeInput {
   size: number;
   /** `command` only: which command term to read. */
   command_name?: string;
+  /** `prev_action` only: which action term, when the term names one. */
+  action_name?: string;
+  /** `prev_action` with an `action_name`: where that term's slice starts. */
+  action_offset?: number;
 }
 
 export interface FusedObservationConfig extends ObservationConfig {
@@ -78,6 +85,11 @@ export class FusedObservation extends ObservationBase<FusedObservationConfig> {
     deps: FusedObservationDeps,
   ) {
     super(runner, config);
+    for (const native of config.native_inputs ?? []) {
+      if (native.native === 'command') {
+        assertCommandTermBound(runner, `${config.name}.${native.name}`, native.command_name);
+      }
+    }
     this.deps = deps;
     this.last = new Float32Array(config.size);
   }
@@ -119,12 +131,26 @@ export class FusedObservation extends ObservationBase<FusedObservationConfig> {
   private readNative(native: FusedNativeInput): Float32Array {
     const raw =
       native.native === 'prev_action'
-        ? this.runner.getLastActions()
-        : (native.command_name
-            ? this.runner.getContext()?.commandManager?.getCommand(native.command_name)
-            : null) ?? new Float32Array(native.size);
+        ? sliceStoredActions(this.runner.getLastActions(), native)
+        : this.readCommand(native);
     // Copied and conformed: `raw` may be the runtime's own buffer, and the graph
     // declared a fixed width the feed has to match.
     return conformToSize(Float32Array.from(raw), native.size);
+  }
+
+  /**
+   * The named command's current vector.
+   *
+   * The name and its presence in the manager are both asserted in the constructor,
+   * so the only fallback left is an embedding with no `CommandManager` at all, whose
+   * width comes from the build. This used to end in `?? new Float32Array(size)`,
+   * which never fired — `getCommand` returns an empty (truthy) `Float32Array` for a
+   * miss, not `null`, so the zero-fill happened a line later in `conformToSize` and
+   * the coalesce read as a guard while guarding nothing.
+   */
+  private readCommand(native: FusedNativeInput): Float32Array {
+    const manager = this.runner.getContext()?.commandManager;
+    if (!manager || !native.command_name) return new Float32Array(native.size);
+    return manager.getCommand(native.command_name);
   }
 }

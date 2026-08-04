@@ -108,6 +108,7 @@ def main():
     )
 
     scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         spec=build_spec(),
         name="Hovering Box",
     ).set_viewer(

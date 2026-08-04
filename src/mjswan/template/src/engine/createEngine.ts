@@ -142,6 +142,7 @@ class Engine implements MjswanEngine {
         viewer: input.viewer ?? null,
         events: input.events ?? null,
         terrainData: input.terrainData ?? null,
+        controlDt: input.controlDt ?? null,
         graphs: await resolveGraphs(input.graphs),
         plugins: input.plugins,
       };
@@ -158,8 +159,18 @@ class Engine implements MjswanEngine {
   }
 
   async setPolicy(input: PolicyInput | null): Promise<void> {
-    await this.runtime.loadPolicyConfig(input ? await resolvePolicy(input) : null);
-    this.refresh();
+    // Records and rethrows like `loadScene`, now that `loadPolicyConfig` reports its
+    // failures instead of warning past them. `refresh()` runs either way, so a
+    // rejected `setPolicy` still leaves the snapshot describing what is actually
+    // loaded — which, on failure, is no policy.
+    try {
+      await this.runtime.loadPolicyConfig(input ? await resolvePolicy(input) : null);
+    } catch (err) {
+      this.error = err instanceof Error ? err : new Error(String(err));
+      throw err;
+    } finally {
+      this.refresh();
+    }
   }
 
   async setSplat(input: SplatInput | null): Promise<void> {

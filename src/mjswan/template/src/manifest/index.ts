@@ -33,6 +33,8 @@ interface ConfigScene {
   camera?: ViewerConfig;
   events?: EventConfig[];
   terrainData?: TerrainData;
+  /** Seconds per control step, from the task (mjlab's `timestep * decimation`). */
+  controlDt?: number;
 }
 interface ConfigProject {
   name: string;
@@ -243,6 +245,7 @@ function toSceneEntry(project: ConfigProject, scene: ConfigScene, source: ByteSo
         viewer: scene.camera,
         events: scene.events,
         terrainData: scene.terrainData,
+        controlDt: scene.controlDt,
         graphs: graphBytes(eventGraphRefs(scene.events), modelPath, source),
       };
     },

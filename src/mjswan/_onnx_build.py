@@ -104,13 +104,25 @@ def _native_observation_entry(
     may pair ``generated_commands`` with a command that only exists browser-side
     (a native ``UiCommand``), in which case mjlab's own lookup raises and the
     runtime resolves the width from the command itself instead.
+
+    ``action_offset`` rides along when ``last_action`` names a term, because then it
+    is that term's slice of the policy output rather than the whole vector, and the
+    runtime holds the vector whole (see :func:`~mjswan.compile.tracer.
+    action_term_offset`). Unlike ``size`` it is *not* best-effort: falling back to the
+    whole vector is the silently-wrong observation it exists to prevent.
     """
+    from .compile.tracer import action_term_offset
+
     func_name = getattr(func, "__name__", None)
     if func_name == "last_action":
         entry: dict[str, Any] = {"name": name, "native": "prev_action"}
         action_name = params.get("action_name")
         if action_name is not None:
             entry["action_name"] = action_name
+            # Resolved here rather than inside the best-effort `size` probe below: a
+            # swallowed failure would leave the runtime reading the whole action
+            # vector's head instead of this term's slice.
+            entry["action_offset"] = action_term_offset(env, action_name)
     elif func_name == "generated_commands":
         entry = {
             "name": name,
@@ -307,6 +319,11 @@ def _native_size(
     """Declared width for a native term, or ``None`` if it isn't native."""
     func_name = getattr(term_cfg.func, "__name__", None)
     if func_name == "last_action":
+        # Only the whole vector. A term-scoped `last_action` is one action term's
+        # slice of it, and the config knows the total alone — handing that over
+        # would be the silently-wrong width `action_offset` exists to prevent.
+        if term_cfg.params.get("action_name") is not None:
+            return None
         return native_sizes.get("prev_action")
     if func_name == "generated_commands":
         return native_sizes.get(f"command:{term_cfg.params['command_name']}")
@@ -564,8 +581,21 @@ def serialize_terminations(
     for name, term_cfg in terminations.items():
         func = term_cfg.func
         if isinstance(func, TerminationBinding):
-            if func.unsupported_reason is None:
-                result[name] = term_cfg.to_dict()
+            if func.unsupported_reason is not None:
+                # Raises rather than dropping, matching how an unexportable observation
+                # is handled (`serialize_observation_term`). A dropped termination is a
+                # reset condition the episode silently never checks, and dropping it
+                # *here* means the runtime never sees the term either, so it cannot warn
+                # the way it does for a term whose graph failed to load. Nobody finds
+                # out. A term genuinely not wanted in the browser belongs out of the
+                # config, not silently discarded from it.
+                raise ValueError(
+                    f"Termination term {name!r} cannot be exported: "
+                    f"{func.unsupported_reason} Dropping it would leave the episode "
+                    "without a reset condition it is configured to have, with nothing "
+                    "logged at build time or in the browser, so the build stops here."
+                )
+            result[name] = term_cfg.to_dict()
             continue
         if _is_native_termination(term_cfg, env):
             result[name] = _native_termination_entry(name, term_cfg, env)

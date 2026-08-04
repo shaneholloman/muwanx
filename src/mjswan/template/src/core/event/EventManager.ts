@@ -152,20 +152,32 @@ export class EventManager {
   }
 
   /**
-   * Advance one control step: fires `mode="interval"` terms whose timer has
-   * elapsed (fire-and-forget; `OnnxEvent` itself skips a term already in
-   * flight) and advances every reset-gate step counter.
+   * Advance one control step: fires `mode="interval"` terms whose timer has elapsed,
+   * **in config order**, and advances every reset-gate step counter.
+   *
+   * Sequential and awaited for the same reason `onReset` is, and it was the last of
+   * the three modes to get there. mjlab's `EventManager.apply` runs one loop over the
+   * mode's terms — decrement this term's `time_left`, call this term's `func`, move on
+   * — so two interval terms writing the same element resolve last-writer-wins by
+   * config order. Firing them un-awaited made that *completion* order instead: whose
+   * ORT run finished last, which is a property of the machine.
+   *
+   * The earlier note here said `tick` had to stay fire-and-forget because "the step
+   * loop is synchronous, so there is nothing to await into". That stopped being true —
+   * the loop already awaits observation collection, inference, and the reset chain, and
+   * this is its last call — so the reason was stale rather than structural. Still no
+   * reference play config has a traced interval term, so this closes a hole rather than
+   * fixing observed breakage.
+   *
+   * The reset-gate counters advance first, before anything can reject: they are plain
+   * bookkeeping for `min_step_count_between_reset` with no ordering relationship to the
+   * interval terms, and a failing graph must not stall them.
    */
-  tick(dt: number, context: EventContext): void {
-    // Fire-and-forget, unlike `onReset`/`startup`: `tick` is synchronous because the
-    // step loop is, so there is nothing to await into. Two interval terms writing the
-    // same element would therefore resolve in completion order rather than mjlab's
-    // config order — no reference task has even one traced interval term, so this is
-    // noted rather than solved.
-    for (const { term, trigger } of this.intervalTerms) {
-      if (trigger.tick(dt)) void term.fire(context);
-    }
+  async tick(dt: number, context: EventContext): Promise<void> {
     for (const { trigger } of this.resetTerms) trigger.step();
+    for (const { term, trigger } of this.intervalTerms) {
+      if (trigger.tick(dt)) await term.fire(context);
+    }
   }
 
   /**

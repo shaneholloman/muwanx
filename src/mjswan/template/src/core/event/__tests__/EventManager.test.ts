@@ -282,4 +282,61 @@ describe('EventManager: dispatch order matches mjlab', () => {
     await manager.startup(NO_MODEL);
     expect(applied).toEqual(['slow', 'fast']);
   });
+
+  it('fires interval terms in config order too', async () => {
+    // The mode that kept its fire-and-forget dispatch longest, on the since-expired
+    // grounds that the step loop had nothing to await into. mjlab runs one loop over
+    // the mode's terms — decrement, fire, next — so config order decides an overlap.
+    const applied: string[] = [];
+    const manager = new EventManager(
+      [
+        {
+          name: 'slow',
+          mode: 'interval',
+          onnx: 'event/slow.onnx',
+          rand_dim: 0,
+          interval_range_s: [0.01, 0.01],
+        },
+        {
+          name: 'fast',
+          mode: 'interval',
+          onnx: 'event/fast.onnx',
+          rand_dim: 0,
+          interval_range_s: [0.01, 0.01],
+        },
+      ] as never,
+      {},
+      await outOfOrderDeps(applied),
+    );
+    // One dt past both timers, so both fire on this tick.
+    await manager.tick(0.02, NO_MODEL);
+    expect(applied).toEqual(['slow', 'fast']);
+  });
+
+  it('advances the reset gates even when an interval term fails', async () => {
+    // The counters are bookkeeping for `min_step_count_between_reset` with no ordering
+    // tie to the interval terms, so a rejecting graph must not stall them — which is
+    // why they advance before anything can throw.
+    const sessions = new OnnxSessionCache(() =>
+      Promise.resolve({ run: () => Promise.reject(new Error('graph missing')) }),
+    );
+    await sessions.load([{ name: 'event/boom.onnx', data: new ArrayBuffer(1) }]);
+    const manager = new EventManager(
+      [
+        {
+          name: 'boom',
+          mode: 'interval',
+          onnx: 'event/boom.onnx',
+          rand_dim: 0,
+          interval_range_s: [0.01, 0.01],
+        },
+        { name: 'gated', mode: 'reset', onnx: 'event/boom.onnx', rand_dim: 0 },
+      ] as never,
+      {},
+      { sessions, rng: new SeededRng(1) },
+    );
+    // `OnnxEvent.fire` reports a missing model rather than throwing, so this rejects
+    // only because the session does.
+    await expect(manager.tick(0.02, NO_MODEL)).rejects.toThrow('graph missing');
+  });
 });

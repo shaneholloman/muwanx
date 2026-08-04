@@ -1423,6 +1423,37 @@ def _native_observation_kind(func: Callable[..., Any]) -> str | None:
     return NATIVE_OBSERVATION_FUNCS.get(getattr(func, "__name__", ""))
 
 
+def action_term_offset(env: Any, action_name: str) -> int:
+    """Where *action_name*'s slice starts inside the policy's action vector.
+
+    ``last_action(action_name=...)`` is mjlab's ``get_term(name).raw_action`` — that
+    one term's slice, not the whole vector — and ``ActionManager.process_action``
+    splits the policy output by accumulating ``action_term_dim`` in config order. So
+    the offset is the sum of the dims declared before this term.
+
+    The browser holds the policy's output whole (one tensor, one inference), so the
+    offset is what lets it reproduce the slice. The width already travels as the
+    entry's ``size``, taken from a real call.
+
+    Raises rather than degrading. Falling back to the whole vector is exactly the
+    silently-wrong observation this resolves: with a single action term the slice and
+    the vector coincide, so the mistake stays invisible until a scene has two, and
+    then the second term's observation reads the first term's numbers. mjlab raises
+    ``KeyError`` on the same lookup.
+    """
+    manager = env.action_manager
+    names = list(manager.active_terms)
+    offset = 0
+    for term_name, dim in zip(names, manager.action_term_dim, strict=True):
+        if term_name == action_name:
+            return offset
+        offset += int(dim)
+    raise ValueError(
+        f"last_action(action_name={action_name!r}) names an action term the scene "
+        f"does not define. Available: {', '.join(names) if names else '(none)'}."
+    )
+
+
 @dataclass
 class GroupTermSpec:
     """One term inside a fused group, as :func:`trace_observation_group` needs it."""
@@ -1546,7 +1577,9 @@ def _native_example(term: GroupTermSpec, env: Any) -> torch.Tensor:
         f"Observation term {term.name!r} is native, but neither the trace env nor "
         "the policy config gives its width. Set the policy's "
         "`policy_joint_names`/`policy_num_actions` (for `last_action`), or declare "
-        "the command's UI inputs (for `generated_commands`)."
+        "the command's UI inputs (for `generated_commands`). A term-scoped "
+        "`last_action` has no config answer at all — it needs a trace env whose "
+        "action manager holds the term."
     )
 
 
@@ -1596,17 +1629,26 @@ def trace_observation_group(
     for term in terms:
         native_kind = _native_observation_kind(term.func)
         if native_kind is not None:
-            value = _native_example(term, env)
             entry: dict[str, Any] = {
                 "name": term.name,
                 "native": native_kind,
                 "input": "native__" + re.sub(r"\W", "_", term.name),
-                "size": int(value.reshape(1, -1).shape[-1]),
             }
             if native_kind == "command":
                 entry["command_name"] = term.params["command_name"]
             elif term.params.get("action_name") is not None:
-                entry["action_name"] = term.params["action_name"]
+                action_name = term.params["action_name"]
+                entry["action_name"] = action_name
+                # The runtime is fed the whole action vector, so it needs the offset to
+                # hand the graph this term's slice rather than the vector's head.
+                #
+                # Resolved *before* the discovery call below, so an unknown term name
+                # reports which terms the scene does define. Called first, mjlab's own
+                # `get_term` raises a bare `KeyError` from inside the term body and the
+                # build never reaches this.
+                entry["action_offset"] = action_term_offset(env, action_name)
+            value = _native_example(term, env)
+            entry["size"] = int(value.reshape(1, -1).shape[-1])
             native_inputs.append(entry)
             native_examples.append(value)
             layout.append({"name": term.name, "size": entry["size"]})

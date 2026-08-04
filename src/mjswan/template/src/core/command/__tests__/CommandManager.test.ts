@@ -45,6 +45,36 @@ const VELOCITY_CFG: OnnxCommandConfig = {
   state_fields: [{ name: 'vel_command_b', shape: [1, 3], dtype: 'float32' }],
 };
 
+describe('CommandManager: resetTerms', () => {
+  /** A term that records when its reset starts and finishes. */
+  function recordingTerm(name: string, order: string[], delayed: boolean) {
+    return {
+      getCommand: () => new Float32Array(0),
+      reset: async () => {
+        order.push(`${name}:start`);
+        if (delayed) await new Promise(resolve => setTimeout(resolve, 0));
+        order.push(`${name}:done`);
+      },
+    };
+  }
+
+  it('awaits each term in config order, not concurrently', () => {
+    // mjlab loops `self._terms.items()` and each reset *is* the term's resample,
+    // which may write to the sim — so two terms touching the same element resolve
+    // last-writer-wins by config order. `Promise.all` would interleave, giving
+    // ['slow:start', 'fast:start', 'fast:done', 'slow:done'].
+    const order: string[] = [];
+    const manager = new CommandManager();
+    const terms = (manager as unknown as { terms: Map<string, unknown> }).terms;
+    terms.set('slow', recordingTerm('slow', order, true));
+    terms.set('fast', recordingTerm('fast', order, false));
+
+    return manager.resetTerms().then(() => {
+      expect(order).toEqual(['slow:start', 'slow:done', 'fast:start', 'fast:done']);
+    });
+  });
+});
+
 describe('CommandManager: OnnxCommand registration', () => {
   it('bypasses the class registry and constructs an OnnxCommand', async () => {
     const context = await contextWithSession(

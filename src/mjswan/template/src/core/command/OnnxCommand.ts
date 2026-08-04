@@ -114,7 +114,8 @@ export class OnnxCommand implements CommandTerm {
   private state = new Map<string, OnnxTensorLike>();
   private command: Float32Array;
   private timeLeft = 0;
-  private inFlight = false;
+  /** The running `step`, if any — `update` skips on it, `reset` waits for it. */
+  private inFlight: Promise<void> | null = null;
   /** Set on the first update so the initial frame resamples (reset semantics). */
   private pendingResample = true;
   private uiValues = new Map<string, number>();
@@ -185,16 +186,44 @@ export class OnnxCommand implements CommandTerm {
     if (this.inFlight) return; // skip, never queue
     const resample = this.pendingResample;
     this.pendingResample = false;
-    this.inFlight = true;
-    void this.step(resample).finally(() => {
-      this.inFlight = false;
-    });
+    void this.run(resample);
   }
 
-  /** Episode reset unifies to "resample next frame" (ADR §3). */
-  reset(): void {
-    this.pendingResample = true;
+  /**
+   * Resample **now**, as mjlab's `CommandTerm.reset` does.
+   *
+   * mjlab calls `_resample(env_ids)` from inside `_reset_idx`, which runs *before*
+   * the step's single `sim.forward()`; `_update_command` then runs after it, from
+   * `command_manager.compute(dt)`. This used to only raise a flag, so the whole graph
+   * ran on the far side of the forward instead. Two consequences, both divergences
+   * from the env the policy was trained in: the slots the resample reads saw fresher
+   * derived state than mjlab's do, and — the one that bites — an `entity_write` it
+   * emits (a lifted object's pose) landed *after* the forward meant to publish it,
+   * leaving the next observation reading a stale `xpos` for that body.
+   *
+   * Awaited by `CommandManager.resetTerms`, which the reset chain awaits before the
+   * forward. The frame's later `update()` then runs the graph again with
+   * `resample_mask = 0`, which is `_update_command` alone — exactly mjlab's split
+   * across the forward, for one extra `ort.run()` on reset frames only.
+   *
+   * ADR §3's "reset unifies to `resample_mask = true`" still holds: there is no
+   * separate reset path in the graph, only a second call to the same one.
+   */
+  async reset(): Promise<void> {
     this.timeLeft = this.sampleResampleTime();
+    this.pendingResample = false;
+    // Never interleaved with a step already running: both read and rewrite `state`.
+    await this.inFlight?.catch(() => {});
+    await this.run(true);
+  }
+
+  /** One `step`, tracked so `update` can skip it and `reset` can wait for it. */
+  private run(resample: boolean): Promise<void> {
+    const pending = this.step(resample).finally(() => {
+      if (this.inFlight === pending) this.inFlight = null;
+    });
+    this.inFlight = pending;
+    return pending;
   }
 
   /** Move the marker to the current `viz.field` state value; visible only

@@ -109,7 +109,13 @@ export interface CommandTermContext {
 export interface CommandTerm {
   getCommand(): Float32Array;
   getUiConfig?(): CommandUiConfig | null;
-  reset?(): void;
+  /**
+   * Episode reset. May be async — mjlab's `CommandTerm.reset` *is* the resample
+   * (`_resample(env_ids)`), and for a traced term that means an `ort.run()`.
+   * `CommandManager.resetTerms` awaits it so the resample lands before the step's
+   * single forward, as mjlab's does.
+   */
+  reset?(): void | Promise<void>;
   update?(dt: number): void;
   updateDebugVisuals?(): void;
   setValue?(inputName: string, value: number): number | void;

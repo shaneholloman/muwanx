@@ -201,6 +201,22 @@ class SceneConfig:
     terrain_data: dict[str, Any] | None = None
     """Optional terrain data (e.g. flat_patches) for browser-side event execution."""
 
+    control_dt: float | None = None
+    """Seconds per control step — mjlab's ``env.step_dt`` (``timestep * decimation``).
+
+    The rate the policy was trained to act at, and the ``dt`` every timer in the
+    runtime counts in: the physics substep count per step, the command resample
+    schedule, the interval-event triggers. It cannot be inferred from the model,
+    which carries only the physics ``timestep``.
+
+    Set automatically by :meth:`ProjectHandle.add_scene_mjlab` from the task's live
+    env. **Required** for a scene built via plain :meth:`ProjectHandle.add_scene`
+    that carries a policy — the build fails rather than defaulting, because a wrong
+    control rate raises no error at playback, it just runs the policy at a speed it
+    was not trained for. Deliberately *not* read from a trace env: the one
+    :func:`mjswan.trace_env.build_single_entity_trace_env` builds declares
+    ``decimation=1`` as a tracing placeholder, which is not anybody's control rate."""
+
     mjlab_env: Any = field(default=None, repr=False, compare=False)
     """Live env ONNX tracing (ADR 0005) runs authored observation/termination/
     event/command term bodies against. Set automatically by

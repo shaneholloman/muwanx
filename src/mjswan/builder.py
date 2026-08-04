@@ -57,6 +57,36 @@ def _build_uses_custom_js() -> bool:
     return False
 
 
+def _require_control_dt(scene: Any) -> float:
+    """A scene's seconds-per-control-step, or fail naming the scene.
+
+    Raises rather than defaulting. The runtime used to derive this from a hardcoded
+    0.02 s, which happened to be right for the locomotion and manipulation tasks
+    (0.005 x 4) and wrong for Cartpole (0.01 x 5 = 0.05) — so both Cartpole variants
+    played 2.5x too fast, and nothing failed. A wrong control rate raises no error at
+    playback: the physics substep count, the command resample schedule and the
+    interval-event timers all just count in the wrong unit, and the result reads as a
+    policy that behaves badly.
+
+    Only reached for a scene that carries a policy; a viewer-only scene has no rate to
+    get wrong.
+    """
+    if scene.control_dt is None:
+        raise ValueError(
+            f"Scene {scene.name!r} has policies but no control_dt. Pass it to "
+            "add_scene(control_dt=...) as seconds per control step — mjlab's "
+            "`timestep * decimation`, the rate the policy was trained to act at. The "
+            "model carries only the physics timestep, so this cannot be inferred, and "
+            "guessing it wrong is silent. add_scene_mjlab() fills it in from the task."
+        )
+    if scene.control_dt <= 0:
+        raise ValueError(
+            f"Scene {scene.name!r} has control_dt={scene.control_dt!r}; it must be a "
+            "positive number of seconds."
+        )
+    return float(scene.control_dt)
+
+
 # NOTE: a transitional name-collision check (ts_src ts_name vs a named
 # declarative built-in) lived here.  After ADR 0003, all built-in obs/term/event
 # are composition graphs with no named classes, so a ts_src term cannot shadow a
@@ -309,6 +339,11 @@ class Builder:
                             **(
                                 {"terrainData": scene.terrain_data}
                                 if scene.terrain_data
+                                else {}
+                            ),
+                            **(
+                                {"controlDt": _require_control_dt(scene)}
+                                if scene.policies
                                 else {}
                             ),
                             "policies": [

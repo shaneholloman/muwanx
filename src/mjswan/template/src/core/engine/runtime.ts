@@ -25,6 +25,7 @@ import {
   updateCameraFromData,
 } from './viewer_config';
 import { resolveActionClip, stepPhysics, type ResolvedActionTerm } from '../action/applyAction';
+import { applyResetTerms } from './resetChain';
 import { Observations } from '../observation/observations';
 import { TerminationManager } from '../termination/TerminationManager';
 import { Terminations } from '../termination/terminations';
@@ -52,6 +53,14 @@ const DEFAULT_TERM_SEED = 0x5eed;
 
 /** Reused when no policy is loaded, so a policy-less frame allocates nothing. */
 const EMPTY_ACTIONS = new Float32Array(0);
+
+/**
+ * Frame pacing for a scene with no policy, where there is no trained control rate to
+ * match — only the viewer's own step budget. A scene *with* a policy carries its rate
+ * in the config (`ResolvedScene.controlDt`) and the build refuses to emit one without
+ * it, so this is never a fallback for a real task.
+ */
+const DEFAULT_VIEWER_CONTROL_DT = 0.02;
 
 /**
  * Encoder bias by joint name, for the slot reader's `joint_pos_biased`.
@@ -119,6 +128,8 @@ export type ResolvedScene = {
   viewer?: ViewerConfig | null;
   events?: EventConfig[] | null;
   terrainData?: TerrainData | null;
+  /** Seconds per control step (mjlab's `step_dt`); the build emits it per scene. */
+  controlDt?: number | null;
   /** Traced event-term graphs, keyed by the model-relative path (ADR 0005 §4). */
   graphs?: Array<{ name: string; data: ArrayBuffer }>;
   /** Scene-scoped custom terms (events). */
@@ -190,7 +201,8 @@ export class mjswanRuntime {
   private running: boolean;
   private timestep: number;
   private decimation: number;
-  private policyCtrlDt: number | null;
+  /** Seconds per control step, from the scene config; null for a policy-less scene. */
+  private controlDt: number | null;
   private loadingScene: Promise<void> | null;
   private resizeObserver: ResizeObserver | null;
   private dragStateManager: DragStateManager | null;
@@ -352,7 +364,7 @@ export class mjswanRuntime {
     this.running = false;
     this.timestep = 0.001;
     this.decimation = 1;
-    this.policyCtrlDt = null;
+    this.controlDt = null;
     this.loadingScene = null;
     this.dragStateManager = null;
     this.dragForceScale = 100.0;
@@ -377,6 +389,9 @@ export class mjswanRuntime {
   async loadEnvironment(scene: ResolvedScene): Promise<void> {
     this.scenePlugins = scene.plugins ?? {};
     this.terrainData = scene.terrainData ?? null;
+    // Read here rather than in `buildSceneFromMjz`, which is handed the model bytes
+    // alone; it needs the rate to derive `decimation` from the model's timestep.
+    this.controlDt = scene.controlDt && scene.controlDt > 0 ? scene.controlDt : null;
     // A fresh scene is a fresh run: reseed so two loads of the same scene draw the
     // same randomness (ADR 0005 §2).
     this.termRng = new SeededRng(this.termSeed);
@@ -479,11 +494,20 @@ export class mjswanRuntime {
    * Can be called from UI components via the CommandManager
    */
   resetSimulation(): void {
-    this.resetSimulationState();
-    if (this.policyRunner && this.policyStateBuilder) {
-      const state = this.policyStateBuilder.build();
-      this.policyRunner.reset(state);
-    }
+    // Stays synchronous — ADR 0004 keeps the engine's public verbs sync. The sim
+    // state and the policy's ORT carry reset before this returns; the ordered terms
+    // (reset events, then the policy and command resets) land after the events'
+    // inference, the accepted lag of ADR 0005 §8. The step loop awaits them instead,
+    // because there the writes have a reader in the same frame (`mj_forward`, then
+    // the command resample).
+    //
+    // The deferral is bounded by one reset's inference — tens of microseconds against
+    // a 20 ms control step — and resolves through the microtask queue even when a
+    // scene has no reset events at all, so the stored actions are zeroed well before
+    // the loop's next physics step either way.
+    void this.resetSimulationState().catch((error) => {
+      console.warn('[mjswanRuntime] reset terms failed:', error);
+    });
     console.log('[mjswanRuntime] Simulation reset');
   }
 
@@ -551,8 +575,16 @@ export class mjswanRuntime {
       this.syncStaticBodiesFromData();
 
       this.timestep = this.mjModel.opt.timestep || 0.001;
-      const ctrlDtForDec = this.policyCtrlDt ?? 0.02;
-      this.decimation = Math.max(1, Math.round(ctrlDtForDec / this.timestep));
+      // From the task, never inferred. `decimation` used to come from a hardcoded
+      // 0.02 s control step, which is right for the locomotion and manipulation tasks
+      // (0.005 x 4) and wrong for Cartpole (0.01 x 5 = 0.05) — both Cartpole variants
+      // ran 2.5x too fast, silently, because nothing about a wrong control rate
+      // raises. The build emits mjlab's `step_dt` per scene; a scene with no policy
+      // has no rate to get wrong, so it keeps the old default for viewer-only use.
+      this.decimation = Math.max(
+        1,
+        Math.round((this.controlDt ?? DEFAULT_VIEWER_CONTROL_DT) / this.timestep),
+      );
 
       this.lastSimState.bodies.clear();
       this.updateCachedState();
@@ -763,12 +795,21 @@ export class mjswanRuntime {
           const postState = this.policyStateBuilder.build();
           const result = this.terminationManager.evaluate(postState, target);
           if (result.done) {
-            this.resetSimulationState({ forward: false });
-            this.terminationManager.reset();
-            if (this.policyRunner) {
-              const resetState = this.policyStateBuilder.build();
-              this.policyRunner.reset(resetState);
+            // Awaited: everything in here writes state the `mj_forward` below is
+            // what publishes — the reset events, and the command resample that now
+            // runs with them rather than after the forward (see `resetChain`).
+            //
+            // Caught so one failing graph costs a reset, not the run: `resetChain`
+            // propagates deliberately, and the step loop is the caller that has to
+            // keep going.
+            try {
+              await this.resetSimulationState({ forward: false });
+            } catch (error) {
+              console.warn('[mjswanRuntime] reset terms failed:', error);
             }
+            // Last, as in mjlab (`_reset_idx` ends with `termination_manager.reset`);
+            // everything before it is ordered inside `resetSimulationState`.
+            this.terminationManager.reset();
           }
         }
 
@@ -783,8 +824,14 @@ export class mjswanRuntime {
         this.commandManager.update(target);
         this.commandManager.updateDebugVisuals();
         // Advances `mode="interval"` timers (mjlab's mid-episode randomization) and
-        // the reset gates' step counters.
-        this.eventManager?.tick(target, this.eventContext());
+        // the reset gates' step counters. Awaited so the mode's terms resolve in config
+        // order, and caught for the same reason the reset block is: one failing graph
+        // should cost a frame's events, not the run.
+        try {
+          await this.eventManager?.tick(target, this.eventContext());
+        } catch (error) {
+          console.warn('[mjswanRuntime] interval events failed:', error);
+        }
       }
 
       const elapsed = (performance.now() - loopStart) / 1000;
@@ -820,6 +867,10 @@ export class mjswanRuntime {
     }
 
     if (!this.mjModel || !this.mjData) {
+      // Stays a warning while the load failures below throw: this is a caller-ordering
+      // precondition, not a bad bundle. `loadEnvironment` builds the model before it
+      // reaches here, and every `setPolicy` caller loads a scene first, so it is
+      // unreachable from the shipped app.
       console.warn('Policy config loaded before MuJoCo model is ready.');
       return;
     }
@@ -847,8 +898,9 @@ export class mjswanRuntime {
       this.initialQpos = Array.isArray(config.initial_qpos) ? (config.initial_qpos as number[]) : null;
       this.initialQvel = Array.isArray(config.initial_qvel) ? (config.initial_qvel as number[]) : null;
       // `resetSimulationState` does the forward; a second one here would be
-      // redundant work on every policy load.
-      this.resetSimulationState();
+      // redundant work on every policy load. Awaited — this path is already async,
+      // so the reset terms may as well land before the commands are rebuilt below.
+      await this.resetSimulationState();
 
       // Initialize commands from policy config if present
       if (config.commands && typeof config.commands === 'object') {
@@ -865,7 +917,7 @@ export class mjswanRuntime {
           onnxSessions: this.policyGraphs,
           readOnnxSlot: this.readOnnxSlot,
         });
-        this.commandManager.resetTerms();
+        await this.commandManager.resetTerms();
         const motionTerm = this.commandManager.getTerm('motion');
         if (isMotionCommandTerm(motionTerm)) {
           await motionTerm.setSelectedMotion(
@@ -923,30 +975,13 @@ export class mjswanRuntime {
       this.policyRunner.reset(state);
       this.policyControl = this.buildPolicyControl(config, runner, this.policyStateBuilder);
 
-      // Infer decimation from fps in obs terms (default heuristic targets 0.02s, some tasks train finer).
-      {
-        const obsGroups = config.observations;
-        const allTerms: Array<Record<string, unknown>> = [];
-        if (Array.isArray(obsGroups)) {
-          allTerms.push(...(obsGroups as Array<Record<string, unknown>>));
-        } else if (obsGroups && typeof obsGroups === 'object') {
-          for (const g of Object.values(obsGroups)) {
-            if (Array.isArray(g)) allTerms.push(...(g as Array<Record<string, unknown>>));
-          }
-        }
-        for (const term of allTerms) {
-          if (!term || this.timestep <= 0) continue;
-          if (typeof term.fps === 'number' && term.fps > 0) {
-            this.policyCtrlDt = 1 / term.fps;
-            const newDec = Math.max(1, Math.round(this.policyCtrlDt / this.timestep));
-            if (newDec !== this.decimation) {
-              console.log(`[PolicyRunner] Decimation updated: ${this.decimation} → ${newDec} (fps=${term.fps}, sim_dt=${this.timestep})`);
-              this.decimation = newDec;
-            }
-            break;
-          }
-        }
-      }
+      // A decimation override inferred from an `fps` field on observation entries used
+      // to sit here. It was dead twice over: no observation entry has ever carried
+      // `fps` (the only `fps` the build emits is motion-clip metadata), and the scan
+      // only walked array-shaped groups while a fused group — mandatory for v1, ADR
+      // §4 — is an object. Being the sole writer of the old `policyCtrlDt`, it also
+      // meant the hardcoded 0.02 s was the only path. The rate now comes from the
+      // scene config, resolved before the model is built.
 
       // Initialize termination manager if termination config is present
       if (config.terminations && Object.keys(config.terminations).length > 0) {
@@ -970,7 +1005,24 @@ export class mjswanRuntime {
         pdEnabled: this.policyControl !== null,
       });
     } catch (error) {
-      console.warn('Failed to load policy config:', error);
+      // Rethrown, not warned. Everything inside this try is load-bearing for the
+      // policy: the observation groups, the action control map, the termination
+      // manager, the network itself. Swallowing meant a scene reported a successful
+      // load and then ran with no policy at all — and it disarmed the loud failures
+      // the binding checks depend on (a missing observation graph, a
+      // `generated_commands` name no command term provides), turning "this bundle is
+      // wrong" into one console line.
+      //
+      // The fields are assigned as the load progresses, so a failure partway leaves a
+      // runner with no ONNX module, or a module with no control map. Clear them: either
+      // a policy loaded or there is none, never half of one.
+      this.policyRunner = null;
+      this.policyStateBuilder = null;
+      this.policyControl = null;
+      this.onnxModule = null;
+      this.onnxInputDict = null;
+      this.terminationManager = null;
+      throw error;
     }
   }
 
@@ -1227,14 +1279,21 @@ export class mjswanRuntime {
   }
 
   /**
-   * Put the sim back to its initial state and fire `mode="reset"` events.
+   * Put the sim back to its initial state, fire `mode="reset"` events, then reset
+   * the command terms — in that order, which is mjlab's (see `resetChain`).
+   *
+   * Async because the ordering is: the events' writes have to land before anything
+   * reads or overwrites them. The sim state and the policy's own ORT carry still
+   * reset **synchronously**, before the first `await`, so a caller that cannot await
+   * (the public `resetSimulation()`) still gets an immediately-reset sim and only the
+   * term half arrives late.
    *
    * `forward: false` when the caller runs its own `mj_forward` right after — the
    * step loop does, because ADR 0005 §8 allows exactly one forward per step and
    * mjlab spends it *after* the reset block (`ManagerBasedRlEnv.step`), covering
    * the reset write and the decimation loop's one-substep staleness in one call.
    */
-  private resetSimulationState({ forward = true }: { forward?: boolean } = {}): void {
+  private async resetSimulationState({ forward = true }: { forward?: boolean } = {}): Promise<void> {
     if (!this.mjModel || !this.mjData) {
       return;
     }
@@ -1255,19 +1314,28 @@ export class mjswanRuntime {
         qvel[i] = this.initialQvel[i];
       }
     }
-    // Not awaited: `resetSimulationState` is synchronous and so is the public
-    // `resetSimulation()`. An ONNX reset term's write therefore lands a frame or
-    // two late — the same accepted one-frame lag as the rest of the async
-    // boundary (ADR 0005 §8), and the alternative is making reset async all the
-    // way out through the engine API.
-    void this.eventManager?.onReset(this.eventContext());
-    this.commandManager.resetTerms();
+    // The policy's own carry, reset with the sim state rather than with the terms:
+    // it reads nothing from the scene, so there is no order to respect and a caller
+    // that cannot await should still see it cleared immediately.
     if (this.onnxModule) {
       this.onnxInputDict = this.onnxModule.initInput();
     }
     this.onnxTimeStep = 0;
     this.lastSimState.bodies.clear();
-    if (forward) {
+
+    await applyResetTerms({
+      events: this.eventManager,
+      policy: this.policyRunner,
+      commands: this.commandManager,
+      context: this.eventContext(),
+      // Read after the events land, which is why it is a thunk. Null on the
+      // `loadPolicyConfig` path, where no runner exists yet.
+      buildState: () => this.policyStateBuilder?.build(),
+    });
+
+    // Re-checked rather than relying on the narrowing above: the scene can be
+    // disposed while the reset events are in flight.
+    if (forward && this.mjModel && this.mjData) {
       this.mujoco.mj_forward(this.mjModel, this.mjData);
       this.updateCachedState();
     }

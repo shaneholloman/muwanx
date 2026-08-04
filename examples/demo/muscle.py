@@ -96,6 +96,7 @@ def setup_builder() -> mjswan.Builder:
 
     myofinger_path = str(_fetch_myofinger())
     scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         spec=mujoco.MjSpec.from_file(myofinger_path),
         name="MyoFinger",
     )

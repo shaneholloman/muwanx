@@ -123,6 +123,7 @@ def _fix_unitree_mujoco_macos() -> None:
 
 def _add_g1_scene(project) -> None:
     g1_scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
         name="G1",
     ).set_viewer(
@@ -214,6 +215,7 @@ def _add_g1_scene(project) -> None:
 
 def _add_go2_scene(project) -> None:
     go2_scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         name="Go2",
         spec=mujoco.MjSpec.from_file("assets/unitree_go2/scene.xml"),
     ).set_viewer(
@@ -323,6 +325,7 @@ def _add_go2_scene(project) -> None:
 
 def _add_go1_scene(project) -> None:
     go1_scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         spec=mujoco.MjSpec.from_file("assets/unitree_go1/go1.xml"),
         name="Go1",
     ).set_viewer(
@@ -392,6 +395,7 @@ def _anymal_c_trace_spec() -> mujoco.MjSpec:
 
 def _add_anymal_c_scene(project) -> None:
     anymal_c_scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         name="ANYmal C Velocity",
         spec=mujoco.MjSpec.from_zip("assets/anymal_c_velocity/scene.mjz"),
     )
