@@ -203,6 +203,8 @@ _G1_JOINT_DAMPING = {
     "left_shoulder_pitch_joint":  0.907222843292423,
     "left_shoulder_roll_joint":   0.907222843292423,
     "left_shoulder_yaw_joint":    0.907222843292423,
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+                    "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
     "left_elbow_joint":           0.907222843292423,
     "left_wrist_roll_joint":      0.907222843292423,
     "left_wrist_pitch_joint":     1.06814150219,
@@ -305,17 +307,9 @@ def _add_g1_scene(project) -> None:
         observations={
             "observation": ObservationGroupCfg(
                 terms={
-                    "base_ang_vel": ObservationTermCfg(
-                        func=obs_fns.base_ang_vel, history_length=1
-                    ),
+                    "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity, history_length=1
-                    ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, history_length=1
-                    ),
-                    "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel, history_length=1
+                        func=obs_fns.projected_gravity
                     ),
                     "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }
@@ -453,22 +447,9 @@ def _add_go1_scene(project) -> None:
         )
     )
 
-    # NOTE: himloco uses an interleaved history format (dict with "interleaved": true)
-    # that is not yet expressible via ObservationGroupCfg. observations remains in himloco.json.
-    go1_scene.add_policy(
-        policy=onnx.load("assets/unitree_go1/himloco.onnx"),
-        name="HiMLoco",
-        config_path="assets/unitree_go1/himloco.json",
-        actions={
-            "joint_pos": JointPositionActionCfg(
-                scale=0.25,
-                stiffness=40.0,
-                damping=1.0,
-            )
-        },
-        commands={"velocity": mjswan.velocity_command()},
-    )
-
+    # HiMLoco is not shown: its config asks for an interleaved group-level history
+    # (`{history_steps: 6, interleaved: true}`), and the runtime stores that flag
+    # without applying it — the stack it feeds the policy is frame-major either way.
     go1_scene.add_policy(
         policy=onnx.load("assets/unitree_go1/decap.onnx"),
         name="Decap",
@@ -484,20 +465,17 @@ def _add_go1_scene(project) -> None:
             "obs_history": ObservationGroupCfg(
                 terms={
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity, history_length=1
+                        func=obs_fns.projected_gravity
                     ),
                     "velocity_cmd": ObservationTermCfg(
                         func=obs_fns.generated_commands,
                         params={"command_name": "velocity"},
                         scale=(2.0, 2.0, 0.25),
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, history_length=1
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
                     "joint_vel": ObservationTermCfg(
                         func=obs_fns.joint_vel_rel,
                         scale=0.05,
-                        history_length=1,
                     ),
                     "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }

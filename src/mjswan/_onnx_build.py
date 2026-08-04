@@ -148,10 +148,17 @@ def _apply_observation_pipeline(
         if (group_history_length or 0) > 0
         else term_cfg.history_length
     )
-    if history:
+    if term_cfg.history_steps:
+        # Sparse offsets are per-term by construction, so a group count cannot
+        # override them — and shipping both would be two conflicting answers.
+        entry["history_offsets"] = [int(step) for step in term_cfg.history_steps]
+    elif history:
         entry["history_length"] = history
-        if term_cfg.history_interleaved:
-            entry["history_interleaved"] = True
+    # Interleaving describes a stack's layout, so it says nothing without a stack.
+    if term_cfg.history_interleaved and (
+        "history_offsets" in entry or "history_length" in entry
+    ):
+        entry["history_interleaved"] = True
     return entry
 
 
@@ -226,7 +233,13 @@ def serialize_observation_term(
 
 
 def _effective_history(group: ObservationGroupCfg, term_cfg: ObservationTermCfg) -> int:
-    """Stack depth applied to one term — group level wins, as in mjlab."""
+    """Stack depth applied to one term — group level wins, as in mjlab.
+
+    Sparse offsets (``history_steps``) count as their own depth: they are per-term by
+    construction, so a group level cannot override them.
+    """
+    if term_cfg.history_steps:
+        return len(term_cfg.history_steps)
     return int(group.history_length or term_cfg.history_length or 0)
 
 
@@ -249,7 +262,9 @@ def _group_is_fusable(group: ObservationGroupCfg) -> bool:
     for term_cfg in group.terms.values():
         if isinstance(term_cfg.func, ObservationBinding):
             return False
-        if _effective_history(group, term_cfg) > 1:
+        # Sparse offsets disqualify at any length: even a single non-zero offset is a
+        # delayed frame the runtime has to hold, which no fused output can express.
+        if term_cfg.history_steps or _effective_history(group, term_cfg) > 1:
             return False
     return True
 

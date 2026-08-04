@@ -79,6 +79,15 @@ class ObservationTermCfg:
     history_length: int = 0
     """Number of past frames to stack. 0 = current only (no history)."""
 
+    history_steps: tuple[int, ...] | None = None
+    """Sparse look-back offsets to stack, instead of every frame.
+
+    mjlab only counts frames (``history_length=n`` → offsets ``0..n-1``), but a
+    policy can be trained on a *sparse* window — e.g. ``(0, 1, 2, 4, 8, 16)``, which
+    reaches 17 frames back while contributing only 6. Naming the offsets keeps the
+    term's width at ``len(history_steps)`` frames; ``history_length`` would give 17.
+    Takes precedence over ``history_length`` when both are set."""
+
     history_interleaved: bool = False
     """Isaac-style joint-major history layout: ``[a0_t, a0_t-1, ..., a1_t, ...]``
     instead of frame-major (``[a_t, a_t-1, ...]`` each the full vector). Only
