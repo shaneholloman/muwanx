@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-import torch
 
-from mjswan.compile import trace_term
-from mjswan.compile.tracer import slots_json
-from mjswan.trace_env import TraceCommandManager
+# `mjswan.compile` imports torch at load time (it is the build-time tracer), so
+# the package import below has to wait for the skip.
+torch = pytest.importorskip("torch")
+
+from mjswan.compile import trace_term  # noqa: E402
+from mjswan.compile.tracer import slots_json  # noqa: E402
+from mjswan.trace_env import TraceCommandManager  # noqa: E402
 
 STEPS = 3
 JOINTS = 2

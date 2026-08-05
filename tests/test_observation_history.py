@@ -17,10 +17,19 @@ The runtime half of the contract (offset → frame, priming, layout) is pinned i
 from __future__ import annotations
 
 import pytest
-import torch
 
-from mjswan._onnx_build import _apply_observation_pipeline, _group_is_fusable
-from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
+# `mjswan.compile` imports torch at load time (it is the build-time tracer), so
+# the package import below has to wait for the skip.
+torch = pytest.importorskip("torch")
+
+from mjswan._onnx_build import (  # noqa: E402
+    _apply_observation_pipeline,
+    _group_is_fusable,
+)
+from mjswan.managers.observation_manager import (  # noqa: E402
+    ObservationGroupCfg,
+    ObservationTermCfg,
+)
 
 
 def _term(**kwargs) -> ObservationTermCfg:

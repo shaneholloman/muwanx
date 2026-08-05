@@ -10,7 +10,8 @@ must fall back to serializing each term on its own (where a constant bakes into
 from __future__ import annotations
 
 import pytest
-import torch
+
+torch = pytest.importorskip("torch")
 
 
 def _trace_env():

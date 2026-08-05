@@ -10,7 +10,8 @@ export time. They come from the policy config instead.
 from __future__ import annotations
 
 import pytest
-import torch
+
+torch = pytest.importorskip("torch")
 
 
 def _trace_env():
