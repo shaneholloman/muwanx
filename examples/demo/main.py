@@ -485,6 +485,13 @@ def _add_playground_project(builder: mjswan.Builder) -> None:
     # replace this patch with simply: registry.load(env_name, config_overrides={"impl": "jax"})
     _orig_put_model = _mjx.put_model
     _mjx.put_model = lambda m, **kw: _orig_put_model(m, **{**kw, "impl": "jax"})
+
+    # TEMPORARY PATCH:
+    # reacher.py gates on `mujoco.__version__ >= "3.3.0"`, a string compare that
+    # is False for "3.10.0", so it calls the pre-3.3 spec.find_body() that mujoco
+    # has since renamed to spec.body(). Restore the old name as an alias.
+    if not hasattr(mujoco.MjSpec, "find_body"):
+        mujoco.MjSpec.find_body = mujoco.MjSpec.body
     try:
         for env_name in registry.ALL_ENVS:
             if "Sparse" in env_name:
