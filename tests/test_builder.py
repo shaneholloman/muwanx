@@ -252,14 +252,14 @@ class TestBuilderValidation:
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.add_policy(name="Policy", policy=minimal_onnx)
         with pytest.raises(ValueError, match="has policies but no control_dt"):
-            builder.build(tmp_path / "out", build_frontend=False)
+            builder._save_config_json(tmp_path)
 
     def test_scene_without_a_policy_needs_no_control_dt(self, tmp_path, minimal_model):
         # A viewer-only scene has no trained rate to match, so requiring one would be
         # noise. It must not raise for the reason above.
         builder = Builder()
         builder.add_project(name="P").add_scene(name="S", model=minimal_model)
-        builder.build(tmp_path / "out", build_frontend=False)
+        builder._save_config_json(tmp_path)
 
     def test_non_positive_control_dt_is_rejected(
         self, tmp_path, minimal_model, minimal_onnx
@@ -270,7 +270,7 @@ class TestBuilderValidation:
         )
         scene.add_policy(name="Policy", policy=minimal_onnx)
         with pytest.raises(ValueError, match="must be a positive number of seconds"):
-            builder.build(tmp_path / "out", build_frontend=False)
+            builder._save_config_json(tmp_path)
 
     def test_control_dt_reaches_the_scene_entry(
         self, tmp_path, minimal_model, minimal_onnx
