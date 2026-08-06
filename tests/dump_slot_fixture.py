@@ -31,6 +31,9 @@ OUT = (
     / "src/mjswan/template/src/core/onnx/__tests__/fixtures/slotFields.json"
 )
 
+# Fixed so a regeneration is a reviewable diff rather than a fixture of fresh numbers.
+SEED = 0
+
 # One task with prefixed entities, sites and a free joint; one with sensors and 29 joints.
 TASKS = ("Mjlab-Lift-Cube-Yam", "Mjlab-Velocity-Flat-Unitree-G1")
 
@@ -91,9 +94,11 @@ def _dump_task(task_id: str) -> dict[str, Any]:
     from mjlab.tasks.registry import load_env_cfg
 
     cfg = load_env_cfg(task_id, play=True)
+    # Before construction, not just on `reset`: startup events run in `__init__`.
+    cfg.seed = SEED
     with contextlib.redirect_stdout(io.StringIO()):
         env = ManagerBasedRlEnv(cfg, device="cpu")
-        env.reset()
+        env.reset(seed=SEED)
         # A few steps, so a reader that just returned qpos0 cannot pass at t=0.
         for _ in range(3):
             env.sim.forward()

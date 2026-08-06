@@ -41,6 +41,9 @@ TASKS = ("Mjlab-Cartpole-Balance", "Mjlab-Velocity-Flat-Unitree-G1")
 
 STEPS = 20
 
+# Fixed so a regeneration is a reviewable diff rather than a fixture of fresh numbers.
+SEED = 0
+
 # `mjModel` fields the slot reader indexes (mirrors `dump_slot_fixture.py`).
 MODEL_INTS = ("njnt", "nbody", "nsite", "nsensor")
 MODEL_ARRAYS = (
@@ -167,9 +170,11 @@ def _dump_task(task_id: str, out_dir: Path) -> dict[str, Any]:
 
     cfg = load_env_cfg(task_id, play=True)
     cfg.scene.num_envs = 1
+    # Before construction, not just on `reset`: startup events run in `__init__`.
+    cfg.seed = SEED
     with contextlib.redirect_stdout(io.StringIO()):
         env = ManagerBasedRlEnv(cfg, device="cpu")
-        env.reset()
+        env.reset(seed=SEED)
 
     # The Builder's own serializers, so the test loads the bytes that really ship.
     group_entry = serialize_observation_group(
