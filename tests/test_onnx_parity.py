@@ -149,6 +149,78 @@ def test_no_term_is_silently_unchecked(sweep_report):
 
 
 # ---------------------------------------------------------------------------
+# `push_robot`: the interval-mode event, which the sweep above cannot reach.
+#
+# mjlab's play configs pop it (`go1/env_cfgs.py`: `cfg.events.pop("push_robot")`), and
+# the sweep builds every task with `play=True`, so re-adding it here is the only way to
+# exercise an event that *reads* live state — `root_link_vel_w` as a dynamic slot — and
+# writes root velocity back as an `entity_write`. Every other traced event on the
+# reference tasks is reset-mode and reads only baked constants.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def push_robot_report():
+    from mjlab.envs import ManagerBasedRlEnv
+    from mjlab.envs.mdp import push_by_setting_velocity
+    from mjlab.managers.event_manager import EventTermCfg
+    from mjlab.tasks.velocity.config.go1.env_cfgs import unitree_go1_flat_env_cfg
+
+    from mjswan.compile import run_parity
+
+    cfg = unitree_go1_flat_env_cfg(play=True)
+    cfg.events["push_robot"] = EventTermCfg(
+        func=push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(1.0, 3.0),
+        params={
+            "velocity_range": {
+                "x": (-0.5, 0.5),
+                "y": (-0.5, 0.5),
+                "z": (-0.4, 0.4),
+                "roll": (-0.52, 0.52),
+                "pitch": (-0.52, 0.52),
+                "yaw": (-0.78, 0.78),
+            },
+        },
+    )
+    env = ManagerBasedRlEnv(cfg, device="cpu")
+    try:
+        yield run_parity(
+            env,
+            # Stepped first, so `root_link_vel_w` is non-zero and the dynamic slot
+            # carries a value a baked constant could not fake.
+            n_steps=20,
+            seed=0,
+            event_modes=("interval", "reset"),
+            n_event_draws=16,
+            # Observations need Command handling, covered by the sweep and
+            # `test_onnx_command_parity.py`.
+            include_obs=False,
+        )
+    finally:
+        env.close()
+
+
+def test_push_robot_matches_mjlab(push_robot_report):
+    assert push_robot_report.passed, "\n" + push_robot_report.summary()
+
+
+def test_push_robot_is_a_graph_over_a_dynamic_slot(push_robot_report):
+    push = next((t for t in push_robot_report.terms if t.name == "push_robot"), None)
+    assert push is not None, "push_robot missing — did play mode pop it again?"
+    assert push.representation == "onnx"
+    # Six draws (x, y, z, roll, pitch, yaw) against the live root velocity it adds to.
+    assert push.rand_dim == 6
+    assert push.input_slots, (
+        "push_robot reported no dynamic slot, so the graph baked `root_link_vel_w` "
+        "as a constant — the failure this task is in the suite to catch"
+    )
+    assert push.steps_checked > 0
+    assert push.max_abs_diff <= push_robot_report.atol
+
+
+# ---------------------------------------------------------------------------
 # The Builder serializes from the task config while the harness above reads the env's
 # prepared managers — two sources for the same terms, which diverged once when an
 # unresolved `SceneEntityCfg` widened `ee_to_cube` from 3 to 6. Pinned here to the width

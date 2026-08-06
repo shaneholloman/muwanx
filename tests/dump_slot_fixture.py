@@ -7,11 +7,9 @@ traced *graph* matches mjlab, while the reader decides what numbers go *into* th
 graph, browser-side. A wrong address or element order there produces a policy
 that runs happily on the wrong state.
 
-So: step a real task, write out the model/data arrays the reader indexes plus
-mjlab's own value for every field it claims to serve, and let a vitest case assert
-the two agree. Regenerate with::
+Regenerate with::
 
-    MUJOCO_GL=disable .venv/bin/python scripts/dump_slot_fixture.py
+    MUJOCO_GL=disable .venv/bin/python tests/dump_slot_fixture.py
 
 Ground truth is read off ``env.scene[entity].data`` — the same property the tracer
 recorded — so the fixture stays honest even if mjlab changes a definition.

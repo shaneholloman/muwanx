@@ -34,10 +34,10 @@ examples/            Runnable examples
   colab/               Google Colab notebook example
   tutorial/            hello_world, minimum_policy, newton_cradle quickstarts
 
-tests/               pytest suite
+tests/               pytest suite, plus the dump_*_fixture.py generators for the TS parity fixtures
 docs/                zensical (MkDocs-based) site — published to Read the Docs
 typings/             MuJoCo stub generator script
-scripts/             Maintenance scripts (e.g., sync_contributors.py)
+scripts/             Maintenance scripts (sync_contributors.py)
 assets/              Demo GIF and banner SVG
 ```
 

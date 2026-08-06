@@ -4,7 +4,7 @@
  * `slotReader.test.ts` checks the reader's logic on a hand-built model where every
  * expected number is computed by hand. This file checks the thing that test
  * cannot: that the semantics are *mjlab's*. The fixture is dumped from two live,
- * stepped mjlab tasks (`scripts/dump_slot_fixture.py`) and carries both the raw
+ * stepped mjlab tasks (`tests/dump_slot_fixture.py`) and carries both the raw
  * `mjModel`/`mjData` arrays the reader indexes and mjlab's own
  * `env.scene[entity].data.<field>` value for each one.
  *

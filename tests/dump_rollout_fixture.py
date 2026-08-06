@@ -8,15 +8,11 @@ the browser with MuJoCo's WASM, so a free-running comparison would measure MuJoC
 against itself. Each step's ``mjModel``/``mjData`` arrays are captured alongside
 mjlab's own observation vector and termination verdicts *at that state*.
 
-Verdicts are re-evaluated at the recorded state rather than taken from
-``env.step()``, which computes them one substep stale — a step-loop concern the
-runtime reproduces, not a question about the graph.
-
 Only ``actor`` is dumped; ``critic`` is training-only and never reaches a bundle.
 
 Regenerate with::
 
-    MUJOCO_GL=disable .venv/bin/python scripts/dump_rollout_fixture.py
+    MUJOCO_GL=disable .venv/bin/python tests/dump_rollout_fixture.py
 """
 
 from __future__ import annotations
@@ -77,19 +73,14 @@ def _flat(value: Any) -> list[float]:
 
 
 def _data_field(env: Any, name: str, count_attr: str) -> list[float]:
-    """One ``mjData`` array for env 0, or empty when the model has no such element."""
     if int(getattr(env.sim.mj_model, count_attr)) == 0:
         return []
     return _flat(getattr(env.sim.data, name)[0])
 
 
 def _action(step: int, num_actions: int) -> list[float]:
-    """A deterministic action sequence.
-
-    A formula rather than a seeded draw so the sequence is identical whatever
-    torch does, and bounded so the robot neither freezes nor flails off the map —
-    the states have to stay in the region the observation terms are meaningful in.
-    """
+    """Bounded so the robot neither freezes nor flails off the map — the states have to
+    stay in the region the observation terms are meaningful in."""
     return [0.4 * math.sin(0.35 * step + 0.17 * j) for j in range(num_actions)]
 
 
@@ -133,21 +124,20 @@ def _native_inputs(env: Any, group_entry: dict[str, Any]) -> dict[str, list[floa
     return natives
 
 
-# Root pitches bracketing an orientation limit and coming back under it, so a latching term
-# or a misplaced threshold fires on the wrong steps.
+# Bracketing an orientation limit from both sides, then back under it.
 TILT_PITCHES = (0.0, 0.4, 1.2, 1.6, 2.2, 2.8, 0.2)
 
 
 def _append_tilt_sweep(env: Any, cfg: Any, record: Any, num_actions: int) -> None:
     """Force the root orientation through a range, recording each state.
 
-    Only for a floating base: the root quaternion lives at ``qpos[3:7]`` behind a
-    free joint. A task without one (Cartpole) has no orientation term to trip, so
-    there is nothing to add.
+    A natural rollout stays upright, so every verdict reads False and a graph hardwired
+    to False would pass. Only for a floating base, whose root quaternion sits at
+    ``qpos[3:7]``; a task without one has no orientation term to trip.
 
-    The pose is written straight into ``qpos`` rather than reached by stepping —
-    walking a robot into a fall takes a controller, and what needs covering here is
-    the term's verdict at a tilted state, not how it got there.
+    Written straight into ``qpos`` rather than reached by stepping — walking a robot
+    into a fall takes a controller, and what needs covering is the verdict at a tilted
+    state, not how it got there.
     """
     import mujoco
     import torch
@@ -158,7 +148,7 @@ def _append_tilt_sweep(env: Any, cfg: Any, record: Any, num_actions: int) -> Non
 
     for pitch in TILT_PITCHES:
         half = pitch / 2.0
-        # Quaternion for a pitch about the body y-axis, mjlab's (w, x, y, z) order.
+        # mjlab's (w, x, y, z) order.
         quat = [math.cos(half), 0.0, math.sin(half), 0.0]
         qpos = env.sim.data.qpos
         qpos[0, 3:7] = torch.tensor(quat, dtype=qpos.dtype)
@@ -223,7 +213,6 @@ def _dump_task(task_id: str, out_dir: Path) -> dict[str, Any]:
         env.step(torch.tensor([action], dtype=torch.float32))
         record(action)
 
-    # A natural rollout stays upright, so a graph hardwired to False would pass; tilt past it.
     _append_tilt_sweep(env, cfg, record, num_actions)
 
     # The walking tasks randomize `encoder_bias`, so the reader needs the same lookup.

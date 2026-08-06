@@ -13,7 +13,7 @@
  * itself. The fixture carries mjlab's state per step plus its own vector and verdicts at
  * that state.
  *
- * Regenerate: `MUJOCO_GL=disable .venv/bin/python scripts/dump_rollout_fixture.py`
+ * Regenerate: `MUJOCO_GL=disable .venv/bin/python tests/dump_rollout_fixture.py`
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
