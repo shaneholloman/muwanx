@@ -16,7 +16,7 @@ import {
   type SliderCommandConfig,
 } from './types';
 
-/** True for a config entry naming the shared `OnnxCommand` handler (ADR 0005 §3). */
+/** True for a config entry naming the shared `OnnxCommand` handler. */
 function isOnnxCommandConfig(entry: CommandConfigEntry): entry is OnnxCommandConfig {
   return entry.name === 'OnnxCommand';
 }
@@ -60,13 +60,7 @@ class UiCommand implements CommandTerm {
     return { inputs: this.inputs };
   }
 
-  /**
-   * The UI value as a traced graph's `{command, field: 'command'}` slot.
-   *
-   * A term that only *forwards* a command is native (`NativeObservation`), but one
-   * that does arithmetic on it is a traced body like any other, and its slot has to
-   * resolve here — this command exists browser-side only, so there is nowhere else.
-   */
+  /** The UI value as a `{command, field: 'command'}` slot; browser-only, so it binds here. */
   getStateField(field: string): Float32Array | null {
     return field === 'command' ? this.getCommand() : null;
   }
@@ -145,16 +139,10 @@ export class CommandManager {
   }
 
   /**
-   * `OnnxCommand` bypasses the class registry (like `OnnxEvent` does for
-   * events): it is one shared handler, data-configured, needing a session +
-   * rng the registry-based `new Term(name, config, context)` shape has no room
-   * for. Warns and skips (rather than throwing) so one missing session doesn't
-   * take down every other command in the policy.
-   *
-   * A skipped term is absent from `termNames()`, so an observation term that reads
-   * it fails to bind and the policy does not load. That split is deliberate: the
-   * command itself is degradable, an observation slice that feeds the network is
-   * not — it would arrive as a zero block at a fixed offset in the input vector.
+   * `OnnxCommand` bypasses the class registry: one shared handler needing a session and
+   * rng that `new Term(name, config, context)` has no room for. Warns and skips, so one
+   * missing session spares the others — but a skipped term leaves `termNames()`, so an
+   * observation reading it fails to bind and the policy does not load.
    */
   private buildOnnxCommand(
     groupName: string,
@@ -188,17 +176,8 @@ export class CommandManager {
   }
 
   /**
-   * Reset every term, **in config order**, awaiting each.
-   *
-   * mjlab's `CommandManager.reset` loops `self._terms.items()` and each term's
-   * `reset` *is* its resample (`_resample(env_ids)`), which for a traced term means
-   * an `ort.run()` that may write to the sim. Sequential rather than `Promise.all`
-   * for the reason `EventManager.onReset` is: two terms writing the same element
-   * resolve last-writer-wins by config order in mjlab, and firing them concurrently
-   * would make that resolution order instead.
-   *
-   * Awaited by the reset chain before the step's single forward, so a resample's
-   * writes are published by that forward — as mjlab's are.
+   * Reset every term **in config order**, awaiting each: a reset is a resample that may
+   * write to the sim, and overlaps must resolve last-writer-wins as mjlab's do.
    */
   async resetTerms(): Promise<void> {
     for (const term of this.terms.values()) {
@@ -238,29 +217,16 @@ export class CommandManager {
   }
 
   /**
-   * The named term's current command vector, or an empty one if there is no such
-   * term.
-   *
-   * The empty return serves a caller that guards its own name by probing `getTerm`
-   * first. A consumer whose *config* declares the name (an
-   * observation term's `command_name`) must validate it against `termNames()` at
-   * construction instead: mjlab asserts the lookup
-   * (`envs/mdp/observations.py` `generated_commands`), and here an unvalidated miss
-   * is zero-padded to the declared width, handing the policy a block of zeros it
-   * was never trained on with nothing logged.
+   * The named term's current vector, or an empty one. A consumer whose *config* names a
+   * term must validate it against `termNames()` at construction: an unvalidated miss is
+   * zero-padded, handing the policy a block of zeros it was never trained on.
    */
   getCommand(groupName: string): Float32Array {
     const term = this.terms.get(groupName);
     return term ? term.getCommand() : new Float32Array(0);
   }
 
-  /**
-   * Names of the terms this manager holds, in registration order.
-   *
-   * For binding-time validation by a consumer that names a command in its own
-   * config, so the miss surfaces once at load — with the available names in the
-   * message — rather than every frame as `getCommand`'s empty vector.
-   */
+  /** Names in registration order, for binding-time validation by a consumer. */
   termNames(): string[] {
     return Array.from(this.terms.keys());
   }

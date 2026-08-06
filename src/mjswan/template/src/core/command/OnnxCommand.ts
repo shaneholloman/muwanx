@@ -1,38 +1,18 @@
 /**
- * `OnnxCommand`: the single generic command handler (ADR 0005 §3, brief §3).
+ * The single generic command handler: every traced command is a data instantiation of
+ * this class — a different graph, `state_fields`, `ui` and `write_targets`.
  *
- * Every traced command — `UniformVelocityCommand`, `LiftingCommand`, … — is a
- * *data instantiation* of this one class: a different `.onnx` graph, different
- * `state_fields`, and different (or absent) `ui` / `write_targets` in
- * `policy.json`. There is deliberately no engine-side class per command.
+ * The graph owns the math; this owns the native half — the scalar resample timer that
+ * sets `resample_mask`, `prev_state` across frames, `rand` drawn from the seeded PRNG
+ * (never ONNX's own random ops), the `entity_write` application, and the `viz` debug
+ * marker any position-shaped state field gets for free.
  *
- * What this class owns (the native half; the graph owns the math):
+ * The UI override overwrites the command *after* the autonomous computation, which is
+ * never skipped — mjlab's play-time behaviour.
  *
- * - **The resample timer** — a scalar countdown (ADR §5), not mjlab's per-env
- *   tensor. It sets `resample_mask` for the frame.
- * - **State across frames** — the graph is a pure function
- *   `(prev_state, resample_mask, rand, dynamic…) → (next_state, …)`; the handler
- *   holds `prev_state`, seeded from each field's declared shape/dtype.
- * - **`rand`** — drawn from the orchestrator-owned seeded PRNG so a session
- *   replays bit-for-bit (ADR §2). Never ONNX's own random ops.
- * - **The UI override** — compute autonomously *every* frame, then overwrite the
- *   command from UI values when the enable checkbox is on, matching mjlab's
- *   play-time behaviour exactly (brief §3a): the autonomous computation is never
- *   skipped.
- * - **`entity_write`** — hands graph-computed pose/velocity to the apply
- *   primitive (brief §3).
- * - **Debug-vis marker** — when `viz` names a `state_fields` entry (a 3D
- *   position), a sphere is drawn there while `debug_vis` is true. Generic:
- *   any traced command with a position-shaped state field gets this for
- *   free, replacing what used to be a hand-written TS class per command
- *   (e.g. the retired `LiftingCommand.ts`).
- *
- * **Async boundary.** `CommandTerm.update()`/`getCommand()` are synchronous, but
- * ORT-Web inference is not. `update()` therefore *kicks off* inference and
- * returns; `getCommand()` serves the most recently completed value. A frame that
- * arrives while inference is still in flight is skipped rather than queued, so
- * the command can never build a backlog. The resulting one-frame lag is the same
- * property already accepted elsewhere in the design (ADR §8).
+ * **Async boundary.** `update()`/`getCommand()` are sync but ORT-Web is not, so
+ * `update()` kicks off inference and `getCommand()` serves the last completed value. A
+ * frame arriving mid-flight is skipped, never queued, so no backlog can build.
  */
 
 import * as THREE from 'three';
@@ -49,15 +29,7 @@ export interface OnnxStateFieldSpec {
   name: string;
   shape: number[];
   dtype: string;
-  /**
-   * Flattened initial value, as the build found it on the term (ADR 0005 §3).
-   *
-   * Optional on the read side only so an older bundle still loads: absent means
-   * zero-fill, which is what this did before the build emitted the value. That is
-   * correct for a term whose first resample overwrites every field — which is
-   * every reference task today — and wrong for one holding a counter or a
-   * carried-over value.
-   */
+  /** As the build found it. Absent means zero-fill, wrong for a counter or held value. */
   init?: number[];
 }
 
@@ -98,9 +70,7 @@ function makeTensor(spec: OnnxStateFieldSpec): OnnxTensorLike {
   const data = spec.dtype === 'bool' ? new Uint8Array(n) : new Float32Array(n);
   const init = spec.init;
   if (init) {
-    // Truncated or padded to the declared width rather than trusted: a mismatch
-    // means the config and the graph disagree, and writing past `data` would throw
-    // while writing short would leave a silent zero in the middle of the state.
+    // Clamped to the declared width: a mismatch means config and graph disagree.
     for (let i = 0; i < Math.min(n, init.length); i++) data[i] = Number(init[i]);
   }
   return { data, dims: [...spec.shape] };
@@ -159,19 +129,12 @@ export class OnnxCommand implements CommandTerm {
   }
 
   /**
-   * One of this command's traced state fields, for a `{command, field}` input
-   * slot on another term's graph (mjlab's `object_to_goal_distance` measures
-   * against the lift command's `target_pos`). Null for an undeclared field.
-   *
-   * Deliberately the raw state, not `getCommand()`: the UI override applies to
-   * the command vector a policy consumes, while a slot has to mirror what mjlab
-   * reads off the command term itself.
+   * One traced state field, for a `{command, field}` slot on another term's graph. Raw
+   * state, not `getCommand()`, since the UI override does not reach what mjlab reads.
    */
   getStateField(field: string): Float32Array | null {
     const tensor = this.state.get(field);
-    // Copied: `toFloat32` passes a Float32Array straight through, and this is the
-    // tensor the graph is fed next frame — a caller scaling it in place would
-    // corrupt the command's own state.
+    // Copied: this tensor feeds the graph next frame, so in-place edits would corrupt it.
     return tensor ? Float32Array.from(toFloat32(tensor.data)) : null;
   }
 
@@ -190,24 +153,13 @@ export class OnnxCommand implements CommandTerm {
   }
 
   /**
-   * Resample **now**, as mjlab's `CommandTerm.reset` does.
+   * Resample **now**, as mjlab's `CommandTerm.reset` does — before the step's single
+   * forward, so an `entity_write` it emits is published by that forward rather than
+   * leaving the next observation on a stale `xpos`.
    *
-   * mjlab calls `_resample(env_ids)` from inside `_reset_idx`, which runs *before*
-   * the step's single `sim.forward()`; `_update_command` then runs after it, from
-   * `command_manager.compute(dt)`. This used to only raise a flag, so the whole graph
-   * ran on the far side of the forward instead. Two consequences, both divergences
-   * from the env the policy was trained in: the slots the resample reads saw fresher
-   * derived state than mjlab's do, and — the one that bites — an `entity_write` it
-   * emits (a lifted object's pose) landed *after* the forward meant to publish it,
-   * leaving the next observation reading a stale `xpos` for that body.
-   *
-   * Awaited by `CommandManager.resetTerms`, which the reset chain awaits before the
-   * forward. The frame's later `update()` then runs the graph again with
-   * `resample_mask = 0`, which is `_update_command` alone — exactly mjlab's split
-   * across the forward, for one extra `ort.run()` on reset frames only.
-   *
-   * ADR §3's "reset unifies to `resample_mask = true`" still holds: there is no
-   * separate reset path in the graph, only a second call to the same one.
+   * The frame's later `update()` runs the same graph again with `resample_mask = 0`,
+   * which is `_update_command` alone: mjlab's split across the forward, for one extra
+   * `ort.run()` on reset frames.
    */
   async reset(): Promise<void> {
     this.timeLeft = this.sampleResampleTime();
@@ -226,8 +178,7 @@ export class OnnxCommand implements CommandTerm {
     return pending;
   }
 
-  /** Move the marker to the current `viz.field` state value; visible only
-   * while `debug_vis` is set (generic — see class docs). */
+  /** Move the marker to the current `viz.field` value; shown while `debug_vis`. */
   updateDebugVisuals(): void {
     if (!this.marker || !this.cfg.viz) return;
     this.marker.visible = Boolean(this.cfg.debug_vis);
@@ -255,7 +206,7 @@ export class OnnxCommand implements CommandTerm {
   }
 
   triggerButton(inputName: string): void {
-    // A `zero` button zeroes the UI sliders (mjlab's Zero button, §3a).
+    // mjlab's Zero button.
     if (inputName !== 'zero') return;
     for (const input of this.cfg.ui?.inputs ?? []) {
       if (input.type === 'slider') this.uiValues.set(input.name, 0);

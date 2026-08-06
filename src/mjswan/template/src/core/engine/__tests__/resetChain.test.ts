@@ -46,8 +46,7 @@ describe('applyResetTerms', () => {
   it('runs event -> policy -> command, mjlab\'s _reset_idx order', async () => {
     const order: string[] = [];
     await applyResetTerms(chainRecording(order));
-    // Before this chain existed: ['command', 'event', 'policy'] — the events fired
-    // un-awaited and the policy reset trailed the command reset.
+    // Not ['command', 'event', 'policy'], which un-awaited events would give.
     expect(order).toEqual(['event', 'policy', 'command']);
   });
 
@@ -58,9 +57,8 @@ describe('applyResetTerms', () => {
   });
 
   it('lets the command term win where both write the same element', async () => {
-    // The concrete bug, in miniature. A reset event writes `qpos` (ORT-backed, so
-    // async) and `TrackingCommand.reset` writes `qpos` too (synchronous). mjlab
-    // assigns in `_reset_idx` order, so the command's value is the survivor.
+    // A reset event writes `qpos` async while `TrackingCommand.reset` writes it sync;
+    // mjlab assigns in `_reset_idx` order, so the command's value survives.
     const qpos = [0];
     await applyResetTerms({
       events: {
@@ -72,19 +70,16 @@ describe('applyResetTerms', () => {
       commands: { resetTerms: () => { qpos[0] = 2; } },
       context: CONTEXT,
     });
-    // Settle *after* the call as well: an un-awaited event write lands here rather
-    // than before the assertion, so without this the test passes either way.
+    // Settle after the call too, or an un-awaited write lands here and the test passes.
     await settle();
 
-    // Un-awaited leaves 1 — the command writes first and the event overwrites it,
-    // which is mjlab's order backwards.
+    // Un-awaited leaves 1: the event overwrites the command, mjlab's order backwards.
     expect(qpos[0]).toBe(2);
   });
 
   it('builds the policy state after the events, not before', async () => {
-    // Why `buildState` is a thunk. mjlab resets the observation manager inside
-    // `_reset_idx`, after the reset events have written the initial state, so the
-    // history it primes from is the post-event one.
+    // Why `buildState` is a thunk: mjlab primes the observation history from the state
+    // the reset events wrote, not the one before them.
     const qpos = [0];
     let seen: number | null = null;
     await applyResetTerms({
@@ -103,9 +98,8 @@ describe('applyResetTerms', () => {
   });
 
   it('waits for an async command reset before returning to the caller', async () => {
-    // A traced term's reset *is* its resample (mjlab's `CommandTerm.reset` calls
-    // `_resample`), which is an `ort.run()` that may write to the sim. The caller's
-    // `mj_forward` is what publishes those writes, so it must not get there first.
+    // A traced term's reset *is* its resample — an `ort.run()` that may write to the
+    // sim — and the caller's `mj_forward` has to publish those writes, not precede them.
     const order: string[] = [];
     await applyResetTerms({
       events: null,
@@ -123,8 +117,7 @@ describe('applyResetTerms', () => {
   });
 
   it('skips absent managers rather than failing', async () => {
-    // `loadPolicyConfig` runs this before a PolicyRunner exists, and a scene may
-    // define no events at all.
+    // `loadPolicyConfig` runs this before a PolicyRunner exists; a scene may have no events.
     const order: string[] = [];
     await applyResetTerms({
       events: null,
@@ -136,9 +129,8 @@ describe('applyResetTerms', () => {
   });
 
   it('propagates a failing reset event instead of resetting on top of it', async () => {
-    // The caller decides what a failed reset means (the step loop lets it surface,
-    // the sync public verb logs it). Swallowing it here would reset the policy and
-    // commands against a half-applied scene and report nothing.
+    // The caller decides what a failed reset means; swallowing it here would reset the
+    // policy and commands against a half-applied scene and report nothing.
     const order: string[] = [];
     await expect(
       applyResetTerms(

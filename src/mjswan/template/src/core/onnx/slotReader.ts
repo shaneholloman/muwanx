@@ -1,80 +1,27 @@
 /**
- * `createSlotReader`: the native side of every traced term (ADR 0005 §6).
+ * Fills a traced graph's `input_slots` from `mjModel`/`mjData` — the one place that
+ * reproduces mjlab's `EntityData` semantics natively. A field read wrong here makes
+ * the graph compute the right function of the wrong numbers, silently.
  *
- * A traced graph is a pure function of the state it declared as `input_slots`.
- * Filling those slots is explicitly *not* traced — state collection stays native
- * (§6's `collectRawState`) — so this module is the one place that reproduces
- * mjlab's `EntityData` semantics against `mjModel`/`mjData`. Get a field wrong
- * here and the graph computes the right function of the wrong numbers, which no
- * amount of Python-side parity checking can catch.
+ * Slot shapes match `mjswan.compile.tracer.slot_to_json`: `{entity, field}`,
+ * `{sensor}` (a `sensordata` window), `{sensor, field}` (a `RayCastSensor`, whose
+ * rays are recast in `raycast.ts`), and `{command, field}`.
  *
- * Three slot shapes, matching `mjswan.compile.tracer.slot_to_json`:
+ * Invariants a slot must hold:
+ * - The **whole** field, flattened, not the slice the term reads — the graph carries
+ *   its own baked-in indexing.
+ * - mjlab's element order, i.e. MJCF spec order, which ascending model id within an
+ *   entity reproduces. Joints exclude the free joint.
+ * - float32: mjData is float64, ORT-Web is not.
  *
- * | slot                | source                                            |
- * |---------------------|---------------------------------------------------|
- * | `{entity, field}`     | an `Entity.data.<field>` tensor (table below)    |
- * | `{sensor}`            | `mjData.sensordata[adr … adr+dim]`              |
- * | `{sensor, field}`     | a structured sensor's field, cast here (`raycast.ts`) |
- * | `{command, field}`    | a live `OnnxCommand`'s state field               |
+ * Entities resolve by the `name/` prefix mjlab's `attach` adds; an unprefixed model
+ * (the `set_trace_env` path) falls back to the whole model, correct because such a
+ * scene is single-entity. mjlab's own `terrain` is prefix-free, so a `terrain` slot
+ * reads as unavailable rather than swallowing every unprefixed element — no traced
+ * term reads it as an entity (the height scan goes through a `RayCastSensor`).
  *
- * The `{sensor, field}` shape is mjlab's `RayCastSensor` (a height scan): its data
- * is ray hits, not a `sensordata` window, so it is recomputed rather than read —
- * see `raycast.ts`.
- *
- * **The whole field, not a slice.** The graph carries the term's own indexing
- * (mjlab's managers resolve `SceneEntityCfg` name patterns to ids at build time,
- * and the tracer bakes those ids in), so a slot must supply the entity's
- * *complete* field in mjlab's element order — `site_pos_w` is every site of the
- * entity, flattened, not the one site the term happens to read.
- *
- * **Element order** is mjlab's, which is MJCF spec order within an entity
- * (`EntityIndexing` is built from `spec.joints` / `spec.sites`). Model ids are
- * assigned in attach order, so ascending model id within an entity reproduces it.
- * Joints exclude the free joint: mjlab keeps it in `free_joint_q_adr`, and
- * `joint_pos`/`joint_vel` cover the non-free joints only.
- *
- * **Entity scoping.** `MjSpec.attach(prefix=f"{name}/")` means a scene assembled
- * by mjlab prefixes every element with its entity name. A model exported from a
- * plain MJCF (the `set_trace_env` path, where the browser model and the trace
- * env are built from the same spec but only the latter goes through mjlab's
- * scene) has no prefix, so resolution falls back to the whole model — correct
- * because such a scene is single-entity by construction.
- *
- * The one entity mjlab itself attaches prefix-free is `terrain`, so in an
- * mjlab-assembled scene a `terrain` slot resolves to nothing and reads as
- * unavailable. Deliberate: the alternative is guessing that unprefixed elements
- * mean the terrain, which would also silently swallow a misspelled entity name.
- * No traced term reads terrain state as an *entity*: mjlab's own MDP terms take a
- * robot or object `SceneEntityCfg`, and the height scan reaches the terrain through
- * a `RayCastSensor` slot rather than `terrain.data`. So this costs nothing today
- * and fails visibly (a named warning from the caller) if that ever changes.
- *
- * **float64 → float32** happens here, at the read site: mjData is float64 and
- * ORT-Web wants Float32Array.
- *
- * Fields are implemented explicitly and an unknown one returns null (the caller
- * then warns and holds its previous value) rather than being approximated. The
- * fields below are the ones the traced terms actually declare across mjlab's
- * default tasks plus the migrated examples; the derived siblings that share a
- * code path come along for free.
- *
- * | field                   | mjlab definition                                  |
- * |-------------------------|---------------------------------------------------|
- * | `joint_pos`             | `qpos[joint_q_adr]`                               |
- * | `joint_pos_biased`      | `joint_pos + encoder_bias`                        |
- * | `joint_vel`             | `qvel[joint_v_adr]`                               |
- * | `root_link_pos_w`       | `xpos[root_body]`                                 |
- * | `root_link_quat_w`      | `xquat[root_body]`                                |
- * | `root_link_pose_w`      | pos ++ quat (7)                                   |
- * | `root_link_lin_vel_w`   | `cvel` linear part, de-offset from the subtree COM |
- * | `root_link_ang_vel_w`   | `cvel[root_body][0:3]`                            |
- * | `root_link_vel_w`       | lin ++ ang (6)                                    |
- * | `root_link_lin_vel_b`   | `quat⁻¹ · lin_vel_w`                              |
- * | `root_link_ang_vel_b`   | `quat⁻¹ · ang_vel_w`                              |
- * | `gravity_vec_w`         | the constant `(0, 0, -1)`                         |
- * | `projected_gravity_b`   | `quat⁻¹ · (0, 0, -1)`                             |
- * | `heading_w`             | `atan2((quat · x̂)ᵧ, (quat · x̂)ₓ)`                 |
- * | `site_pos_w`            | `site_xpos[site_ids]`, flattened                  |
+ * An unknown field returns null and the caller holds its previous value, rather than
+ * being approximated.
  */
 
 import { quatApply, quatApplyInv } from '../observation/math';
@@ -90,10 +37,7 @@ export interface CommandStateSource {
   getStateField(field: string): Float32Array | null;
 }
 
-/**
- * Live simulation handles. Shaped to match `PolicyRunnerContext` so the runtime
- * can pass `() => runner.getContext()` straight through.
- */
+/** Shaped to match `PolicyRunnerContext`, so the runtime can pass one straight through. */
 export type SlotReaderContext = {
   mjModel: MjModel | null;
   mjData: MjData | null;
@@ -103,21 +47,9 @@ export type SlotReaderContext = {
 };
 
 export type SlotReaderOptions = {
-  /**
-   * Per-joint encoder bias by *unprefixed* joint name, for `joint_pos_biased`.
-   *
-   * mjlab randomizes `encoder_bias` per episode; a web bundle bakes whatever the
-   * export captured into `policy.json`, in policy-action order — hence by name
-   * rather than by index, since a slot needs it in entity-joint order. Omitted
-   * means no bias, which is the common case and makes `joint_pos_biased`
-   * identical to `joint_pos` exactly as mjlab's own zero-bias default does.
-   */
+  /** By *unprefixed* joint name: `policy.json` stores it in action, not entity, order. */
   jointBias?: (jointName: string) => number;
-  /**
-   * Descriptors for the structured sensors the config's slots name, by sensor
-   * name. A function because they arrive with the policy, while the reader is
-   * built once with the runtime.
-   */
+  /** A function because descriptors arrive with the policy, the reader with the runtime. */
   raycastSensors?: () => Record<string, RaycastSensorDescriptor>;
 };
 
@@ -156,12 +88,9 @@ function decodeNames(mjModel: MjModel, count: number, adr: ArrayLike<number>): s
 /**
  * Indices of the elements belonging to `entity`, in ascending model id.
  *
- * Falling back to the whole model is gated on `prefixed` — whether this model was
- * assembled by mjlab at all — and not on the scoped match coming up empty. An
- * entity legitimately having none of some element kind is common (mjlab's `cube`
- * has no sites, `terrain` has no joints), and answering those with every *other*
- * entity's elements is exactly the silent-wrong-numbers failure this module
- * exists to avoid.
+ * The whole-model fallback is gated on `prefixed`, not on an empty match: an entity
+ * legitimately having no sites or no joints is common, and answering that with every
+ * other entity's elements is the silent-wrong-numbers failure to avoid.
  */
 function scopedIndices(
   names: string[],
@@ -189,8 +118,7 @@ function buildEntityIndex(
   const jointNames = decodeNames(mjModel, mjModel.njnt, mjModel.name_jntadr);
   const bodyNames = decodeNames(mjModel, mjModel.nbody, mjModel.name_bodyadr);
   const siteNames = decodeNames(mjModel, mjModel.nsite, mjModel.name_siteadr);
-  // One verdict for the model, not per element kind: it either came through
-  // mjlab's `attach(prefix=f"{name}/")` or it didn't.
+  // One verdict for the whole model, not per element kind.
   const prefixed = [...jointNames, ...bodyNames, ...siteNames].some(n => n.includes('/'));
 
   const qposAdr: number[] = [];
@@ -253,9 +181,8 @@ function concat(...parts: Float32Array[]): Float32Array {
 }
 
 /**
- * mjlab's `root_link_vel_w`: `cvel` is expressed about the body's subtree COM, so
- * the linear part needs the rotational offset to the body origin removed
- * (mjlab's `compute_velocity_from_cvel`). Returns lin ++ ang, 6 values.
+ * mjlab's `root_link_vel_w` (lin ++ ang, 6): `cvel` is about the subtree COM, so
+ * `compute_velocity_from_cvel` removes the rotational offset to the body origin.
  */
 function rootLinkVelW(rootBodyId: number, mjData: MjData): Float32Array {
   const pos = vec3At(mjData.xpos, rootBodyId);
@@ -281,13 +208,7 @@ function rootLinkVelW(rootBodyId: number, mjData: MjData): Float32Array {
 
 type FieldReader = (index: EntityIndex, mjData: MjData) => Float32Array | null;
 
-/**
- * Wrap a reader that needs the entity's root body.
- *
- * An entity with no body of its own has no root pose to report; returning null
- * makes the caller hold its previous value and warn, where indexing at -1 would
- * quietly hand the graph a plausible-looking vector of zeros.
- */
+/** Wrap a reader needing a root body. Null, since indexing at -1 gives plausible zeros. */
 function rootField(read: (root: number, mjData: MjData) => Float32Array): FieldReader {
   return (index, mjData) => (index.rootBodyId < 0 ? null : read(index.rootBodyId, mjData));
 }
@@ -319,8 +240,7 @@ const FIELD_READERS: Record<string, FieldReader> = {
 
   root_link_vel_w: rootField(rootLinkVelW),
   root_link_lin_vel_w: rootField((root, mjData) => rootLinkVelW(root, mjData).slice(0, 3)),
-  // mjlab reads the angular part straight off cvel rather than through
-  // compute_velocity_from_cvel — the COM offset only shifts the linear part.
+  // Straight off cvel, as mjlab does: the COM offset only shifts the linear part.
   root_link_ang_vel_w: rootField((root, mjData) => angVelW(mjData, root)),
   root_link_lin_vel_b: rootField((root, mjData) =>
     Float32Array.from(
@@ -331,8 +251,7 @@ const FIELD_READERS: Record<string, FieldReader> = {
     Float32Array.from(quatApplyInv(quatAt(mjData.xquat, root), angVelW(mjData, root))),
   ),
 
-  // mjlab's is a constant, not `mjModel.opt.gravity`: `entity.py` fills it with
-  // (0, 0, -1) and terms use it as the world's down direction.
+  // A constant, not `mjModel.opt.gravity`: mjlab fills it with the world's down (0,0,-1).
   gravity_vec_w: () => new Float32Array([0, 0, -1]),
   projected_gravity_b: rootField((root, mjData) =>
     Float32Array.from(quatApplyInv(quatAt(mjData.xquat, root), [0, 0, -1])),
@@ -382,13 +301,10 @@ function isCommandStateSource(value: unknown): value is CommandStateSource {
 }
 
 /**
- * Build the `SlotReader` every ONNX-backed term (observation, termination,
- * command, event) reads its graph inputs through.
+ * Build the `SlotReader` every ONNX-backed term reads its graph inputs through.
  *
- * `getContext` is called per read so a scene reload — which replaces `mjModel`
- * and `mjData` — is picked up without rebuilding the reader; the per-entity index
- * is cached against the model it was derived from and recomputed when that
- * changes.
+ * `getContext` is called per read so a scene reload is picked up without rebuilding
+ * the reader; the per-entity index is cached against the model it came from.
  */
 export function createSlotReader(
   getContext: () => SlotReaderContext | null,
@@ -396,8 +312,7 @@ export function createSlotReader(
 ): SlotReader {
   let cachedModel: MjModel | null = null;
   const indices = new Map<string, EntityIndex>();
-  // One caster per sensor, kept because it holds the per-model frame resolution
-  // and the ray buffers; a height scan is ~200 rays every control step.
+  // One per sensor, held for its frame resolution and ray buffers: ~200 rays a step.
   const casters = new Map<string, RaycastSensor | null>();
 
   const readRaycast = (
@@ -455,9 +370,7 @@ export function createSlotReader(
 
     if (slot.sensor) {
       if (slot.field) {
-        // A *field* of a structured sensor — mjlab's `RayCastSensor`, whose data is
-        // ray hits rather than a `sensordata` window. Never fall through to the
-        // builtin path: this sensor has no window there to find.
+        // A `RayCastSensor` field, which has no `sensordata` window to fall through to.
         return readRaycast(slot.sensor, slot.field, context);
       }
       const window = sensorWindow(mjModel, slot.sensor);

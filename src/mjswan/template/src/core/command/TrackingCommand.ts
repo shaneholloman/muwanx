@@ -89,8 +89,8 @@ function hasRenderableMesh(object: THREE.Object3D): boolean {
  * by keeping the robot's anchor x/y (but the *reference's* z) and rotating the
  * anchor-relative offsets by the yaw between the two anchors.
  *
- * Exported for its own test — the tracking terminations measure the robot against
- * these numbers, so getting the frame wrong terminates plausibly and wrongly.
+ * Exported for its own test: get the frame wrong and the tracking terminations fire
+ * plausibly and wrongly.
  */
 export function reanchorBodyPositions(
   bodyPosW: Float32Array,
@@ -394,29 +394,16 @@ export class TrackingCommand implements CommandTerm {
   }
 
   /**
-   * mjlab `MotionCommand` state, for the traced graphs that declare a slot on it
-   * (`CommandStateSource`, ADR 0005 §6).
+   * mjlab `MotionCommand` state, for traced graphs declaring a `{command: "motion",
+   * field}` slot. A clip lookup is data rather than math, so `motion` stays native and
+   * this is the only place those slots can resolve — in mjlab's frame, element order
+   * and (`env_origins` omitted, the browser runs one env at the origin) units.
    *
-   * The tracking task's observations and terminations are ordinary traced terms,
-   * but the command they read is *not* an `OnnxCommand` — a clip lookup is data,
-   * not math, so `motion` stays native. That makes this the only place their
-   * `{command: "motion", field}` slots can be served from, and the numbers have to
-   * be mjlab's: same frame (`time_steps` → `refIdx`), same world frame, same
-   * element order (`cfg.body_names`, which the loader already selected the clip's
-   * columns down to).
+   * An unlisted field returns null and its caller holds the previous value.
    *
-   * `env_origins` is omitted throughout: the browser runs the single env at the
-   * origin, where mjlab adds a zero.
-   *
-   * An unlisted field returns null and its caller holds the previous value —
-   * mjlab's `MotionCommand` exposes velocity and joint siblings of these that no
-   * traced term on the reference tasks reads.
-   *
-   * The `ref_*` fields and `is_ready` are the look-ahead window (`time_steps`),
-   * which mjlab's `MotionCommand` has no equivalent of — it exposes the current
-   * frame only. A policy trained on a window of the reference trajectory needs the
-   * whole window as one graph input, so each is the offsets' frames concatenated
-   * in `time_steps` order, and the traced term slices out the offsets it wants.
+   * The `ref_*` fields and `is_ready` are the look-ahead window, which mjlab has no
+   * equivalent of: each is the `time_steps` offsets' frames concatenated, and the
+   * traced term slices out the ones it wants.
    */
   getStateField(field: string): Float32Array | null {
     switch (field) {
@@ -448,13 +435,8 @@ export class TrackingCommand implements CommandTerm {
   }
 
   /**
-   * One `ref_*` field sampled at every `time_steps` offset, concatenated.
-   *
-   * Offsets are clamped into the clip rather than wrapped, so a window that runs
-   * off either end repeats the first/last frame — a loop-agnostic edge the policy
-   * also saw in training. Not ready → zeros (identity quats for `normalize`), which
-   * the `is_ready` gate gets multiplied away; the point is only that it is finite
-   * and the right width, since the group layout is fixed at load.
+   * One `ref_*` field at every `time_steps` offset, concatenated. Offsets clamp rather
+   * than wrap, as in training; not ready gives zeros the `is_ready` gate multiplies away.
    */
   private refWindow(frames: Float32Array[], stride: number, quat = false): Float32Array {
     const out = new Float32Array(this.timeSteps.length * stride);
@@ -635,8 +617,7 @@ export class TrackingCommand implements CommandTerm {
       // Use the npz's own body-name manifest for unambiguous index lookup.
       bodySourceIndices = bodyNames.map((name) => sourceBodyNames.indexOf(name));
     } else {
-      // Fall back: assume source bodies are laid out in mjModel body-ID order
-      // starting from the first body in body_names.
+      // Fall back to mjModel body-ID order from the first body in body_names.
       const rootBodyId = this.findBodyIdByName(bodyNames[0]);
       const bodyIds = bodyNames.map((name) => this.findBodyIdByName(name));
       bodySourceIndices = bodyIds.map((id) => id - rootBodyId);
@@ -738,16 +719,12 @@ export class TrackingCommand implements CommandTerm {
    * Run the traced reference-state-initialization graph, if the build shipped one.
    *
    * mjlab perturbs the reference frame before writing it; this perturbs it after,
-   * reading it back off `asset.data`. Same numbers — the offsets land on the same
-   * values and the clip still follows the addition — and it keeps the clip out of
-   * the graph, so the jitter is ordinary term math (see the Python body,
-   * `motion_rsi_offset`). The `mj_forward` above is what makes the read valid:
-   * `root_link_*_vel_w` is `cvel`-derived, so it would otherwise be stale.
+   * reading it back off `asset.data`, which keeps the clip out of the graph for the
+   * same numbers. The `mj_forward` above is what makes that read valid —
+   * `root_link_*_vel_w` is `cvel`-derived.
    *
-   * Fire-and-forget, with a second forward once the writes land. `reset()` is
-   * synchronous (the `CommandTerm` interface) while ORT is not, so the jitter
-   * appears a frame late — the same accepted lag as every other async term
-   * (ADR 0005 §8), and a frame of un-jittered reference pose is harmless.
+   * Fire-and-forget with a second forward once the writes land, since `reset()` is
+   * sync and ORT is not. A frame of un-jittered reference pose is harmless.
    */
   private applyResetJitter(): void {
     const graph = this.resetJitter;
@@ -765,10 +742,8 @@ export class TrackingCommand implements CommandTerm {
   }
 
   /**
-   * The RSI graph from `policy.json`, run through the shared `OnnxEvent` handler
-   * rather than a second way to evaluate a graph with `rand` and `entity_write`s.
-   * Warns and skips if the bytes or the seeded PRNG are missing: losing the jitter
-   * costs a slightly less varied start, not a working scene.
+   * The RSI graph, run through `OnnxEvent` rather than a second `rand`+`entity_write`
+   * evaluator. Skips if it or the PRNG is absent: a less varied start, not a broken scene.
    */
   private buildResetJitter(config: unknown): OnnxEvent | null {
     if (!isOnnxEventConfig(config)) return null;
@@ -810,10 +785,7 @@ export class TrackingCommand implements CommandTerm {
       return 0;
     }
     if (this.samplingMode === 'uniform') {
-      // A clip-frame index is a data lookup, not term math — nothing to trace, so
-      // it comes from the orchestrator's seeded PRNG (ADR 0005 §2) rather than
-      // `Math.random()`, which no recorded session could replay. mjlab's own
-      // `_uniform_sampling` is `torch.randint` over the same range.
+      // The seeded PRNG, not `Math.random()`, so a session replays; mjlab uses randint.
       const rng = this.context.rng;
       if (!rng) {
         console.warn('[TrackingCommand] no seeded rng in context; starting at frame 0.');

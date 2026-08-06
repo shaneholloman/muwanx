@@ -82,14 +82,12 @@ def test_mjlab_clamps_the_processed_action_not_the_final_target():
         term.process_actions(torch.full((1, n), 1e3))
         processed = term._processed_actions[0]  # noqa: SLF001 — the value under test
 
-        # 1. The clamp applies to `raw * scale + offset`, and `offset` here is the
-        #    default joint position (`use_default_offset`), so the processed action
-        #    is pinned at the bound — *not* at `default + bound`.
+        # 1. The clamp applies to `raw * scale + offset`, and `offset` is the default joint
+        #    position, so the processed action pins at the bound — not at `default + bound`.
         assert torch.allclose(processed, torch.full_like(processed, bound), atol=1e-6)
 
-        # 2. The bias is removed *after* that, so the value actually written leaves
-        #    the declared band by exactly the bias. This is the assertion that
-        #    distinguishes clamping the processed action from clamping the target.
+        # 2. The bias is removed after that, so the written value leaves the band by exactly
+        #    the bias — which is what distinguishes the two clamp placements.
         bias = env.scene[term.cfg.entity_name].data.encoder_bias[
             :, term._target_ids  # noqa: SLF001 — mirrors mjlab's own apply_actions
         ][0]
@@ -97,8 +95,7 @@ def test_mjlab_clamps_the_processed_action_not_the_final_target():
         assert torch.allclose(
             expected_target, torch.full_like(processed, bound) - bias, atol=1e-6
         )
-        # And the bias is genuinely non-zero on this task, or the two placements
-        # would be indistinguishable and this test would prove nothing.
+        # And the bias is non-zero here, or the two placements would be indistinguishable.
         assert bias.abs().max().item() > 0
     finally:
         env.close()

@@ -204,8 +204,7 @@ class TestProjectHandle:
         assert registry_env_cfg.scene.num_envs == 1
         # The live env (ADR 0005 tracing) is retained on SceneConfig.
         assert scene._config.mjlab_env is not None
-        # And the task's control rate is taken from it, not derived from the model's
-        # physics timestep — the two differ by the task's `decimation`.
+        # And the control rate comes from it, not the timestep — they differ by `decimation`.
         assert scene._config.control_dt == 0.05
 
     def test_add_scene_mjlab_uses_supplied_env_cfg(self, monkeypatch, minimal_spec):

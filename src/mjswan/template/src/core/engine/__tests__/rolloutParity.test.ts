@@ -1,25 +1,17 @@
 /**
- * Rollout parity: the whole browser MDP chain against mjlab, over N steps.
+ * Rollout parity: the whole browser MDP chain against mjlab, over N steps — the only
+ * test that runs the pieces composed. Fixture state → real `SlotReader` → real ORT
+ * session over the Builder's graph bytes → real `FusedObservation` → group vector, and
+ * the same through `TerminationManager` to a verdict.
  *
- * ADR 0005's first acceptance criterion. Everything else in the verification
- * chain covers a *piece* — the Python harness proves each traced graph reproduces
- * its mjlab term, `slotReaderParity` proves the reader hands those graphs mjlab's
- * numbers, the manager suites prove the pipeline arithmetic. This is the only test
- * that runs them composed: fixture state → real `SlotReader` → real ORT session
- * over the graph bytes the Builder wrote → real `FusedObservation` → group vector,
- * and the same through `TerminationManager` to a verdict.
+ * Catches what nothing narrower does: a layout offset, a slot fed under a name the graph
+ * does not declare, a lane read from the wrong column, `time_out` counted as a
+ * termination.
  *
- * What that composition can get wrong, and nothing narrower would catch: a layout
- * offset (right numbers, wrong order), a slot fed under a name the graph does not
- * declare, a lane read from the wrong column, `time_out` counted as a termination
- * rather than a truncation.
- *
- * **States are replayed, not co-simulated.** mjlab integrates with `mujoco_warp`
- * and the browser runs MuJoCo's own WASM build; two integrators do not agree
- * step-for-step, so a free-running comparison would measure MuJoCo against itself.
- * The fixture therefore carries mjlab's state at each step alongside mjlab's own
- * observation vector and termination verdicts *at that state*. Physics is MuJoCo's
- * code on both sides and is out of scope here.
+ * **States are replayed, not co-simulated** — mjlab integrates with `mujoco_warp` and the
+ * browser with MuJoCo's WASM, so a free-running comparison would measure MuJoCo against
+ * itself. The fixture carries mjlab's state per step plus its own vector and verdicts at
+ * that state.
  *
  * Regenerate: `MUJOCO_GL=disable .venv/bin/python scripts/dump_rollout_fixture.py`
  */
@@ -78,13 +70,7 @@ async function sessionFor(taskId: string, ref: string): Promise<OnnxSession> {
   );
 }
 
-/**
- * The `mjModel`/`mjData` view the reader indexes, for one step.
- *
- * mjlab's arrays rather than a WASM model's: what is under test is the chain from
- * a state to an observation, and holding the state fixed is what makes mjlab's
- * vector the right answer to compare against.
- */
+/** One step's `mjModel`/`mjData` view — mjlab's arrays, so its vector is the answer. */
 function contextFor(task: TaskFixture, step: Step): SlotReaderContext {
   const { names, ...rest } = task.model;
   const mjModel = { ...rest, names: Uint8Array.from(names as number[]).buffer };
@@ -117,20 +103,13 @@ function fixtureCommandClass(read: () => Float32Array): CommandTermConstructor {
 }
 
 /**
- * The real `PolicyRunner` and `CommandManager`, wired as `runtime.ts` wires them.
+ * The real `PolicyRunner` and `CommandManager`, wired as `runtime.ts` wires them, so the
+ * Action→Observation and Command→Observation paths run for real: the fixture's numbers
+ * reach the graph through `setLastActions`/`getLastActions` and through a term registered
+ * under the config's own name.
  *
- * This used to be a hand-written stub answering `getLastActions`/`getCommand`
- * straight from the fixture — which left the two manager dependencies the
- * observation vector genuinely has (Action→Observation and Command→Observation) as
- * the only part of the chain this test did not run. mjlab's numbers still come from
- * the fixture, since nothing here recomputes a policy or a command term, but they now
- * travel the runtime's path to reach the graph: through `setLastActions` into the
- * runner's own buffer and back out of `getLastActions`, and through a term registered
- * under the name the build wrote into the config, found by `getCommand`'s lookup.
- *
- * The runner also builds the fused observation itself rather than the test
- * constructing one, so `buildObservationGroups` / `registerGroup` / `buildFrame` — the
- * layout and width bookkeeping around the graph — are under test too.
+ * The runner builds the fused observation itself, so the layout and width bookkeeping
+ * around the graph is under test too.
  */
 async function harnessFor(
   taskId: string,
@@ -139,9 +118,8 @@ async function harnessFor(
   readSlot: SlotReader,
 ): Promise<PolicyRunner> {
   const commandManager = new CommandManager();
-  // Registered under the names the build emitted, through the real registry path, so
-  // both `getCommand`'s lookup and `FusedObservation`'s construction-time name binding
-  // run against a real manager instead of an object that answers everything.
+  // Under the build's own names, through the real registry, so both `getCommand` and
+  // `FusedObservation`'s name binding run against a real manager.
   const commands: CommandsConfig = {};
   for (const native of task.group.native_inputs ?? []) {
     if (native.native === 'command' && native.command_name) {
@@ -208,8 +186,7 @@ describe.each(Object.keys(TASKS))('rollout parity vs mjlab — %s', taskId => {
   beforeAll(async () => {
     runner = await harnessFor(taskId, task, () => current, readSlot);
 
-    // Every traced termination's graph, keyed the way the config references it —
-    // so the manager resolves them exactly as the runtime does.
+    // Keyed as the config references them, so the manager resolves them as the runtime does.
     const sessions = new Map<string, OnnxSession>();
     for (const entry of Object.values(task.terminations)) {
       for (const ref of [
@@ -228,26 +205,19 @@ describe.each(Object.keys(TASKS))('rollout parity vs mjlab — %s', taskId => {
   it('reproduces mjlab’s observation vector at every step', async () => {
     for (const [index, step] of task.steps.entries()) {
       seek(step);
-      // Through the runner, not a directly-built `FusedObservation`: the group's
-      // layout, its declared width, and the two native reads all sit between the
-      // graph and this vector.
+      // Through the runner, so the group layout and native reads are in the path.
       const vector = await runner.collectObservations(EMPTY_STATE);
       expectClose(vector, step.obs, `step ${index}`);
     }
-    // A group whose graph silently returned zeros would pass a vector of zeros
-    // against a fixture of zeros; assert the states actually vary.
+    // A graph silently returning zeros would pass against a zero fixture.
     const first = task.steps[0].obs;
     const last = task.steps[task.steps.length - 1].obs;
     expect(first.some((v, i) => Math.abs(v - last[i]) > 1e-6)).toBe(true);
   }, 120_000);
 
   it('keeps the native inputs that make the manager wiring observable', () => {
-    // A guard on the harness rather than on the runtime. The Action→Observation and
-    // Command→Observation paths are only under test on a task whose group *has* those
-    // native inputs — Velocity-Flat-G1 does, Cartpole's group has none — so a
-    // regenerated fixture that lost them, or a `command` input that lost its
-    // `command_name`, would silently stop exercising them while every other assertion
-    // here still passed.
+    // Guards the harness: those two paths are only exercised by a task whose group has native
+    // inputs, so a regenerated fixture that lost them would silently stop testing them.
     const natives = task.group.native_inputs ?? [];
     const command = natives.find(native => native.native === 'command');
     if (command) {
@@ -259,20 +229,16 @@ describe.each(Object.keys(TASKS))('rollout parity vs mjlab — %s', taskId => {
       expect(runner.getNumActions()).toBe(task.num_actions);
       expect(readActions().length).toBe(task.num_actions);
     }
-    // Cartpole legitimately has neither; assert that is still why, so this reads as a
-    // fixture property rather than a skipped check.
+    // Cartpole has neither; assert that, so this reads as a property, not a skipped check.
     if (natives.length === 0) expect(taskId).toBe('Mjlab-Cartpole-Balance');
   });
 
   it('reproduces every termination verdict at every step', async () => {
     for (const [index, step] of task.steps.entries()) {
       seek(step);
-      // `evaluate()` is synchronous and ORT is not, so a call kicks the graph and
-      // reports the *previous* verdict — the runtime accepts that one-frame lag
-      // (ADR 0005 §8). Reading this state's verdict therefore takes kick → drain →
-      // read, and a trailing drain: the read is itself a kick, and leaving it in
-      // flight would make the next iteration report this state's verdict instead
-      // of its own, shifting the whole comparison by a step.
+      // `evaluate()` is sync while ORT is not, so a call kicks the graph and reports
+      // the previous verdict. Reading this state's takes kick → drain → read, plus a
+      // trailing drain so the next iteration is not shifted by a step.
       terminations.evaluate(EMPTY_STATE, 0);
       await drainPending();
       const result = terminations.evaluate(EMPTY_STATE, 0);
@@ -287,11 +253,8 @@ describe.each(Object.keys(TASKS))('rollout parity vs mjlab — %s', taskId => {
   }, 120_000);
 
   it('keeps a rollout that could tell a right verdict from a constant one', () => {
-    // A verdict comparison over states where nothing ever fires proves only that
-    // the graph raises no false positives — one hardwired to `false` would pass it.
-    // The dumper tilts the root through an orientation limit for exactly this
-    // reason; if a regenerated fixture loses those states, fail here rather than
-    // quietly weakening the test above.
+    // Without a firing state the comparison above would pass for a graph hardwired to
+    // `false`. The dumper tilts the root through an orientation limit for this.
     const traced = Object.entries(task.terminations).filter(
       ([, entry]) => 'onnx' in entry || 'fused' in entry,
     );
@@ -304,8 +267,7 @@ describe.each(Object.keys(TASKS))('rollout parity vs mjlab — %s', taskId => {
   });
 
   it('covers the whole group, not a prefix of it', () => {
-    // The layout is what splices term outputs into the vector; a truncated one
-    // would still let the assertions above pass on the terms that survived.
+    // The layout splices terms into the vector, and a truncated one still passes above.
     const layout = task.group.layout ?? [];
     const width = layout.reduce((n, term) => n + term.size, 0);
     expect(width).toBe(task.group.size);

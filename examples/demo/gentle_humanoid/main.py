@@ -234,8 +234,7 @@ def setup_builder() -> mjswan.Builder:
     )
 
     future_steps = [int(step) for step in tracking_cfg["future_steps"]]
-    # `preserve_order` because the checkpoint's joint order is `action_joint_names`,
-    # not the model's; mjlab's resolve sorts into the model's order without it.
+    # The checkpoint's joint order is `action_joint_names`, not the model's.
     policy_joints = SceneEntityCfg(
         name="robot",
         joint_names=tuple(action_joint_names),
@@ -250,15 +249,13 @@ def setup_builder() -> mjswan.Builder:
         name="Unitree G1",
         spec=mujoco.MjSpec.from_file(spec_path),
     )
-    # No mjlab task here, so ONNX tracing needs an env of its own, plus stand-ins
-    # for the two commands that exist browser-side only (ADR 0005 §6).
+    # No mjlab task, so tracing needs its own env plus stand-ins for the browser-only commands.
     scene.set_trace_env(
         build_single_entity_trace_env(
             lambda: mujoco.MjSpec.from_file(spec_path),
             commands={
                 "motion": _RefWindow(len(future_steps), len(action_joint_names)),
-                # The two value-bearing inputs of the `compliance` UI command below,
-                # `enabled` and `force` (a button would carry no value).
+                # The `compliance` UI command's two value-bearing inputs (a button would carry none).
                 "compliance": _UiValues(2),
             },
         )
@@ -279,10 +276,8 @@ def setup_builder() -> mjswan.Builder:
         policy=onnx.load(str(policy_path), load_external_data=True),
         config_path=str(policy_json),
         commands={
-            # Built-in engine motion player; the demo's clips are converted to
-            # its body_world format at build time (see _clip_file_bytes, #79).
-            # `time_steps` is the window its `ref_*` state fields are sampled at —
-            # the offsets the traced observation terms slice.
+            # Built-in motion player; clips convert to its body_world format at build time (#79).
+            # `time_steps` is the window its `ref_*` fields are sampled at, sliced by the terms.
             "motion": mjswan.CommandTermConfig(
                 term_name="TrackingCommand",
                 params={"time_steps": future_steps},
@@ -310,10 +305,8 @@ def setup_builder() -> mjswan.Builder:
             ),
         },
         observations={
-            # The window offsets live on the `motion` command (`time_steps`), so the
-            # motion-coupled terms read their own width off the reference tensors and
-            # take no `future_steps` param. The proprioceptive terms compute one frame
-            # each; their sparse look-back is `history_steps`, stacked by the runtime.
+            # The offsets live on the `motion` command, so motion-coupled terms read their width off
+            # the reference tensors. Proprioceptive terms compute one frame; `history_steps` stacks.
             "policy": ObservationGroupCfg(
                 terms={
                     "boot": ObservationTermCfg(func=terms.boot),
@@ -350,8 +343,7 @@ def setup_builder() -> mjswan.Builder:
                         params={"asset_cfg": policy_joints},
                         history_steps=tuple(tracking_cfg["joint_vel_history_steps"]),
                     ),
-                    # mjlab's own `last_action`: the runtime already holds it, so it
-                    # stays a native term and only the stacking is ours.
+                    # The runtime already holds `last_action`, so only the stacking is ours.
                     "prev_actions": ObservationTermCfg(
                         func=obs_fns.last_action,
                         history_length=int(tracking_cfg["prev_action_steps"]),
@@ -373,8 +365,7 @@ def setup_builder() -> mjswan.Builder:
         default=True,
     )
 
-    # Clips are converted to the engine's body_world format (joints reordered
-    # into action order), so the bundled npz's joint order IS action order.
+    # The conversion to body_world reorders joints, so the npz's order IS action order.
     policy.add_motion(
         name="default",
         source=str(_write_generated("default", _default_clip_bytes(tracking_cfg))),

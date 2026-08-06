@@ -29,9 +29,7 @@ import examples.mjlab.defaults.commands  # noqa: F401
 import mjswan
 from mjswan.wandb_io import fetch_motion_npz_from_wandb_run
 
-# This task's terminations (`anchor_pos`, `anchor_ori`, `ee_body_pos`, plus a
-# native `time_out`) need no registration: under ADR 0005 they are traced straight
-# from mjlab's own functions. They were declarative DSL built-ins before that.
+# The terminations need no registration: they trace straight from mjlab's own functions.
 
 
 def setup_builder() -> mjswan.Builder:
@@ -42,9 +40,8 @@ def setup_builder() -> mjswan.Builder:
     run_path = "ttktjmt-org/mjlab/mayq0rtd"
     task_id = "Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation"
 
-    # mjlab's tracking config ships `motion_file=""` and leaves filling it to the
-    # caller (its own scripts do it in `tracking/scripts/evaluate.py`), so the clip
-    # has to land on disk before `add_scene_mjlab` constructs the tracing env.
+    # mjlab's tracking config ships `motion_file=""` for the caller to fill, so the clip has
+    # to land on disk before `add_scene_mjlab` constructs the tracing env.
     env_cfg = load_env_cfg(task_id, play=True)
     motion_name, motion_bytes = fetch_motion_npz_from_wandb_run(run_path)
     motion_path = example_dir / "artifacts" / f"{motion_name}.npz"
@@ -55,8 +52,7 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder()
 
     project = builder.add_project(name="mjlab Spinkick")
-    # `add_policy_wandb` reuses this same clip: it re-downloads only when the
-    # command term's `motion_file` is not already a real file.
+    # `add_policy_wandb` reuses this clip; it re-downloads only if the path is not a file.
     scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
 
     scene.add_policy_wandb(

@@ -123,8 +123,7 @@ class TestClientBuilderCustomTerms:
         assert terms["terminations"] == {"FooTerm": src.resolve()}
 
     def test_collect_custom_terms_skips_declarative_callable(self, monkeypatch):
-        # A term traced to ONNX (ADR 0005) is a plain callable with no
-        # ts_src — must be skipped, not crash.
+        # A traced term is a plain callable with no ts_src: skip it, do not crash.
         def base_lin_vel(env, **params):
             del env, params
 
@@ -207,8 +206,7 @@ class TestBuildPluginsModule:
         assert "mjswan/event" not in code  # no bare imports remain
 
     def test_term_importing_three_reuses_engine_instance(self, tmp_path, monkeypatch):
-        # A term that imports `three` must resolve to the engine's single instance
-        # (global), not a bundled duplicate — else instanceof / raycasting break.
+        # `three` must resolve to the engine's instance; a duplicate breaks instanceof.
         template = Path(mjswan.__file__).parent / "template"
         if not (template / "node_modules" / ".bin" / "esbuild").exists():
             pytest.skip("esbuild not installed (run npm install in template)")
@@ -244,10 +242,8 @@ class TestBuilderValidation:
     def test_scene_with_a_policy_needs_a_control_dt(
         self, tmp_path, minimal_model, minimal_onnx
     ):
-        # The runtime derived this from a hardcoded 0.02 s, right for the locomotion and
-        # manipulation tasks (0.005 x 4) and wrong for Cartpole (0.01 x 5), which played
-        # 2.5x too fast in silence. Nothing about a wrong control rate raises at
-        # playback, so the build refuses to guess.
+        # Nothing about a wrong control rate raises at playback — it just plays at the
+        # wrong speed — so the build refuses to guess.
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.add_policy(name="Policy", policy=minimal_onnx)
@@ -255,8 +251,7 @@ class TestBuilderValidation:
             builder._save_config_json(tmp_path)
 
     def test_scene_without_a_policy_needs_no_control_dt(self, tmp_path, minimal_model):
-        # A viewer-only scene has no trained rate to match, so requiring one would be
-        # noise. It must not raise for the reason above.
+        # A viewer-only scene has no trained rate to match, so this must not raise.
         builder = Builder()
         builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         builder._save_config_json(tmp_path)
@@ -570,19 +565,9 @@ class TestUsesCustomJsFlag:
         assert self._read_config(tmp_path)["uses_custom_js"] is False
 
 
-# NOTE: the transitional name-collision check (TestNoBuiltinNameShadowing) was
-# removed along with the check itself — after ADR 0003 no MDP category keeps a
-# named built-in, so a ts_src term cannot shadow one.
-
-
 # ===========================================================================
-# A live env for ONNX tracing (ADR 0005) — these helpers stand in for a
-# task's own env when the scene is a raw `add_scene(model=...)` (no mjlab
-# task, hence no `mjlab_env` normally). They satisfy the tracer's only
-# contract, `env.scene[name].data.<field>`, with plain torch tensors; the
-# functions below are "self-authored" observation/termination bodies (ADR
-# 0005 point 2 — traced exactly like an mjlab function, no reimplementation).
-# Requires torch; callers must `pytest.importorskip("torch")` first.
+# A live env for tracing, standing in for a task's own when the scene is a raw
+# `add_scene(model=...)`. Satisfies `env.scene[name].data.<field>` with torch tensors.
 def _fake_trace_env():
     import torch
 
@@ -642,9 +627,7 @@ def _fake_trace_env():
     return _Env({"robot": _Entity(data)})
 
 
-# Named `last_action`, not `_fake_last_action`: the tracer classifies a native
-# observation by `func.__name__` (`NATIVE_OBSERVATION_FUNCS`), so the name is the thing
-# under test here. Body mirrors mjlab's `envs/mdp/observations.py`.
+# Named `last_action` because the tracer classifies natives by `func.__name__`.
 def last_action(env, *, action_name=None, **_):
     if action_name is None:
         return env.action_manager.action
@@ -955,9 +938,8 @@ class TestSaveWebPolicyJson:
     def test_plain_observation_term_traces_against_live_env(
         self, tmp_path, minimal_model, minimal_onnx
     ):
-        # A plain-callable observation func (mjlab's own, or a self-authored
-        # one — same treatment per ADR 0005) is traced to ONNX against the
-        # scene's live env; no mjswan-side reimplementation is involved.
+        # A plain-callable observation func — mjlab's own or self-authored, treated the
+        # same — is traced against the scene's live env, never reimplemented.
         pytest.importorskip("torch")
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(
@@ -980,8 +962,7 @@ class TestSaveWebPolicyJson:
 
         out = self._run(builder, tmp_path)
         data = self._policy_json(out, "Policy")
-        # The group fuses (ADR 0005 §4): one graph named for the group, not one per
-        # term, and `scale` is folded into it rather than shipped for the runtime.
+        # The group fuses: one graph named for it, with `scale` folded in rather than shipped.
         group = data["observations"]["policy"]
         assert group["fused"] == "obs/policy.onnx"
         assert group["layout"] == [{"name": "joint_pos", "size": 2}]
@@ -992,9 +973,8 @@ class TestSaveWebPolicyJson:
     def test_last_action_with_a_term_name_emits_its_slice_offset(
         self, tmp_path, minimal_model, minimal_onnx
     ):
-        # The two-action-term shape, through the real Builder. No mjlab task has it —
-        # all four declare one term — so without this the offset was only ever checked
-        # against a stub action manager, never emitted by a build.
+        # The two-action-term shape, through the real Builder. No mjlab task has it, so
+        # otherwise the offset is only ever checked against a stub action manager.
         pytest.importorskip("torch")
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(
@@ -1026,9 +1006,8 @@ class TestSaveWebPolicyJson:
         )
         assert native["native"] == "prev_action"
         assert native["action_name"] == "gripper"
-        # `arm` holds [0,3), so `gripper` starts at 3. Without the offset the runtime
-        # feeds the graph `arm`'s first element at `gripper`'s width — the right width,
-        # the wrong term.
+        # `arm` holds [0,3), so `gripper` starts at 3. Without the offset the runtime feeds
+        # `arm`'s first element at `gripper`'s width: right width, wrong term.
         assert native["action_offset"] == 3
         assert native["size"] == 1
         # And the group still fuses around it: the native term is a graph *input*.
@@ -1040,8 +1019,7 @@ class TestSaveWebPolicyJson:
     def test_last_action_naming_no_action_term_fails_the_build(
         self, tmp_path, minimal_model, minimal_onnx
     ):
-        # Degrading would hand the runtime the whole action vector's head, which is the
-        # silently-wrong observation the offset exists to prevent.
+        # Degrading would hand over the action vector's head — the silent wrong answer.
         pytest.importorskip("torch")
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(
@@ -1068,9 +1046,8 @@ class TestSaveWebPolicyJson:
     def test_per_term_observations_when_the_group_cannot_fuse(
         self, tmp_path, minimal_model, minimal_onnx
     ):
-        # A term stacking its own history keeps the per-term path: mjlab stacks
-        # before concatenating, so one fused output would order the group's history
-        # differently (see `_group_is_fusable`).
+        # A term stacking its own history keeps the per-term path: mjlab stacks before
+        # concatenating, so a fused output would order the group's history differently.
         pytest.importorskip("torch")
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(
@@ -1412,8 +1389,7 @@ class TestSaveWebPolicyJson:
         )
         out = self._run(builder, tmp_path)
         data = self._policy_json(out, "Policy")
-        # A term reading dynamic entity state is traced to ONNX (ADR 0005);
-        # `limit_angle` is closed over by the traced function, not serialized.
+        # Traced to ONNX, with `limit_angle` closed over by the function, not serialized.
         fallen = data["terminations"]["fallen"]
         assert fallen["onnx"] == "term/fallen.onnx"
         assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
@@ -1421,8 +1397,7 @@ class TestSaveWebPolicyJson:
 
 
 # ===========================================================================
-# L3 slow — full build pipeline (triggers frontend compilation)
-# Run with: pytest -m slow
+# L3 slow — full build pipeline (triggers frontend compilation) Run with: pytest -m slow
 # ===========================================================================
 @pytest.mark.slow
 class TestFullBuild:
@@ -1485,8 +1460,7 @@ class TestFullBuild:
         )
         out = tmp_path / "out"
         builder.build(out)
-        # Dev/test scaffolding (harness, e2e, configs, type shims, fixtures) must
-        # not ship in the published SPA.
+        # Dev/test scaffolding must not ship in the published SPA.
         for leaked in (
             "e2e",
             "harness.html",
@@ -1589,8 +1563,7 @@ class TestMtHeaders:
 
 
 # ===========================================================================
-# L3 slow — Phase 4: cache reuse + custom-JS runtime plugin module
-# Run with: pytest -m slow
+# L3 slow — Phase 4: cache reuse + custom-JS runtime plugin module Run with: pytest -m slow
 # ===========================================================================
 @pytest.mark.slow
 class TestFullBuildPhase4:
@@ -1646,8 +1619,7 @@ class TestFullBuildPhase4:
 
 
 # ===========================================================================
-# L3 slow — full mt=True build (triggers frontend compilation)
-# Run with: pytest -m slow
+# L3 slow — full mt=True build (triggers frontend compilation) Run with: pytest -m slow
 # ===========================================================================
 @pytest.mark.slow
 class TestFullBuildMt:

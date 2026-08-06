@@ -45,14 +45,11 @@ class TestSliderConfig:
         assert mjswan.Slider is SliderConfig
 
     def test_adjustable_range_is_absent_unless_asked_for(self):
-        # It is a UI affordance, not a default: a config that never asked for one
-        # must not grow a companion slider in the browser.
+        # A UI affordance, not a default: a config that never asked keeps no companion.
         assert "adjustable_range" not in SliderConfig(name="x", label="X").to_dict()
 
     def test_adjustable_range_travels_as_its_own_bounds(self):
-        # mjlab's "Max <label>" meta-slider (ADR 0005 §3a): rescales how far the
-        # value slider drags, and is purely presentational — nothing here reaches
-        # the policy, so it carries only its own bounds.
+        # mjlab's "Max <label>" meta-slider: presentational, so it carries only its bounds.
         s = SliderConfig(
             name="lin_vel_x",
             label="Forward Velocity",
@@ -223,7 +220,6 @@ class TestMotionRsiRegistration:
         from mjswan.command import _custom_registry, _motion_rsi_unregistered
 
         spec = _custom_registry["MotionCommandCfg"]
-        # An author-side re-registration replaces this with the real trace; that is
-        # the point, so only assert the built-in default is the diagnosing one.
+        # An author-side re-registration replaces this, so only pin the diagnosing default.
         assert spec.reset_trace in (_motion_rsi_unregistered, spec.reset_trace)
         assert spec.ts_name == "TrackingCommand"

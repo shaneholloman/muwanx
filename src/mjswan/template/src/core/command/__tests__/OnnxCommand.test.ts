@@ -1,12 +1,9 @@
 /**
- * `OnnxCommand`: the single generic command handler (ADR 0005 §3, brief §3).
+ * The parity harness validates the graph's math Python-side; what is tested here is the
+ * native half — the resample timer, state threading, seeded `rand`, the UI override,
+ * the `entity_write` hand-off, and the never-block-never-queue boundary.
  *
- * The graph's math is validated Python-side by the parity harness; what needs
- * testing here is the *native half* this class owns: the scalar resample timer,
- * state threading across frames, seeded `rand`, the mjlab-parity UI override, the
- * `entity_write` hand-off, and the sync/async boundary (never block, never queue).
- *
- * The ONNX session is injected as a fake, so these run headless with no ORT.
+ * The ONNX session is a fake, so these run headless with no ORT.
  */
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
@@ -18,14 +15,7 @@ import type { OnnxCommandConfig, OnnxSession, OnnxTensorLike } from '../OnnxComm
 type MjModel = import('mujoco').MjModel;
 type MjData = import('mujoco').MjData;
 
-/**
- * Drain the microtask queue.
- *
- * `update()` kicks off inference and clears its in-flight flag in a `.finally()`,
- * so an already-resolved fake session still needs several microtask turns before
- * the next `update()` is admitted. Real ORT inference awaits genuinely, so this
- * only matters for the fakes here.
- */
+/** Drain the microtask queue, so the in-flight flag clears between fake `update()`s. */
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 }
@@ -115,8 +105,7 @@ describe('OnnxCommand: state threading and command output', () => {
   });
 
   it('seeds state to zeros from the declared shape/dtype when no init is given', async () => {
-    // An older bundle carries no `init`; zero-fill is what this did before, and it
-    // is right for every reference task (all of their state starts at zero).
+    // An older bundle carries no `init`, and zero is right for every reference task.
     const session = new FakeSession(() => velocityOutputs(0, 0, 0));
     const cmd = new OnnxCommand('twist', VELOCITY_CFG, null, {
       session,
@@ -128,10 +117,7 @@ describe('OnnxCommand: state threading and command output', () => {
   });
 
   it('seeds state from the declared init (ADR 0005 §3)', async () => {
-    // The case the field exists for: a term whose first resample does *not*
-    // overwrite every field starts where the build found it, not at zero. No
-    // reference task needs this today — all of their state is zeros — which is
-    // exactly why the omission was invisible.
+    // A term whose first resample skips a field starts where the build found it.
     const session = new FakeSession(() => velocityOutputs(0, 0, 0));
     const cmd = new OnnxCommand(
       'twist',
@@ -153,9 +139,7 @@ describe('OnnxCommand: state threading and command output', () => {
   });
 
   it('ignores an init that disagrees with the declared width', async () => {
-    // A config and a graph that disagree is a build bug; writing past the buffer
-    // would throw and writing short would leave a zero mid-state, so the extra is
-    // dropped and the short case keeps its zeros.
+    // Config and graph disagreeing is a build bug: drop the extra, keep the zeros.
     const session = new FakeSession(() => velocityOutputs(0, 0, 0));
     const cmd = new OnnxCommand(
       'twist',
@@ -186,8 +170,7 @@ describe('OnnxCommand: state threading and command output', () => {
   });
 
   it('feeds a sensor slot under its build-supplied input name', async () => {
-    // A sensor slot has no `field`; its graph input name is only knowable from
-    // the build-supplied `input` (the MJCF path is folded to an identifier).
+    // A sensor slot has no `field`, so only the build-supplied `input` names its input.
     const session = new FakeSession(() => velocityOutputs(0, 0, 0));
     const cmd = new OnnxCommand(
       'twist',
@@ -261,14 +244,12 @@ describe('OnnxCommand: resample timer (scalar, ADR §5)', () => {
     await settle();
     expect(session.calls[1].resample_mask.data[0]).toBe(0);
 
-    // mjlab's `CommandTerm.reset` *is* `_resample`, and `_reset_idx` runs it before
-    // the step's single forward — so the run happens here, not on the next frame.
+    // `reset` *is* `_resample`, run before the forward — so here, not next frame.
     await cmd.reset();
     expect(session.calls.length).toBe(3);
     expect(session.calls[2].resample_mask.data[0]).toBe(1);
 
-    // The frame's later `update()` is then `_update_command` alone, which is how
-    // mjlab splits the two across the forward.
+    // The later `update()` is `_update_command` alone, as mjlab splits them.
     cmd.update(0.1);
     await settle();
     expect(session.calls[3].resample_mask.data[0]).toBe(0);

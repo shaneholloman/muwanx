@@ -1,17 +1,13 @@
 """What must *not* be in a built bundle (ADR 0005 acceptance criteria 4 and 5).
 
-Two criteria that were true but unasserted, which is a weaker position than it
-looks: both hold by construction today, and construction is exactly what changes.
+Both hold by construction today, and construction is exactly what changes.
 
-* **No training-only managers.** ADR 0005 §Consequences carries ADR 0003's line
-  forward — reward, curriculum, metrics and recorders have no browser-side runtime
-  and must not reach a bundle. mjswan never reads them, so nothing to reject: an
-  mjlab task config carries rewards for every task, and a build that rejected them
-  outright could build nothing at all. What is checkable, and what the criterion
-  actually means, is that the *emitted* artifacts mention none of them.
-* **No term source as executable text.** The DSL used to ship term bodies as
-  readable JSON; ONNX ships them as graph bytes. The audit is that no Python term
-  body travels alongside — not as a source string, not as an eval-able payload.
+* **No training-only managers.** Reward, curriculum, metrics and recorders have no
+  browser-side runtime. mjswan never reads them, and a build that *rejected* them
+  could build nothing (every mjlab task carries rewards), so what is checkable is
+  that the emitted artifacts mention none of them.
+* **No term source as executable text.** ONNX ships term bodies as graph bytes, so no
+  Python body may travel alongside — not as a source string, not as an eval-able payload.
 
 Both walk the real emitted output rather than inspecting the code that writes it,
 so a future serializer that starts attaching a `rewards` block or a `source` string
@@ -40,8 +36,7 @@ FORBIDDEN_KEYS = (
     "recorders",
 )
 
-# Markers of Python source travelling as text. `def ` alone is too loose — it
-# appears in prose — so these are the shapes a term body would actually take.
+# Markers of Python source travelling as text; `def ` alone also appears in prose.
 PYTHON_SOURCE_MARKERS = (
     "import torch",
     "torch.",
@@ -106,9 +101,8 @@ def built_output(tmp_path, minimal_model, minimal_onnx, monkeypatch) -> Path:
     scene = builder.add_project(name="P").add_scene(
         control_dt=0.02, name="S", model=minimal_model
     )
-    # A trace env, so the build really traces terms and the artifacts carry the
-    # observation/termination entries and their `.onnx` files. Without them the
-    # scans below would run over a bundle holding none of the content at issue.
+    # A trace env, so the build really traces terms and emits the `.onnx` files —
+    # without them the scans below run over a bundle holding nothing at issue.
     scene._config.mjlab_env = _TraceEnv(  # noqa: SLF001 — the builder's own seam
         joint_pos=torch.tensor([[0.1, 0.2]]),
         root_link_pos_w=torch.tensor([[0.0, 0.0, 0.5]]),

@@ -1,22 +1,13 @@
 /**
- * `OnnxObservation`: an observation term whose body is a traced ONNX graph
- * (ADR 0005 §1). One generic class covers every traced observation — the graph,
- * its declared input slots, and the native clip/scale metadata are all data in
- * `policy.json`, so adding an observation never touches the engine.
+ * An observation term whose body is a traced ONNX graph. One generic class covers every
+ * traced observation: the graph, its input slots and the clip/scale metadata are all
+ * data in `policy.json`.
  *
- * **Why `size` comes from the build.** `PolicyRunner` needs each term's width
- * synchronously, at load, to lay out the group buffer — but ORT inference is
- * async, so this class cannot measure its own output first. The build knows the
- * width exactly (it is the parity-verified reference output) and ships it, so no
- * speculative inference is needed here.
+ * `size` comes from the build because `PolicyRunner` needs each term's width
+ * synchronously at load, while inference is async.
  *
- * **Async boundary.** Unlike `OnnxCommand`/`OnnxEvent`, which skip a frame rather
- * than queue, observations are on the policy's critical path: a stale observation
- * directly degrades control. So `compute()` returns a promise the group awaits,
- * mirroring ADR 0005 §8's `const obs = await ortObs.run(...)`.
- *
- * Per-term sessions for now; ADR §4 wants the terms of a group fused into one
- * graph, which is a build-time change this class's contract is unaffected by.
+ * Unlike `OnnxCommand`/`OnnxEvent`, which skip a frame rather than queue, `compute()`
+ * returns a promise the group awaits — a stale observation degrades control directly.
  */
 
 import { ObservationBase, type ObservationConfig } from './ObservationBase';
@@ -76,9 +67,7 @@ export class OnnxObservation extends ObservationBase<OnnxObservationConfig> {
     for (const slot of this.config.input_slots ?? []) {
       const value = this.deps.readSlot(slot);
       if (!value) {
-        // A slot the runtime cannot supply means the graph would run on stale or
-        // absent state; serve the last good value rather than silently feeding
-        // zeros into the policy.
+        // An unsupplied slot means absent state: serve the last good value, not zeros.
         console.warn(
           `[OnnxObservation] "${this.config.name}" could not read slot ` +
             `${slotInputName(slot)}; reusing the previous value.`,

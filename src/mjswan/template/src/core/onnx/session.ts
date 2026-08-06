@@ -1,11 +1,6 @@
 /**
- * Shared ONNX Runtime Web session abstraction (ADR 0005).
- *
- * `OnnxCommand` and `OnnxEvent` both need to run small term-body graphs; this is
- * the one place that talks to `onnxruntime-web` so the two don't duplicate it.
- * The `OnnxSession`/`OnnxTensorLike` interfaces are intentionally minimal (one
- * async method) so command/event handlers stay testable with a fake — no ORT,
- * no browser, no WASM required for their own unit tests.
+ * The one place that talks to `onnxruntime-web`, kept minimal so a term handler stays
+ * testable with a fake — no ORT, browser or WASM.
  */
 import * as ort from 'onnxruntime-web';
 
@@ -22,24 +17,13 @@ export interface OnnxTensorLike {
 }
 
 /**
- * A dynamic runtime read a term's graph declares as an input.
+ * A dynamic runtime read a term's graph declares as an input, mirroring
+ * `mjswan.compile.tracer.slot_to_json`. Distinguished by which field is set:
+ * `entity`+`field`, `sensor`, `sensor`+`field`, or `command`+`field`.
  *
- * Three shapes, distinguished by which field is set (mirroring
- * `mjswan.compile.tracer.slot_to_json`):
- * - `entity` + `field` — one `Entity.data.<field>` tensor.
- * - `sensor` — a whole MuJoCo sensor's value (mjlab's `builtin_sensor`).
- * - `command` + `field` — another command term's current state, e.g. a goal
- *   position an observation measures distance to (mjlab's
- *   `object_to_goal_distance`).
- *
- * `input` is the graph input name to feed this slot's value as. Prefer it over
- * re-deriving a name from `entity`/`field`: sensor and command names carry
- * paths/dots that the build folds to identifiers, so the mapping is not
- * reproducible here. Optional only for backward compatibility with configs
- * emitted before it existed — see `slotInputName`.
- *
- * `shape` is the traced tensor's shape, batch axis included. A slot reader hands
- * back a flat array, so the rank has to travel with the slot — see `slotDims`.
+ * `input` is the graph input name, build-supplied because sensor and command names
+ * carry dots the build folds to identifiers — not reproducible here. `shape` is the
+ * traced shape, batch axis included, since a slot reader hands back a flat array.
  */
 export interface OnnxInputSlot {
   entity?: string | null;
@@ -57,15 +41,10 @@ export function slotInputName(slot: OnnxInputSlot): string {
 }
 
 /**
- * The dims to feed a slot's flat value as.
- *
- * Not every `Entity.data` field is rank 2: `site_pos_w` is
- * `(batch, num_sites, 3)` and `heading_w` is `(batch,)`, and ORT rejects a rank
- * mismatch outright rather than reshaping. So the traced shape is authoritative,
- * with the batch axis pinned to 1 (the browser runs a single env). `[1, length]`
- * is the fallback for a slot from a build that predates `shape`, and also the
- * repair when the declared element count no longer matches what the model
- * actually has — feeding the declared shape there would be a lie about the data.
+ * The dims to feed a slot's flat value as. ORT rejects a rank mismatch outright and
+ * fields are not all rank 2 (`site_pos_w` is `(batch, sites, 3)`), so the traced
+ * shape wins, batch pinned to 1. `[1, length]` when it disagrees with the actual
+ * element count — feeding the declared shape there would misdescribe the data.
  */
 export function slotDims(slot: OnnxInputSlot, length: number): number[] {
   const shape = slot.shape;
@@ -80,8 +59,7 @@ export type SlotReader = (slot: OnnxInputSlot) => Float32Array | null;
 
 function toOrtTensor(t: OnnxTensorLike): ort.Tensor {
   if (t.data instanceof Uint8Array) {
-    // Uint8Array carries our bool convention (0/1); ORT's 'bool' dtype expects
-    // a Uint8Array of the same length, so this is a direct pass-through.
+    // ORT's 'bool' dtype takes a Uint8Array of 0/1 — a direct pass-through.
     return new ort.Tensor('bool', t.data, t.dims);
   }
   if (t.data instanceof BigInt64Array) {
@@ -110,7 +88,7 @@ class OrtSession implements OnnxSession {
   }
 }
 
-/** Create a real ORT-Web-backed session from graph bytes (never fetches — ADR 0004 §4). */
+/** Create a real ORT-Web-backed session from graph bytes; never fetches. */
 export async function createOnnxSession(bytes: ArrayBuffer): Promise<OnnxSession> {
   const session = await ort.InferenceSession.create(bytes, {
     executionProviders: ['wasm'],
@@ -120,12 +98,8 @@ export async function createOnnxSession(bytes: ArrayBuffer): Promise<OnnxSession
 }
 
 /**
- * A named collection of small term-body graphs (command or event onnx assets),
- * built once from resolved bytes and looked up by their `policy.json`/
- * `config.json` path (e.g. `"command/twist.onnx"`, `"event/push_robot.onnx"`).
- *
- * `sessionFactory` is injectable so callers can build the cache with a fake in
- * tests; production code omits it and gets `createOnnxSession`.
+ * Term-body graphs built once from resolved bytes, keyed by config-relative path.
+ * `sessionFactory` is injectable for tests.
  */
 export class OnnxSessionCache {
   private sessions = new Map<string, OnnxSession>();

@@ -1,20 +1,13 @@
 /**
- * `NativeObservation`: the observation terms that are a plain read of state the
- * orchestrator already owns, so tracing them to ONNX would only wrap an identity
- * graph around a value the runtime has in hand (ADR 0005 §Decision — orchestration
- * is native, term *bodies* are ONNX; these terms have no body).
+ * Observation terms that are a plain read of state the orchestrator already owns, so
+ * tracing them would only wrap an identity graph around a value in hand. The build
+ * marks them `native`:
+ * - `prev_action` — mjlab's `last_action`.
+ * - `command` — mjlab's `generated_commands`, the named term's current value.
+ * - `constant` — reads nothing from the env; its value is baked at build time.
  *
- * The build marks them with `native`:
- * - `prev_action` — mjlab's `last_action`, i.e. the policy's own previous output.
- * - `command` — mjlab's `generated_commands`, the named command term's current
- *   value (itself possibly produced by an `OnnxCommand`).
- * - `constant` — a term that reads nothing from the env at all, e.g. zero padding
- *   for command slots a checkpoint expects but this scene does not drive. Its
- *   value is baked at build time.
- *
- * `size` is normally supplied by the build; for `prev_action`/`command` it can be
- * resolved from the runtime instead, since a scene may name a command that only
- * exists browser-side (a native `UiCommand`) and so has no build-time width.
+ * `size` normally comes from the build, but `prev_action`/`command` can resolve it from
+ * the runtime, since a browser-only command has no build-time width.
  */
 
 import { ObservationBase, type ObservationConfig } from './ObservationBase';
@@ -53,19 +46,8 @@ export function isNativeObservationConfig(
 }
 
 /**
- * The stored actions, narrowed to one action term's slice.
- *
- * `last_action(action_name=…)` is mjlab's `get_term(name).raw_action` — that term's
- * slice of the policy output, not the whole vector (`envs/mdp/observations.py`). The
- * build resolves where the slice starts from the live `ActionManager` and emits it as
- * `action_offset`; an entry without one is the bare `last_action`, which *is* the
- * whole vector.
- *
- * The build emitted `action_name` from the start and nothing here read it, so a
- * named term got the vector's head instead of its own slice — `conformToSize`
- * truncates from the front, which made the wrong numbers the right width. Invisible
- * while every reference task has exactly one action term (the slice and the vector
- * coincide), wrong the moment one has two.
+ * The stored actions at one term's `action_offset` — mjlab's `get_term(name).raw_action`.
+ * An entry with no offset is the bare `last_action`, which is the whole vector.
  */
 export function sliceStoredActions(
   actions: Float32Array,
@@ -73,28 +55,15 @@ export function sliceStoredActions(
 ): Float32Array {
   const offset = config.action_offset;
   if (offset === undefined) return actions;
-  // A view, not a copy: both callers copy before the pipeline mutates, and
-  // `getLastActions()` already hands back a copy of the runtime's buffer.
+  // A view: both callers copy before the pipeline mutates.
   return actions.subarray(offset, offset + (config.size ?? actions.length - offset));
 }
 
 /**
- * Fail at construction if a `command` term names something no command term provides.
- *
- * mjlab asserts this lookup (`envs/mdp/observations.py`, `generated_commands`).
- * Here the miss used to surface as `CommandManager.getCommand`'s empty vector,
- * zero-padded to the declared width by `conformToSize` — a block of zeros inside
- * the policy's input vector, warned about nowhere. A scene that deliberately has no
- * value for a command slot already has a way to say so (`native: "constant"`, whose
- * value the build bakes), so a dangling name is always a wiring bug.
- *
- * Lives here rather than in either observation class because both bind these names:
- * this module owns the `native` kinds, and `FusedObservation` feeds the same two as
- * graph inputs.
- *
- * Only checked when a manager is present. An embedding that runs no commands at all
- * is not evidence of a wrong *name*, so the declared width still stands zero-filled
- * for it — the same call the width-conforming path has always made.
+ * Fail at construction if a `command` term names something no command provides, as mjlab
+ * asserts the same lookup — otherwise the miss is a silent block of zeros in the policy's
+ * input vector, and a slot meant to be empty says so with `native: "constant"`. Shared
+ * with `FusedObservation`, and skipped when there is no manager at all.
  */
 export function assertCommandTermBound(
   runner: PolicyRunner,
@@ -138,16 +107,14 @@ export class NativeObservation extends ObservationBase<NativeObservationConfig> 
 
   get size(): number {
     if (this.cachedSize !== null) return this.cachedSize;
-    // No build-time width (a browser-only command): take it from the live value
-    // once, so the group layout stays fixed from then on.
+    // A browser-only command: take the width from the live value, once.
     this.cachedSize = this.read().length;
     return this.cachedSize;
   }
 
   compute(_state: PolicyState): Float32Array {
     const raw = this.read();
-    // Copy before the pipeline mutates in place — `read()` may hand back the
-    // runtime's own buffer (the last action, a command's vector).
+    // Copy first: the pipeline mutates, and `read()` may hand back a live buffer.
     const values = conformToSize(Float32Array.from(raw), this.size);
     return applyObservationPipeline(values, this.config);
   }
@@ -161,9 +128,7 @@ export class NativeObservation extends ObservationBase<NativeObservationConfig> 
       case 'command': {
         const name = this.config.command_name;
         const manager = this.runner.getContext()?.commandManager;
-        // `name` and its presence in the manager are both asserted in the
-        // constructor, so the only case this guard still catches is an embedding
-        // with no CommandManager — whose width the build supplied.
+        // The constructor asserts the name, so only a manager-less embedding lands here.
         if (!name || !manager) return new Float32Array(this.cachedSize ?? 0);
         return manager.getCommand(name);
       }

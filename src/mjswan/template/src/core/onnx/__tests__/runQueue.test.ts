@@ -39,8 +39,7 @@ describe('queueOrtRun', () => {
   });
 
   it('runs the next one after a failure', async () => {
-    // A failed run still released ORT's slot; inheriting the rejection would wedge
-    // the queue for the rest of the session.
+    // A failed run released ORT's slot; inheriting its rejection would wedge the queue.
     const failed = queueOrtRun(() => Promise.reject(new Error('boom')));
     await expect(failed).rejects.toThrow('boom');
     await expect(queueOrtRun(() => Promise.resolve('next'))).resolves.toBe('next');

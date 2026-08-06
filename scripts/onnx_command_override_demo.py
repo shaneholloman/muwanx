@@ -30,8 +30,7 @@ import torch
 
 os.environ.setdefault("MUJOCO_GL", "disable")
 
-# Imported into THIS module's globals so the RNG spy (which patches the override
-# function's __globals__) can see and replay these draws.
+# Into this module's globals, so the RNG spy (which patches `__globals__`) sees the draws.
 from mjlab.utils.lab_api.math import sample_uniform, wrap_to_pi  # noqa: E402
 
 

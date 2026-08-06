@@ -67,15 +67,13 @@ describe('RaycastSensor', () => {
   it('measures distance to the surface under each ray', () => {
     const sensor = new RaycastSensor(mujoco, descriptor());
     const distances = sensor.read('distances', mjModel, mjData)!;
-    // Frame is at z=1. Ray 0 hits the floor (1.0), ray 1 the block top at
-    // z=0.5 (0.5), ray 2 is still over the 5 m plane (1.0).
+    // Frame at z=1: ray 0 hits the floor (1.0), ray 1 the block top (0.5), ray 2 floor.
     expect(Array.from(distances)).toEqual([1, 0.5, 1]);
   });
 
   it('excludes the frame’s own body, so a ray cannot hit the robot', () => {
-    // The torso sphere (r=0.1) sits exactly on ray 0's origin. Without the
-    // exclusion the reading would be 0.1 instead of the floor's 1.0 — the
-    // difference between "ground is right here" and the truth.
+    // The torso sphere sits on ray 0's origin, so without the exclusion the reading is
+    // 0.1 rather than the floor's 1.0.
     const included = new RaycastSensor(mujoco, descriptor({ exclude_parent_body: false }));
     expect(included.read('distances', mjModel, mjData)![0]).toBeCloseTo(0.1, 6);
     const excluded = new RaycastSensor(mujoco, descriptor());
@@ -90,8 +88,7 @@ describe('RaycastSensor', () => {
     );
     expect(offEdge.read('distances', mjModel, mjData)![0]).toBe(-1);
 
-    // A real hit at 1.0, but the sensor only looks 0.5 m — mjlab folds that into
-    // the same -1 so the term's `miss_value` covers both.
+    // A real hit at 1.0 beyond a 0.5 m reach: mjlab folds it into the same -1.
     const shortRange = new RaycastSensor(mujoco, descriptor({ max_distance: 0.5 }));
     expect(Array.from(shortRange.read('distances', mjModel, mjData)!)).toEqual([
       -1, 0.5, -1,
@@ -122,9 +119,8 @@ describe('RaycastSensor', () => {
   });
 
   it('rotates the pattern with the frame under `base`, but only by yaw under `yaw`', () => {
-    // Pitch the body 90 degrees about +y: its local +x now points straight down.
-    // Under `base` the whole pattern tips with it; under `yaw` the grid stays
-    // level, which is the entire reason a height map uses yaw alignment.
+    // Pitch the body 90° about +y so its local +x points down: `base` tips the pattern
+    // with it, `yaw` keeps the grid level — the reason a height map uses yaw.
     const q = Math.SQRT1_2;
     mjData.qpos[3] = q;
     mjData.qpos[4] = 0;
@@ -137,8 +133,7 @@ describe('RaycastSensor', () => {
       expect(Array.from(yawed.read('distances', mjModel, mjData)!)).toEqual([1, 0.5, 1]);
 
       const based = new RaycastSensor(mujoco, descriptor({ ray_alignment: 'base' }));
-      // Tipped: the offsets now run downward and the directions point along -x,
-      // so nothing resembles the level answer.
+      // Tipped: offsets run downward and directions along -x, unlike the level answer.
       expect(Array.from(based.read('distances', mjModel, mjData)!)).not.toEqual([
         1, 0.5, 1,
       ]);

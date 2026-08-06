@@ -83,9 +83,8 @@ export interface Catalog {
   /** All projects in the build; the app chooses the active one. First is default. */
   projects: ProjectCatalog[];
   /**
-   * Build-relative path to the author custom-MDP plugin ESM, when present. The
-   * app (trusted contexts only) dynamically imports it and passes the exports
-   * as {@link EnginePlugins}; mjswan Cloud ignores it (ADR 0004 §10).
+   * Path to the author custom-MDP plugin ESM, if any. A trusted app imports it and passes
+   * the exports as {@link EnginePlugins}; mjswan Cloud ignores it.
    */
   pluginsPath?: string;
 }
@@ -111,9 +110,8 @@ function projectAsset(project: ConfigProject, rel: string): string {
 }
 
 /**
- * Join an asset path referenced *inside* another file, relative to that file's
- * directory: policy.json's onnx/motion/graph paths, and a scene's event graphs
- * (which sit beside the model).
+ * Join a path referenced *inside* another file, relative to that file's directory:
+ * policy.json's onnx/motion/graph paths, and a scene's event graphs.
  */
 function siblingOf(filePath: string, assetPath: string): string {
   const lastSlash = filePath.lastIndexOf('/');
@@ -235,8 +233,7 @@ function toSceneEntry(project: ConfigProject, scene: ConfigScene, source: ByteSo
       const splatName = opts?.splat;
       const splat =
         splatName == null ? undefined : scene.splats?.find((s) => s.name === splatName);
-      // Event graphs are written beside the model, so they resolve relative to it
-      // rather than to a policy.json.
+      // Event graphs sit beside the model, so they resolve relative to it, not policy.json.
       const modelPath = scenePath(project, scene);
       return {
         model: source(modelPath),

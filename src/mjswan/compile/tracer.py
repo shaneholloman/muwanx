@@ -1,30 +1,17 @@
-"""Trace real mjlab MDP term bodies to ONNX (ADR 0005, Phase 1).
+"""Trace real mjlab MDP term bodies to ONNX, for value-returning terms.
 
-The ONNX rewrite (ADR 0005) exports each Observation/Termination/Event/Command
-*term body* to an ONNX graph at build time and runs it with ONNX Runtime Web in
-the browser, instead of reimplementing the math as a native DSL primitive
-(ADR 0003). This module implements the build-time tracing for **value-returning
-terms** (observations and non-native terminations) — the core mechanism the rest
-of the rewrite builds on.
+An mjlab term is ``func(env, **params)`` reading a few fields off ``env``. To get it
+through ``torch.onnx.export``:
 
-The key idea: an mjlab term is written as ``func(env, **params)`` and reads a few
-fields off ``env`` (e.g. ``env.scene["robot"].data.joint_pos``). To trace it with
-``torch.onnx.export`` we:
+1. **Discover** which fields it reads, by running it once against a recording proxy
+   wrapping the real env.
+2. **Classify** each as time-varying state (a graph input) or a model-derived
+   constant (baked in) — see ``_STATIC_DATA_FIELDS``.
+3. **Wrap** it in an ``nn.Module`` whose ``forward`` takes the dynamic tensors and
+   serves the constants from buffers, then export that.
 
-1. **Discover** which ``env.scene[name].data.<field>`` tensors the function reads,
-   by running it once against a recording proxy that wraps the *real* env.
-2. **Classify** each accessed field as either time-varying simulation state (an
-   ONNX graph input) or a model-derived constant (baked into the graph at trace
-   time). The split is a small allowlist of the *constants* — everything else is
-   dynamic, so an unrecognized field errs toward a graph input rather than being
-   silently frozen. This is the only mjlab knowledge this layer carries.
-3. **Wrap** the function in an ``nn.Module`` whose ``forward`` takes only the
-   dynamic tensors, serves the constants from registered buffers, and calls the
-   real ``func``. ``torch.onnx.export`` then records the actual torch ops.
-
-Statically-resolved indices (``asset_cfg.joint_ids`` etc.) are ordinary Python
-values closed over by the function, so they bake into the graph as constants for
-free — exactly as ADR 0005 §Consequences requires.
+Statically-resolved indices (``asset_cfg.joint_ids``) are plain Python values closed
+over by the function, so they bake in for free.
 """
 
 from __future__ import annotations
@@ -39,22 +26,9 @@ from torch import nn
 
 from .rng import DrawRecorder, ReplayRng
 
-# ---------------------------------------------------------------------------
-# Field classification — the only mjlab knowledge this layer carries.
-#
-# A field read off ``Entity.data`` is either **baked as a constant** at trace time
-# or threaded as a **graph input**. Only the model-derived constants are listed;
-# everything else is treated as time-varying.
-#
-# The allowlist is deliberately this way round. Baking a field that actually varies
-# is *silent* corruption — the graph returns trace-time values forever, and nothing
-# downstream can tell. Threading a field that is actually constant costs an extra
-# graph input the runtime must supply, which fails loudly and immediately. So an
-# unrecognized field defaults to dynamic. (This list started as its inverse, which
-# silently froze the end-effector position in Lift-Cube-Yam's `ee_to_cube`; the
-# parity harness caught it at max|Δ|≈4e-2.)
-# ---------------------------------------------------------------------------
-
+# Only the *constants* are listed, so an unrecognized field defaults to dynamic:
+# baking a field that varies is silent corruption, while threading one that doesn't
+# costs an extra graph input and fails loudly.
 _STATIC_DATA_FIELDS: frozenset[str] = frozenset(
     {
         # Model default pose/velocity, and the limits derived from the MJCF.
@@ -85,18 +59,10 @@ def _is_dynamic_field(field_name: str) -> bool:
 SlotKey = tuple[str, str]
 
 _SENSOR_NS = "__sensor__"
-"""Namespace marking a :class:`SlotKey` as a sensor read rather than entity data.
-
-mjlab's scene indexes sensors and entities in one ``scene[name]`` namespace, so the
-slot key needs its own marker to stay unambiguous. Not a legal mjlab entity name in
-practice (mjlab names come from MJCF bodies/sites)."""
+"""Marks a sensor read; mjlab indexes sensors and entities in one ``scene[name]``."""
 
 _COMMAND_NS = "__command__"
-"""Namespace marking a :class:`SlotKey` as a read of another command term's state.
-
-An observation may depend on a command's current value (mjlab's
-``object_to_goal_distance`` reads ``command_manager.get_term(name).target_pos``).
-The name part is ``"{command_name}.{attr}"``."""
+"""Marks a read of another command term's state; name part is ``"{cmd}.{attr}"``."""
 
 
 def _class_proxy(real: Any, overrides: dict[str, Any]) -> Any:
@@ -203,9 +169,8 @@ class _RecordingScene:
             # A builtin sensor is one `sensordata` window — one slot.
             self._log.append(((_SENSOR_NS, name), value))
             return value
-        # A structured sensor (mjlab's `RayCastSensor`: distances, hit_pos_w, …)
-        # has no single tensor to be. Log the *fields* the term actually touches,
-        # so each becomes its own slot instead of the term looking untraceable.
+        # A structured sensor has no single tensor to be, so log the fields the term
+        # touches and let each become its own slot.
         return _RecordingSensorData(value, name, self._log)
 
 
@@ -667,10 +632,8 @@ def trace_term(
     ).eval()
     output_name = "value"
     buffer = io.BytesIO()
-    # The legacy TorchScript tracer records the concrete tensor ops the term runs
-    # against the replay proxy, which is exactly the graph we want. The newer
-    # torch.export path traces Python control flow and does not cope with the
-    # proxy indirection; ``dynamo=False`` is deliberate here.
+    # ``dynamo=False``: the TorchScript tracer records the concrete tensor ops we
+    # want, while torch.export traces Python control flow and trips on the proxies.
     with torch.no_grad():
         torch.onnx.export(
             module,
@@ -715,16 +678,14 @@ def read_slot(env: Any, key: SlotKey) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 # Event terms — side-effecting bodies whose *written* values are traced.
 #
-# An event term returns None and writes state via ``entity.write_*_to_sim``. We
-# capture the tensors it would write (they are functions of the constants and the
-# ``rand`` input) and make them the ONNX graph outputs. Randomness is threaded in
-# via an explicit ``rand`` input (ADR 0005 §2), replayed by :class:`ReplayRng`.
+# An event term returns None and writes via ``entity.write_*_to_sim``, so the tensors
+# it would write become the graph outputs. Randomness is threaded in as an explicit
+# ``rand`` input, replayed by :class:`ReplayRng`.
 # ---------------------------------------------------------------------------
 
 
-# Write kinds an event term may emit, and the ordered field names each produces.
-# The "kind" is the mjData write call; "fields" name the tensors it writes, in
-# argument order. This is the `entity_write` vocabulary (companion brief §3/§3b).
+# The `entity_write` vocabulary: the mjData write call, and the tensors it writes in
+# argument order.
 _WRITE_FIELDS: dict[str, tuple[str, ...]] = {
     "joint_state": ("position", "velocity"),
     "root_pose": ("pose",),
@@ -813,10 +774,8 @@ class _EvRecScene:
 
     def __getitem__(self, name: str) -> _EvRecEntity:
         if _is_sensor(self._real, name):
-            # The observation tracer threads sensor reads as slots (`_SENSOR_NS`);
-            # the event/command tagged-key path has no equivalent yet, and letting
-            # it through would surface as mjlab's own bare `assert isinstance(...)`
-            # deep inside the term. Fail here instead, naming the cause.
+            # Unsupported here, and letting it through surfaces as a bare assert
+            # deep inside the term. Fail naming the cause instead.
             raise ValueError(
                 f"Event/command term read sensor {name!r}; sensor slots are only "
                 "supported for observation/termination terms so far. Extend the "
@@ -1083,16 +1042,15 @@ def _static_ids(ids: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Command terms — stateful, class-based (ADR 0005 §3, companion brief §3).
+# Command terms — stateful, class-based.
 #
-# A command is a live CommandTerm instance with hidden state (self.<field>). We
-# trace `_resample_command` (gated by resample_mask) + `_update_command` (always)
-# as a pure function, promoting the hidden state to explicit graph I/O:
+# A command is a live CommandTerm with hidden state, so `_resample_command` (gated by
+# resample_mask) + `_update_command` are traced as one pure function with the state
+# promoted to explicit graph I/O:
 #
 #     forward(prev_state..., resample_mask, rand) -> (next_state..., entity_write?)
 #
-# The native orchestrator holds `state` across frames and owns the resample timer
-# (ADR 0005 §5). Reset unifies to resample_mask=True.
+# The native orchestrator holds `state` across frames and owns the resample timer.
 # ---------------------------------------------------------------------------
 
 _ENTITY_WRITE_METHODS = {
@@ -1371,11 +1329,8 @@ def trace_command_term(
         )
     _restore_state(term, snap)
 
-    # `init` is ADR 0005 §3's "names, shapes, *and initial values*". The state was
-    # restored from `snap` above, so these are the values `cfg.build(env)` left —
-    # the term's state before any resample. Without them the runtime zero-fills,
-    # which is right only for a term whose first resample overwrites every field;
-    # a counter or a held previous value would start wrong, silently.
+    # Initial values, as `cfg.build(env)` left them. Without them the runtime
+    # zero-fills, which starts a counter or a held previous value wrong.
     state_specs = [
         {
             "name": f,
@@ -1639,13 +1594,9 @@ def trace_observation_group(
             elif term.params.get("action_name") is not None:
                 action_name = term.params["action_name"]
                 entry["action_name"] = action_name
-                # The runtime is fed the whole action vector, so it needs the offset to
-                # hand the graph this term's slice rather than the vector's head.
-                #
-                # Resolved *before* the discovery call below, so an unknown term name
-                # reports which terms the scene does define. Called first, mjlab's own
-                # `get_term` raises a bare `KeyError` from inside the term body and the
-                # build never reaches this.
+                # The runtime is fed the whole action vector and needs the offset to
+                # slice it. Resolved before the discovery call below, so an unknown
+                # name reports the scene's terms instead of a bare KeyError.
                 entry["action_offset"] = action_term_offset(env, action_name)
             value = _native_example(term, env)
             entry["size"] = int(value.reshape(1, -1).shape[-1])
@@ -1674,9 +1625,8 @@ def trace_observation_group(
         sensors.update(recorder._sensors)  # noqa: SLF001 — internal proxy
         commands.update(recorder._commands)  # noqa: SLF001 — internal proxy
         if not term_dynamic:
-            # Same discriminator as `trace_term`: nothing read at all means a
-            # genuine constant; reads the tracer could not follow mean a
-            # time-varying term that must not be frozen into the group's vector.
+            # As in `trace_term`: nothing read means a constant, while reads the
+            # tracer could not follow mean state that must not be frozen.
             if recorder._log:  # noqa: SLF001 — internal proxy
                 raise UntraceableTerm(
                     term.name,
@@ -1843,9 +1793,8 @@ def trace_termination_group(
         sensors.update(recorder._sensors)  # noqa: SLF001 — internal proxy
         commands.update(recorder._commands)  # noqa: SLF001 — internal proxy
         if not term_dynamic:
-            # Unlike an observation there is no constant to bake: a termination
-            # that cannot see time-varying state either never fires or always
-            # does, and either way the build should say so rather than emit it.
+            # Nothing to bake: a termination blind to state never fires or always
+            # does, and the build should say so rather than emit it.
             raise UntraceableTerm(
                 term.name,
                 sorted({slot_label(k) for k, _ in recorder._log}),  # noqa: SLF001

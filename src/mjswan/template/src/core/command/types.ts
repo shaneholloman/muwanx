@@ -6,12 +6,8 @@ import type { OnnxSessionCache, SlotReader } from '../onnx/session';
 export type CommandType = 'slider' | 'button' | 'checkbox';
 
 /**
- * A companion slider that rescales another slider's drag range (brief §3a).
- *
- * mjlab's play GUI pairs each velocity axis with a "Max <label>" slider whose only
- * job is to widen or narrow how far the value slider can be dragged. It is not
- * simulation state: nothing is sent to the engine, no command changes when it
- * moves. Purely how far the *other* control reaches.
+ * A companion slider rescaling another's drag range, as mjlab's play GUI pairs each
+ * velocity axis with a "Max <label>". Not simulation state: it sends nothing to the engine.
  */
 export interface SliderRangeControl {
   min: number;
@@ -31,11 +27,7 @@ export interface SliderCommandConfig {
   step: number;
   default: number;
   enabled_when?: string;
-  /**
-   * When set, the app renders a companion range slider and clamps this one's
-   * displayed range to `[-value, value]`. Symmetric around zero, matching the
-   * three velocity axes mjlab does this for; an asymmetric range is a follow-up.
-   */
+  /** Renders a companion range slider and clamps this one to `[-value, value]`. */
   adjustable_range?: SliderRangeControl;
 }
 
@@ -95,26 +87,17 @@ export interface CommandTermContext {
   bodies?: Record<number, THREE.Group> | null;
   mujocoRoot?: THREE.Group | null;
   requestReset?: () => void;
-  /**
-   * Deps for `OnnxCommand` terms (ADR 0005 §3): the orchestrator-owned seeded
-   * PRNG and the loaded `.onnx` sessions for this policy's commands, keyed by
-   * the same path `config.onnx` names. Absent for scenes with no ONNX commands.
-   */
+  /** The seeded PRNG and loaded graphs `OnnxCommand` terms need; absent if none. */
   rng?: SeededRng;
   onnxSessions?: OnnxSessionCache;
-  /** Reads a command's declared dynamic runtime input slots (brief §3a). */
+  /** Reads a command's declared dynamic runtime input slots. */
   readOnnxSlot?: SlotReader;
 }
 
 export interface CommandTerm {
   getCommand(): Float32Array;
   getUiConfig?(): CommandUiConfig | null;
-  /**
-   * Episode reset. May be async — mjlab's `CommandTerm.reset` *is* the resample
-   * (`_resample(env_ids)`), and for a traced term that means an `ort.run()`.
-   * `CommandManager.resetTerms` awaits it so the resample lands before the step's
-   * single forward, as mjlab's does.
-   */
+  /** Episode reset — the resample for a traced term, hence async and awaited. */
   reset?(): void | Promise<void>;
   update?(dt: number): void;
   updateDebugVisuals?(): void;

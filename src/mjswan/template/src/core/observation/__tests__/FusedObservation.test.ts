@@ -66,8 +66,7 @@ function fakeRunner(): PolicyRunner {
     getContext: () => ({
       commandManager: {
         getCommand: () => new Float32Array([1, 2, 3]),
-        // The group's `command` input binds its name at construction, so the stub
-        // has to answer which names exist, not only what they read.
+        // The `command` input binds at construction, so the stub must answer which names exist.
         termNames: () => ['twist'],
       },
     }),
@@ -102,8 +101,7 @@ describe('FusedObservation', () => {
   });
 
   it('conforms a native input to the width the graph declared', async () => {
-    // A browser-side command whose width drifted from the build would otherwise
-    // make ORT reject the whole group.
+    // A browser-side command whose width drifted would make ORT reject the group.
     const session = new FakeSession(() => new Float32Array(6));
     const runner = {
       getLastActions: () => new Float32Array([1, 2, 3, 4]), // 4, graph wants 2
@@ -131,8 +129,7 @@ describe('FusedObservation', () => {
     available = false;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const held = await term.compute({} as never);
-    // The graph is not run on missing state, and the last good vector stands —
-    // feeding zeros for one slice would be a silently wrong policy input.
+    // Not run on missing state: the last good vector stands rather than a zeroed slice.
     expect(session.calls.length).toBe(1);
     expect(Array.from(held)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(warn).toHaveBeenCalled();
@@ -140,9 +137,8 @@ describe('FusedObservation', () => {
   });
 
   it('feeds a named action term its own slice', async () => {
-    // Same trap as the per-term handler: the group is fed the whole action vector and
-    // has to narrow it, or the graph receives the head of the wrong term at the right
-    // width. `getLastActions` here is 4 wide; `gripper` is the last element.
+    // The group is fed the whole action vector and must narrow it, or the graph gets the
+    // wrong term at the right width. Here `getLastActions` is 4 wide and `gripper` last.
     const session = new FakeSession(() => new Float32Array(6));
     const runner = {
       getLastActions: () => Float32Array.from([1, 2, 3, 9]),
@@ -170,9 +166,8 @@ describe('FusedObservation', () => {
   });
 
   it('refuses to build when a native command input names no command term', () => {
-    // A fused group's output *is* the policy's input vector, so an unbound command
-    // input is a zero block at a known offset — the same class of silent breakage
-    // as a missing graph, which this class already throws for.
+    // A fused group's output *is* the policy's input vector, so an unbound command input
+    // is a zero block at a known offset — as silent as the missing graph this throws for.
     const session = new FakeSession(() => new Float32Array(6));
     const config: FusedObservationConfig = {
       ...CFG,

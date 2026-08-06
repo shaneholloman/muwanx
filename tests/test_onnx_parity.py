@@ -5,12 +5,9 @@ one-time warp CPU-kernel compile, so it is marked ``slow``/``mjlab`` and skipped
 when those deps are absent).
 
 Two scopes. **Cartpole** is asserted in detail — every observation term traced,
-``time_out`` classified native rather than as a graph, both reset Events replayed
-against recorded RNG draws — because it is small enough for each claim to be
-specific. **Every other reference task** goes through :func:`parity_sweep`, which
-is the same harness over a wider term set; ADR §Consequences calls that check
-mandatory, and it had been living in ``scripts/onnx_parity_*.py`` as something a
-human ran by hand, so a regression on Lift or Velocity was nobody's failing test.
+``time_out`` classified native, both reset Events replayed against recorded RNG draws
+— because it is small enough for each claim to be specific. **Every other reference
+task** goes through :func:`parity_sweep`, the same harness over a wider term set.
 
 Run the whole thing with::
 
@@ -83,35 +80,26 @@ def test_reset_events_are_onnx_and_match(cartpole_report):
 
 
 # ---------------------------------------------------------------------------
-# The sweep: the same harness over every reference task, not just Cartpole.
-#
-# ADR §Consequences makes this check mandatory ("a term that fails to trace fails
-# the build"), but it had been a set of hand-run scripts, so the only asserted task
-# was the smallest and least representative one. Cartpole has four scalar
-# observations and no commands; the bugs that actually shipped were in the wide
-# tasks — a frozen `height_scan` on Velocity-Rough, an unresolved `SceneEntityCfg`
-# widening `ee_to_cube` on Lift.
+# The sweep: the same harness over every reference task, not just Cartpole, whose four
+# scalar observations miss the bugs the wide tasks had — a frozen `height_scan` on
+# Velocity-Rough, an unresolved `SceneEntityCfg` widening `ee_to_cube` on Lift.
 # ---------------------------------------------------------------------------
 
 # The reference tasks, with why each one earns its place in the sweep.
 SWEEP_TASKS = [
     pytest.param("Mjlab-Cartpole-Swingup", id="cartpole-swingup"),
-    # Command-state slots (`cube_to_goal` reads another term's goal) and
-    # site-indexed reads, which is where the unresolved-`SceneEntityCfg` bug hid.
+    # Command-state slots and site-indexed reads, where the `SceneEntityCfg` bug hid.
     pytest.param("Mjlab-Lift-Cube-Yam", id="lift-cube-yam"),
     # Builtin-sensor slots, `joint_pos_biased`, a traced termination.
     pytest.param("Mjlab-Velocity-Flat-Unitree-G1", id="velocity-flat-g1"),
     pytest.param("Mjlab-Velocity-Flat-Unitree-Go1", id="velocity-flat-go1"),
-    # `height_scan`: a structured `RayCastSensor`, the term that was silently
-    # baked as 187 constants until the tracer learned to read a sensor per field.
+    # `height_scan`: a structured `RayCastSensor`, once baked as 187 constants.
     pytest.param("Mjlab-Velocity-Rough-Unitree-G1", id="velocity-rough-g1"),
     pytest.param("Mjlab-Velocity-Rough-Unitree-Go1", id="velocity-rough-go1"),
 ]
 
-# Deliberately out of the sweep: the Tracking tasks need their motion clip from a
-# W&B artifact, so they cannot be constructed offline (`examples/mjlab/g1_spinkick`
-# and `unitree_rl` carry them), and the Lift camera variants (`-Depth`, `-Rgb`,
-# `Multi-Cube-Seg`) observe rendered images, which mjswan does not serve.
+# Out of the sweep: the Tracking tasks need a W&B motion clip and cannot be built offline,
+# and the Lift camera variants observe rendered images, which mjswan does not serve.
 
 
 @pytest.fixture(scope="module")
@@ -123,9 +111,8 @@ def sweep_report(request):
 
     cfg = load_env_cfg(request.param, play=True)
     cfg.scene.num_envs = 1
-    # The Rough tasks' terrain generates far more contacts than the default
-    # arena allows, and mjlab sizes `nconmax` for a training-scale batch rather
-    # than one env; without this they raise `nconmax overflow` at construction.
+    # The Rough terrain makes far more contacts than mjlab's one-env `nconmax` allows,
+    # so without this they raise `nconmax overflow` at construction.
     cfg.sim.nconmax = 200_000
     env = ManagerBasedRlEnv(cfg, device="cpu")
     try:
@@ -162,12 +149,10 @@ def test_no_term_is_silently_unchecked(sweep_report):
 
 
 # ---------------------------------------------------------------------------
-# The Builder path serializes from the *task config*, while the parity harness
-# above reads the env's own prepared managers. Those are two different sources
-# for the same terms, and they diverged once already: an unresolved
-# `SceneEntityCfg` made the Builder trace all of an entity's sites instead of
-# the one the task names, silently widening `ee_to_cube` from 3 to 6. These
-# tests pin the two paths together on the width mjlab itself computes.
+# The Builder serializes from the task config while the harness above reads the env's
+# prepared managers — two sources for the same terms, which diverged once when an
+# unresolved `SceneEntityCfg` widened `ee_to_cube` from 3 to 6. Pinned here to the width
+# mjlab itself computes.
 # ---------------------------------------------------------------------------
 
 _SIZE_TASKS = [
@@ -205,9 +190,7 @@ def test_serialized_observation_widths_match_mjlab(task_id, tmp_path):
     assert groups is not None
     entries = serialize_observation_group(groups["policy"], env, tmp_path, "policy")
 
-    # These groups all fuse (ADR 0005 §4), so the per-term widths live in the
-    # group's `layout` — the runtime still needs them to name each slice of the one
-    # vector the graph emits.
+    # These groups all fuse, so the per-term widths live in the group's `layout`.
     assert isinstance(entries, dict), "expected a fused group"
     actual = {term["name"]: term["size"] for term in entries["layout"]}
     assert actual == expected

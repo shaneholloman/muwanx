@@ -230,10 +230,7 @@ class SceneConfig:
     only state; never part of the scene's serialized JSON output."""
 
     def __post_init__(self) -> None:
-        # Fixed at construction, not derived on access: `Builder._save_web` drops
-        # `spec`/`model` right after writing the asset (to keep peak memory down),
-        # so a spec scene read later would otherwise claim the `.mjb` name while
-        # `scene.mjz` sits on disk — and `config.json` is written after that.
+        # Fixed at construction: `_save_web` drops `spec`/`model` right after writing the asset.
         self.scene_filename = "scene.mjz" if self.spec is not None else "scene.mjb"
         """Filename of the scene asset, from whichever of spec/model was provided."""
 

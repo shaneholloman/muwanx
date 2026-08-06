@@ -19,8 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-# `mjswan.compile` imports torch at load time (it is the build-time tracer). This
-# walk is pure Python but still needs the package to import.
+# Pure-Python walk, but `mjswan.compile` imports torch at load time.
 torch = pytest.importorskip("torch")
 
 from mjswan.compile.tracer import action_term_offset  # noqa: E402

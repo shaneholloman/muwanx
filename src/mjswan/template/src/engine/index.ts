@@ -17,6 +17,5 @@ import * as THREE from 'three';
 export * from './types';
 export { createEngine } from './createEngine';
 export { createEngine as default } from './createEngine';
-// For a caller assembling PolicyInput/SceneInput by hand: which traced term
-// graphs a config refers to, so `graphs` can be populated (ADR 0005 §4).
+// Which traced graphs a config refers to, for a caller assembling inputs by hand.
 export { eventGraphRefs, policyGraphRefs } from '../core/onnx/graphRefs';

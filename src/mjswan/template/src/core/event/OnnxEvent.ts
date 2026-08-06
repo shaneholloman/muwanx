@@ -1,30 +1,14 @@
 /**
- * `OnnxEvent`: the generic ONNX-backed event handler (ADR 0005 §3/§4, brief §3).
+ * The generic ONNX-backed event handler, symmetric to `OnnxCommand`: every traced event
+ * term is a data instantiation of this class. Unlike a command, an event body is a pure
+ * function of its constants, `input_slots` and `rand` — no state across frames.
  *
- * Every traced event term — `push_robot`, `reset_slider`, `reset_base`, … — is a
- * data instantiation of this one class, symmetric to `OnnxCommand`. Unlike a
- * Command, the events traced so far carry **no persistent state across frames**
- * (a reset/interval event body is a pure function of constants baked into the
- * graph, whatever `input_slots` it reads live, and `rand`); should a future
- * event need state, that is an extension of this class, not a new one.
+ * The graph owns the math; this draws `rand` from the seeded PRNG and applies the
+ * `entity_write` output. *When* it fires is the caller's business (`EventManager`).
  *
- * What this class owns (the native half; the graph owns the math):
- *
- * - **`rand`** — drawn from the orchestrator-owned seeded PRNG (ADR §2).
- * - **`entity_write`** — hands the graph's computed pose/velocity/joint-state to
- *   the apply primitive (`applyEntityWrites`).
- *
- * *Timing* (when this fires) is owned by the caller — `EventManager` drives one
- * of `IntervalTrigger` / `StartupTrigger` / `ResetTrigger` and calls `fire()`
- * only on the frames/resets a trigger allows. Fusion (brief §4) reduces how many
- * graphs exist, never how often a firing term is called.
- *
- * **Async boundary.** `fire()` is async (ORT-Web inference). Interval/startup
- * dispatch is fire-and-forget with an in-flight guard (mirrors `OnnxCommand`) so
- * a slow graph can never queue a backlog of the same disturbance. Reset-mode
- * firings are different: the caller (`EventManager.onReset`) awaits them,
- * because the reset must be visibly complete before the next frame renders
- * (ADR 0005 §8's synchronous reset-then-forward step-loop ordering).
+ * **Async boundary.** Interval/startup dispatch is fire-and-forget with an in-flight
+ * guard, so a slow graph cannot queue a backlog of the same disturbance. Reset firings
+ * are awaited, since the reset must be complete before the next frame renders.
  */
 
 import { SeededRng } from '../rng';
@@ -84,7 +68,7 @@ export class OnnxEvent {
     return this.inFlight;
   }
 
-  /** Run the graph once and apply any `entity_write` output. Never throws into the caller's tick loop for a missing model/data — it is the context's job to supply them. */
+  /** Run the graph once and apply any `entity_write` output. */
   async fire(context: EventContext): Promise<void> {
     if (this.inFlight) return;
     this.inFlight = true;

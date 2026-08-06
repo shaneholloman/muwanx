@@ -1,26 +1,13 @@
 /**
- * Startup domain randomization that perturbs the *model* (ADR 0005 §5).
+ * Startup domain randomization that perturbs `mjModel` rather than `mjData`, so there
+ * is no `entity_write` for the tracer to capture and no graph needed — draw, combine
+ * with the base, write back, once at startup from the seeded PRNG.
  *
- * mjlab's `geom_friction` / `body_com_offset` / … write `mjModel` fields, not
- * `mjData`, so the `entity_write` tracer has nothing to capture and these events
- * had been falling through as native markers. They need no graph: the whole event
- * is "draw a number per element per axis, combine it with the base, write it
- * back", which this does once at startup from the orchestrator's seeded PRNG — so
- * a session still replays bit-for-bit (§2).
- *
- * Reproduced from mjlab's `_randomize_model_field`:
- *
- * - `operation` decides how the draw meets the existing value: `abs` replaces it,
- *   `add` adds, `scale` multiplies. `add`/`scale` are relative to the *compiled
- *   default* rather than the live value (mjlab's `Operation.uses_defaults`), so two
- *   events aiming at one axis do not accumulate — each starts from the same base.
- *   `ModelFieldDefaults` snapshots that base on first touch, which is the compiled
- *   value because these events run before anything else writes the model.
- * - Only the targeted axes are written, so two events aiming at different axes of
- *   one field compose instead of clobbering (Lift randomizes friction axes 0, 1
- *   and 2 as three separate events).
- * - A field whose change invalidates derived constants (`body_ipos` and friends)
- *   needs `mj_setConst`; the build flags that with `set_const`.
+ * Reproducing mjlab's `_randomize_model_field`: `add`/`scale` combine against the
+ * *compiled default* (`ModelFieldDefaults`) rather than the live value, so events on
+ * one axis do not accumulate; only targeted axes are written, so events on different
+ * axes of one field compose; and a field that invalidates derived constants needs
+ * `mj_setConst`, which the build flags with `set_const`.
  */
 
 import type { SeededRng } from '../rng';
@@ -52,12 +39,8 @@ export interface ModelFieldDrConfig {
 }
 
 /**
- * The model's compiled field values, snapshotted on first touch.
- *
- * `add`/`scale` events read their base from here rather than from the live field,
- * so a second event on the same axis offsets the compiled value instead of the
- * first event's output — which is what mjlab does, and the only way three
- * `body_ipos` events end up somewhere reproducible.
+ * The compiled field values, snapshotted on first touch, so a second `add`/`scale` event
+ * on one axis offsets the compiled value rather than the first event's output.
  */
 export class ModelFieldDefaults {
   private readonly snapshots = new Map<string, Float64Array>();
@@ -110,8 +93,7 @@ function nameTable(mjModel: MjModel, entityType: ModelFieldDrConfig['entity_type
 /** One draw, by mjlab's distribution semantics. */
 function draw(rng: SeededRng, distribution: DrDistribution, lo: number, hi: number): number {
   if (distribution === 'log_uniform') {
-    // mjlab's `sample_log_uniform`: uniform in log space, so a range like
-    // [0.01, 1] spends equal probability per decade rather than per unit.
+    // mjlab's `sample_log_uniform`: equal probability per decade, not per unit.
     return Math.exp(rng.uniform(Math.log(lo), Math.log(hi)));
   }
   if (distribution === 'gaussian') {
@@ -135,10 +117,7 @@ function combine(operation: DrOperation, base: number, random: number): number {
   return random;
 }
 
-/**
- * Apply one model-field randomization. Returns whether anything was written, so
- * the caller knows if `mj_setConst` is owed.
- */
+/** Apply one randomization, returning whether the caller now owes `mj_setConst`. */
 export function applyModelFieldDr(
   mujoco: MainModule,
   mjModel: MjModel,
@@ -170,8 +149,7 @@ export function applyModelFieldDr(
     );
     return false;
   }
-  // Stride from the field's own length: `geom_friction` is 3 per geom, `body_mass`
-  // is 1. Derived rather than shipped, so a field this file has not seen still works.
+  // Derived from the field's own length, so an unseen field still works.
   const count = { geom: mjModel.ngeom, body: mjModel.nbody, site: mjModel.nsite }[
     config.entity_type
   ];
@@ -188,8 +166,7 @@ export function applyModelFieldDr(
       continue;
     }
     const [lo, hi] = config.axis_ranges[String(axis)];
-    // One draw for the whole set when `shared_random` — mjlab's foot friction does
-    // this so both feet share a coefficient rather than differing.
+    // `shared_random`: one draw for the set, as mjlab's foot friction does.
     const shared = config.shared_random ? draw(rng, config.distribution, lo, hi) : 0;
     for (const index of indices) {
       const at = index * stride + axis;
@@ -199,8 +176,7 @@ export function applyModelFieldDr(
   }
 
   if (config.set_const) {
-    // Inertial fields feed precomputed constants; without this the sim would keep
-    // using the old ones and the perturbation would be half-applied.
+    // Inertial fields feed precomputed constants, so without this it is half-applied.
     mujoco.mj_setConst(mjModel, mjData);
   }
   return true;

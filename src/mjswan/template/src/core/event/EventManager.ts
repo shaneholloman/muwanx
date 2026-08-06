@@ -19,22 +19,19 @@ export interface EventManagerDeps {
   readSlot?: SlotReader;
 }
 
-/** A plugin-supplied event class (ADR 0004 §10) — reset-only, no traced graph. */
+/** A plugin-supplied event class — reset-only, no traced graph. */
 type PluginTerm = { kind: 'plugin'; term: EventBase; trigger: ResetTrigger };
 type OnnxResetTerm = { kind: 'onnx'; term: OnnxEvent; trigger: ResetTrigger };
 type ResetEntry = PluginTerm | OnnxResetTerm;
 
 /**
- * Native Event dispatch (ADR 0005 §5, companion brief §4).
+ * Mode-aware event dispatch: `mode="reset"` terms fire on episode reset behind a
+ * `ResetTrigger`, `mode="interval"` on the frames their `IntervalTrigger` allows,
+ * `mode="startup"` once.
  *
- * Previously reset-only (`onReset()`); now mode-aware. `mode="reset"` terms
- * (a traced `OnnxEvent`, or a plugin-registered class) fire on episode reset,
- * gated by a `ResetTrigger`; `mode="interval"` terms fire on the frames their
- * `IntervalTrigger` allows; `mode="startup"` terms fire once. Events are one graph
- * per term and stay that way: per-mode fusion was measured and declined (brief §4b)
- * — no reference task has a traced `startup` or `interval` term at all, `reset` has
- * at most two, and it would have to reproduce the write semantics `onReset` gets for
- * free by looping in config order (last writer wins per element, as mjlab does).
+ * One graph per term, unfused — the reference tasks have at most two reset terms and
+ * none of the other modes, and fusing would have to reproduce the config-order write
+ * semantics `onReset` gets for free.
  */
 export class EventManager {
   private resetTerms: ResetEntry[] = [];
@@ -50,8 +47,7 @@ export class EventManager {
   ) {
     for (const config of configs) {
       if (isModelFieldDrConfig(config)) {
-        // Perturbs `mjModel` rather than running a graph, so it needs no session —
-        // just the seeded PRNG, which `startup()` supplies.
+        // Perturbs `mjModel` rather than running a graph, so it needs no session.
         this.modelFieldTerms.push({ config, trigger: new StartupTrigger() });
         continue;
       }
@@ -98,8 +94,7 @@ export class EventManager {
         continue;
       }
       if (config.native) {
-        // The build could not trace this term and said so (`reason`), leaving it
-        // for the engine to handle natively or not at all. Not a missing plugin.
+        // The build declined to trace this term and said why; not a missing plugin.
         continue;
       }
       const EventClass = registry[config.name];
@@ -112,10 +107,8 @@ export class EventManager {
   }
 
   /**
-   * Fire every `mode="startup"` term once. Call after the scene/policy loads.
-   *
-   * In config order, for the same reason `onReset` is (mjlab loops its terms), and
-   * after the model-field randomizations so `add`/`scale` see the compiled default.
+   * Fire every `mode="startup"` term once, in config order and after the model-field
+   * randomizations, so `add`/`scale` see the compiled default.
    */
   async startup(context: EventContext): Promise<void> {
     this.applyModelFieldTerms(context);
@@ -124,13 +117,7 @@ export class EventManager {
     }
   }
 
-  /**
-   * Apply the model-field randomizations, once.
-   *
-   * Synchronous and before the graph-backed startup terms: `add`/`scale` are
-   * relative to the compiled default, which is only still in the model until
-   * something writes it.
-   */
+  /** Once, before the startup terms: `add`/`scale` are relative to the compiled default. */
   private applyModelFieldTerms(context: EventContext): void {
     if (this.modelFieldTerms.length === 0) return;
     const { mujoco, mjModel, mjData } = context;
@@ -142,8 +129,7 @@ export class EventManager {
       console.warn('[EventManager] model-field randomization needs the seeded rng; skipping.');
       return;
     }
-    // One `defaults` for the whole pass, so several events on one field all read the
-    // same compiled base rather than each other's output.
+    // One `defaults` per pass, so events on one field share a base.
     const defaults = new ModelFieldDefaults(mjModel);
     for (const { config, trigger } of this.modelFieldTerms) {
       if (!trigger.take()) continue;
@@ -152,26 +138,10 @@ export class EventManager {
   }
 
   /**
-   * Advance one control step: fires `mode="interval"` terms whose timer has elapsed,
-   * **in config order**, and advances every reset-gate step counter.
-   *
-   * Sequential and awaited for the same reason `onReset` is, and it was the last of
-   * the three modes to get there. mjlab's `EventManager.apply` runs one loop over the
-   * mode's terms — decrement this term's `time_left`, call this term's `func`, move on
-   * — so two interval terms writing the same element resolve last-writer-wins by
-   * config order. Firing them un-awaited made that *completion* order instead: whose
-   * ORT run finished last, which is a property of the machine.
-   *
-   * The earlier note here said `tick` had to stay fire-and-forget because "the step
-   * loop is synchronous, so there is nothing to await into". That stopped being true —
-   * the loop already awaits observation collection, inference, and the reset chain, and
-   * this is its last call — so the reason was stale rather than structural. Still no
-   * reference play config has a traced interval term, so this closes a hole rather than
-   * fixing observed breakage.
-   *
-   * The reset-gate counters advance first, before anything can reject: they are plain
-   * bookkeeping for `min_step_count_between_reset` with no ordering relationship to the
-   * interval terms, and a failing graph must not stall them.
+   * Advance one control step: fire the `mode="interval"` terms whose timer elapsed, **in
+   * config order**, and advance every reset-gate counter. Sequential and awaited, as
+   * `onReset` is, so overlaps resolve by config order rather than by ORT completion. The
+   * gate counters go first, since a failing graph must not stall them.
    */
   async tick(dt: number, context: EventContext): Promise<void> {
     for (const { trigger } of this.resetTerms) trigger.step();
@@ -181,21 +151,10 @@ export class EventManager {
   }
 
   /**
-   * Fire every `mode="reset"` term whose gate allows it, **in config order**.
-   *
-   * Sequential rather than `Promise.all`, to match mjlab: its
-   * `EventManager.apply` loops the mode's terms in order, and every write is an
-   * assignment (`data.qpos[env_ids, q_slice] = position`), so two terms touching
-   * the same element resolve last-writer-wins by config order. Firing them
-   * concurrently made that resolution order instead — harmless while writes are
-   * disjoint, which they are on every reference task, and nondeterministic the
-   * moment they overlap.
-   *
-   * The term bodies read `default_*` rather than live state (mjlab's
-   * `reset_joints_by_offset` starts from `default_joint_pos`), so sequencing does
-   * not make them compound; it only decides which value survives on an overlap.
-   *
-   * Costs one reset's worth of serialized inference, which is a rare frame.
+   * Fire every `mode="reset"` term whose gate allows it, **in config order**. Sequential
+   * rather than `Promise.all`, since every write is an assignment and overlaps must
+   * resolve by config order. Bodies read `default_*`, so this decides which value
+   * survives an overlap rather than compounding them.
    */
   async onReset(context: EventContext): Promise<void> {
     for (const entry of this.resetTerms) {
@@ -211,8 +170,7 @@ export class EventManager {
       this.resetTerms.length +
       this.intervalTerms.length +
       this.startupTerms.length +
-      // Counted too: a model-field randomization is a term the manager applies,
-      // and a task whose only events are DR reported "0 loaded" while randomizing.
+      // Counted: a task whose only events are DR would otherwise report "0 loaded".
       this.modelFieldTerms.length
     );
   }

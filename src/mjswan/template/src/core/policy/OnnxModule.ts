@@ -121,8 +121,7 @@ export class OnnxModule {
       if (name === 'obs' && this.configuredInKeys.includes('policy')) {
         return 'policy';
       }
-      // No configured key matches this model input by name; pass it through as-is.
-      // runInference will forward it using the model's own input name.
+      // No configured key matches: `runInference` forwards it under the model's own name.
       return name;
     });
   }

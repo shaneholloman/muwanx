@@ -1,17 +1,10 @@
 /**
- * Native Event-mode dispatch (ADR 0005 §5, companion brief §4).
+ * The semantics of mjlab's `EventManager.apply()` — interval countdown and resampling,
+ * startup-once, reset gating — as plain scalars: mjlab's `(num_envs,)` tensors buy
+ * nothing at the browser's N=1.
  *
- * Ports the *semantics* of mjlab's `EventManager.apply()` — interval countdown,
- * interval-time resampling, startup-once, and reset gating — as plain scalars.
- * mjlab's `(num_envs,)` tensors, `.nonzero()` and `env_ids` masks exist to make
- * thousands of environments efficient in one GPU kernel launch during training;
- * at N=1 browser playback none of that payoff exists, so `time_left` is a
- * number and `fired` is a boolean.
- *
- * These triggers decide *when* a term runs. They never run it — the caller
- * invokes the term's ONNX graph (or native handler) only on the frames a trigger
- * fires, so a gated term costs no `ort.run()` on quiet frames (brief §4: fusion
- * reduces graph count, never call frequency).
+ * A trigger decides *when* a term runs, never runs it, so a gated term costs no
+ * `ort.run()` on quiet frames.
  */
 
 import type { SeededRng } from '../rng';
@@ -21,10 +14,7 @@ export type EventMode = 'startup' | 'reset' | 'interval';
 export interface IntervalTriggerConfig {
   /** `[min, max]` seconds between firings, resampled after each firing. */
   intervalRangeS: readonly [number, number];
-  /**
-   * mjlab's `is_global_time`. At N=1 the distinction is only whether the timer
-   * survives an episode reset (`true`) or restarts with the episode (`false`).
-   */
+  /** mjlab's `is_global_time`: whether the timer survives an episode reset. */
   isGlobalTime?: boolean;
 }
 
@@ -40,12 +30,8 @@ export class IntervalTrigger {
   }
 
   /**
-   * Advance by `dt` seconds; returns true on the frames the term should run.
-   *
-   * Mirrors mjlab: decrement, fire when the timer reaches zero, then resample
-   * the next interval. Carries the overshoot so a long `dt` cannot drift the
-   * average rate; a `dt` spanning several intervals still fires once (playback
-   * has no use for catch-up bursts of the same disturbance).
+   * Advance by `dt`; true on the frames the term should run. Carries the overshoot so a
+   * long `dt` cannot drift the average rate, but still fires only once.
    */
   tick(dt: number): boolean {
     this.timeLeft -= dt;
@@ -88,9 +74,8 @@ export class StartupTrigger {
 
 export interface ResetTriggerConfig {
   /**
-   * mjlab's `min_step_count_between_reset`: suppress a reset-mode term when
-   * episodes reset in quick succession, so a disturbance term cannot fire every
-   * frame during a divergence loop.
+   * mjlab's `min_step_count_between_reset`: suppress a reset-mode term when episodes reset
+   * in quick succession, so a disturbance cannot fire every frame during a divergence loop.
    */
   minStepCountBetweenReset?: number;
 }

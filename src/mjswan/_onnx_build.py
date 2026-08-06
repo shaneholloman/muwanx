@@ -119,9 +119,7 @@ def _native_observation_entry(
         action_name = params.get("action_name")
         if action_name is not None:
             entry["action_name"] = action_name
-            # Resolved here rather than inside the best-effort `size` probe below: a
-            # swallowed failure would leave the runtime reading the whole action
-            # vector's head instead of this term's slice.
+            # Outside the `size` probe below, whose swallowed failure would lose this slice.
             entry["action_offset"] = action_term_offset(env, action_name)
     elif func_name == "generated_commands":
         entry = {
@@ -137,8 +135,7 @@ def _native_observation_entry(
     except Exception:  # noqa: BLE001 — best-effort; runtime resolves it instead
         width = 0
     if width:
-        # A zero width is the trace env answering "I have no action manager", not a
-        # term of no width; shipping it would fix the runtime's buffer at nothing.
+        # A zero width means "no action manager", not a term of no width.
         entry["size"] = width
     return entry
 
@@ -165,8 +162,7 @@ def _apply_observation_pipeline(
         else term_cfg.history_length
     )
     if term_cfg.history_steps:
-        # Sparse offsets are per-term by construction, so a group count cannot
-        # override them — and shipping both would be two conflicting answers.
+        # Sparse offsets are per-term, so a group count would be a second answer.
         entry["history_offsets"] = [int(step) for step in term_cfg.history_steps]
     elif history:
         entry["history_length"] = history
@@ -216,10 +212,8 @@ def serialize_observation_term(
     try:
         export = trace_term(func, params, env, name=name)
     except ConstantTerm:
-        # Read *nothing* off the env, so the value cannot vary — a fixed-size
-        # padding term. Bake it from a real call; no graph needed. `UntraceableTerm`
-        # deliberately does not land here: it means state was read that the tracer
-        # could not follow, and baking that freezes a live input.
+        # Reads nothing off the env, so bake it from a real call. Not `UntraceableTerm`,
+        # where state *was* read and merely not followed.
         import torch
 
         value = func(env, **params)
@@ -236,9 +230,7 @@ def serialize_observation_term(
     ref = _onnx_ref("obs", name)
     _write_onnx(out_dir, ref, export.onnx_bytes)
 
-    # `size` lets the runtime size its observation buffers before the first
-    # step; it cannot infer this itself, since ORT inference is async while the
-    # group layout is needed synchronously at load.
+    # The runtime cannot infer `size`: inference is async, the group layout is not.
     entry = {
         "name": name,
         "onnx": ref,
@@ -278,8 +270,7 @@ def _group_is_fusable(group: ObservationGroupCfg) -> bool:
     for term_cfg in group.terms.values():
         if isinstance(term_cfg.func, ObservationBinding):
             return False
-        # Sparse offsets disqualify at any length: even a single non-zero offset is a
-        # delayed frame the runtime has to hold, which no fused output can express.
+        # Sparse offsets disqualify at any length: no fused output can hold a delayed frame.
         if term_cfg.history_steps or _effective_history(group, term_cfg) > 1:
             return False
     return True
@@ -319,9 +310,7 @@ def _native_size(
     """Declared width for a native term, or ``None`` if it isn't native."""
     func_name = getattr(term_cfg.func, "__name__", None)
     if func_name == "last_action":
-        # Only the whole vector. A term-scoped `last_action` is one action term's
-        # slice of it, and the config knows the total alone — handing that over
-        # would be the silently-wrong width `action_offset` exists to prevent.
+        # The whole vector: a term-scoped `last_action` needs `action_offset` for its slice.
         if term_cfg.params.get("action_name") is not None:
             return None
         return native_sizes.get("prev_action")
@@ -362,15 +351,13 @@ def _fused_group_entry(
         "fused": ref,
         "input_slots": slots_json(export),
         "native_inputs": export.native_inputs,
-        # Per-term widths in concat order: the runtime needs them for its group
-        # layout (the debug overlay names each slice) even though it runs one graph.
+        # Per-term widths in concat order, for the runtime's group layout.
         "layout": export.layout,
         "size": _tensor_width(export.reference_output),
     }
     sensors = _raycast_descriptors(export, env)
     if sensors:
-        # Only present when a slot names a structured sensor; a builtin sensor is a
-        # `sensordata` window the runtime already knows how to find.
+        # Structured sensors only; a builtin one is a `sensordata` window.
         entry["sensors"] = sensors
     return entry
 
@@ -458,9 +445,7 @@ def serialize_observation_group(
         try:
             return _fused_group_entry(group, env, out_dir, group_name, native_sizes)
         except ConstantGroup:
-            # Whether a group has any time-varying term is only knowable by tracing
-            # it, so this cannot join `_group_is_fusable`'s static checks. A padding
-            # group (a policy input the browser has no live value for) lands here.
+            # Only knowable by tracing, so not a `_group_is_fusable` static check.
             pass
     result = []
     for name, term_cfg in group.terms.items():
@@ -495,11 +480,7 @@ def serialize_termination(
             func, _resolved_params(term_cfg.params, env), env, name=name
         )
     except ValueError:
-        # No time-varying state read (e.g. mjlab's `time_out`, which compares
-        # env-level step counters, not entity data) -- this is the one
-        # legitimately-native termination shape ADR 0005 §2 documents. The
-        # threshold travels with it so the runtime can actually evaluate the
-        # comparison the marker names.
+        # No time-varying state read (mjlab's `time_out` counts steps); the threshold rides along.
         entry: dict[str, Any] = {
             "name": name,
             "native": "elapsed_s >= episode_length_s",
@@ -582,13 +563,8 @@ def serialize_terminations(
         func = term_cfg.func
         if isinstance(func, TerminationBinding):
             if func.unsupported_reason is not None:
-                # Raises rather than dropping, matching how an unexportable observation
-                # is handled (`serialize_observation_term`). A dropped termination is a
-                # reset condition the episode silently never checks, and dropping it
-                # *here* means the runtime never sees the term either, so it cannot warn
-                # the way it does for a term whose graph failed to load. Nobody finds
-                # out. A term genuinely not wanted in the browser belongs out of the
-                # config, not silently discarded from it.
+                # Raises rather than dropping, as an unexportable observation does: a dropped termination
+                # never reaches the runtime, so nothing warns and the episode stops checking it.
                 raise ValueError(
                     f"Termination term {name!r} cannot be exported: "
                     f"{func.unsupported_reason} Dropping it would leave the episode "
@@ -648,8 +624,7 @@ def _fused_termination_entry(
     return {
         "fused": ref,
         "input_slots": slots_json(export),
-        # Lane order is the graph's output order; `time_out` rides along so the
-        # manager can still split truncation from termination per lane.
+        # Lane order is the graph's; `time_out` rides along so the manager can still split it out.
         "lanes": [
             {"name": name, "time_out": bool(terms[name].time_out)}
             for name in export.lanes
@@ -684,9 +659,7 @@ def _dr_entity_names(env: Any, asset_cfg: Any, entity_type: str) -> list[str] | 
     all_ids = getattr(asset.indexing, attr)
     ids = [int(i) for i in all_ids.tolist()]
     if scoped is not None and not isinstance(scoped, slice):
-        # mjlab's `_get_entity_indices` is `indexing.geom_ids[asset_cfg.geom_ids]` —
-        # positions into the entity's own elements, in the cfg's order. Keeping that
-        # order keeps the browser's per-element draws lined up with the names.
+        # mjlab's `_get_entity_indices`: positions into the entity's own elements, in cfg order.
         positions = list(scoped) if hasattr(scoped, "__iter__") else [scoped]
         ids = [ids[int(p)] for p in positions]
     accessor = {
@@ -752,9 +725,7 @@ def model_field_dr_descriptor(
     the string-keyed `ranges` form mjlab resolves by name pattern.
     """
     func = term_cfg.func
-    # Resolved params, not the raw ones: an unresolved `SceneEntityCfg` has
-    # `geom_ids=slice(None)`, so a fingertip-scoped event would silently describe
-    # *every* geom in the scene. Same trap that froze `site_pos_w` earlier.
+    # Resolved params: an unresolved `SceneEntityCfg` widens a scoped event to every geom.
     params = params if params is not None else _resolved_params(term_cfg.params, env)
     field = getattr(func, "_mjswan_dr_field", None) or _DR_FIELD_BY_FUNC.get(
         getattr(func, "__name__", "")
@@ -777,8 +748,7 @@ def model_field_dr_descriptor(
 
     axes = _dr_target_axes(func, params, ranges, default_axes)
     if isinstance(ranges, dict):
-        # `_prepare_axis_ranges` narrows to the target axes, so a range for an axis
-        # nobody targets is dropped rather than written.
+        # `_prepare_axis_ranges` drops a range for an axis nobody targets.
         if any(a not in ranges for a in axes):
             return None
         axis_ranges = {a: [float(ranges[a][0]), float(ranges[a][1])] for a in axes}
@@ -791,26 +761,22 @@ def model_field_dr_descriptor(
         "field": field_name,
         "entity_type": entity_type,
         "entity_names": names,
-        # Axis -> [lo, hi]. Only these axes are written, so two events targeting
-        # different axes of one field compose instead of clobbering.
+        # Axis -> [lo, hi]; only these are written, so events on different axes compose.
         "axis_ranges": axis_ranges,
         "operation": operation,
         "distribution": _dr_name_of(_dr_arg(func, params, "distribution"), "uniform"),
         "shared_random": bool(_dr_arg(func, params, "shared_random")),
-        # `add`/`scale` combine with the *compile-time* default, not the live value,
-        # so repeated events on one axis do not accumulate (mjlab's
-        # `Operation.uses_defaults`). The browser needs to know which base to read.
+        # Which base the browser reads: `add`/`scale` use the compiled default, so they never
+        # accumulate across events on one axis.
         "uses_defaults": operation in _DR_OPS_USING_DEFAULTS,
         "set_const": _dr_needs_recompute(func, field_name),
     }
 
 
-# mjlab's `Operation.uses_defaults`: `abs` overwrites, so it reads the live value;
-# `add`/`scale` are relative to the compiled default.
+# mjlab's `Operation.uses_defaults`: `abs` reads the live value, `add`/`scale` the default.
 _DR_OPS_USING_DEFAULTS = frozenset({"add", "scale"})
 
-# Fallback for a DR func without mjlab's `requires_model_fields` decorator: fields
-# whose change invalidates derived constants.
+# Fallback when a DR func lacks `requires_model_fields`: fields that invalidate constants.
 _SET_CONST_FIELDS = frozenset(
     {"body_ipos", "body_mass", "body_inertia", "dof_armature"}
 )
@@ -832,10 +798,8 @@ def _dr_needs_recompute(func: Any, field_name: str) -> bool:
 
 
 _DR_FIELD_BY_FUNC: dict[str, tuple[str, str, list[int]]] = {
-    # mjlab's DR helpers are thin wrappers over `_randomize_model_field`, and the
-    # entity-type / default-axes they pass are not introspectable from the wrapper
-    # — hence this table. Keyed by function name, so an author's own wrapper can
-    # opt in by setting `_mjswan_dr_field` instead.
+    # mjlab's DR helpers wrap `_randomize_model_field` with an entity type and axes that are
+    # not introspectable, hence this table. An author's own wrapper can set `_mjswan_dr_field`.
     "geom_friction": ("geom_friction", "geom", [0]),
     "body_com_offset": ("body_ipos", "body", [0, 1, 2]),
     "body_ipos": ("body_ipos", "body", [0, 1, 2]),
@@ -864,15 +828,12 @@ def serialize_event(
             mode=term_cfg.mode,
         )
     except ValueError as exc:
-        # A model-field write perturbs `mjModel`, not `mjData`, so the
-        # `entity_write` tracer sees nothing to capture. Most of those are startup
-        # domain randomization and need no graph at all — describe them instead and
-        # let the browser draw from the seeded PRNG once at load.
+        # `entity_write` captures nothing for an `mjModel` write, so describe it instead and
+        # let the browser draw from the seeded PRNG at load.
         descriptor = model_field_dr_descriptor(term_cfg, env, resolved)
         if descriptor is not None:
             return {"name": name, "mode": term_cfg.mode, **descriptor}
-        # Anything else stays a native marker carrying why, so a task author can
-        # see what was skipped rather than wondering.
+        # Anything else stays a native marker carrying why it was skipped.
         return {"name": name, "mode": term_cfg.mode, "native": True, "reason": str(exc)}
 
     ref = _onnx_ref("event", name)

@@ -20,8 +20,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-# `mjswan.compile` imports torch at load time (it is the build-time tracer), so
-# the package import below has to wait for the skip.
+# `mjswan.compile` imports torch, so the package import below waits for the skip.
 torch = pytest.importorskip("torch")
 
 from mjswan.compile import trace_term  # noqa: E402

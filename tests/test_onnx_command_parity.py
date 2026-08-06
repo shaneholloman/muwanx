@@ -3,19 +3,14 @@
 Layer: L3 (needs the ``examples`` extras and a warp CPU-kernel compile, so
 ``slow``/``mjlab``).
 
-`run_command_parity` existed and had been run by hand through
-`scripts/onnx_parity_lift_command.py` and `onnx_probe_velocity_command.py` — the
-same gap the task sweep in `test_onnx_parity.py` closed, still open for commands.
-It matters most here: commands are the **most randomness-heavy** layer in the
-system (`lift_height` draws 7 values per resample, the tracking RSI graph 41),
-and ADR 0005 §2b asks for the RNG spy/replay harness on *every* term with
-internal randomness before a Command parity claim is trusted.
+Commands are the most randomness-heavy layer in the system — `lift_height` draws 7
+values per resample, the tracking RSI graph 41 — so every one runs through the RNG
+spy/replay harness.
 
-The resolution goes through the same path the Builder takes — the registry's
-`CommandBinding` supplies `state_fields`, `command_field` and any
-`trace_override`, and `cfg.build(env)` constructs the term — rather than
-hardcoding those the way the scripts do. So this checks the declaration that
-actually ships, and a registration that drifts from its term fails here.
+The resolution follows the Builder's own path: the registry's `CommandBinding`
+supplies `state_fields`, `command_field` and any `trace_override`, and
+`cfg.build(env)` constructs the term. So a registration that drifts from its term
+fails here rather than shipping.
 
 Run::
 
@@ -39,18 +34,15 @@ pytest.importorskip("mjlab")
 
 pytestmark = [pytest.mark.slow, pytest.mark.mjlab]
 
-# Every reference task with a traced command, and the command's name in its config.
+# Every reference task with a traced command, and that command's name in its config.
 #
-# `Mjlab-Tracking-Flat-Unitree-G1`'s `motion` is deliberately absent: its
-# `MotionCommandCfg` stays a *native* `TrackingCommand` (a clip lookup is a data
-# lookup, not term math) and only its RSI jitter is traced, as a reset graph rather
-# than a command graph — covered by `test_onnx_command_config.py`. The env also
-# cannot be constructed offline; its motion clip is a W&B artifact.
+# Tracking-Flat-G1's `motion` is absent: it stays a native `TrackingCommand` with only its
+# RSI jitter traced, as a reset graph (see `test_onnx_command_config.py`), and its clip is
+# a W&B artifact the env cannot be built offline without.
 COMMAND_TASKS = [
     # Stateful, with an `entity_write` side effect on the cube (§3b).
     pytest.param("Mjlab-Lift-Cube-Yam", "lift_height", id="lift-cube-yam"),
-    # Heading tracking, threaded as a dynamic slot; needs the examples-side
-    # trace-friendly override (§3a).
+    # Heading tracking as a dynamic slot; needs the examples-side override.
     pytest.param("Mjlab-Velocity-Flat-Unitree-G1", "twist", id="velocity-flat-g1"),
     pytest.param("Mjlab-Velocity-Flat-Unitree-Go1", "twist", id="velocity-flat-go1"),
 ]
@@ -88,8 +80,7 @@ def _traced_command(task_id: str, command_name: str) -> tuple[Any, Any]:
         f"{task_id}'s {command_name!r} resolved to a native term "
         f"({adapted.term_name!r}); this file only covers traced commands"
     )
-    # Mirrors `serialize_command`: build from the cfg, then let the registration's
-    # override swap in its trace-friendly bodies before anything is traced.
+    # As `serialize_command` does: build from the cfg, then apply the override.
     term = pending.mjlab_cfg.build(env)
     if pending.trace_override is not None:
         pending.trace_override(term)

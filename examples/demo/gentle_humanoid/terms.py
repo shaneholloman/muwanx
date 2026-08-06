@@ -34,11 +34,8 @@ from mjlab.utils.lab_api.math import (
 # Gravity direction the policy's projected-gravity terms are expressed against.
 _DOWN = (0.0, 0.0, -1.0)
 
-#: Default asset. The joint-space terms are handed one carrying the policy's joint
-#: order (`joint_names` + `preserve_order=True`): the clip and the checkpoint are
-#: both in `action_joint_names` order, which is not the model's, and mjlab's resolve
-#: sorts into the model's order unless asked not to. Resolved to indices before the
-#: trace (`_resolved_params`), so it bakes into the graph as a constant gather.
+#: Default asset. Joint-space terms get `preserve_order=True`, since the clip and the
+#: checkpoint are in `action_joint_names` order while mjlab's resolve sorts into the model's.
 _ROBOT = SceneEntityCfg(name="robot")
 
 
@@ -129,8 +126,7 @@ def target_projected_gravity(env, *, command_name: str = "motion", **_):
 
 
 # ---------------------------------------------------------------------------
-# Proprioception — one frame each; the sparse look-back is the term's
-# `history_steps`, stacked by the runtime.
+# Proprioception — one frame each; `history_steps` is stacked by the runtime.
 # ---------------------------------------------------------------------------
 
 

@@ -1,19 +1,8 @@
 /**
- * `entity_write`: apply an already-computed value to mjData (companion brief §3).
+ * Writes an already-computed `entity_write` value to mjData. Apply-only: the term body
+ * sampled and computed inside its graph, so nothing here draws a random number.
  *
- * Apply-only by design: an ONNX term body samples and computes inside the graph
- * (from the orchestrator's seeded `rand` input, ADR 0005 §2), so all the runtime
- * owes it is taking the output tensor and writing it to a named entity's field.
- * Nothing here draws a random number.
- *
- * The write kinds mirror what the Python tracer captures
- * (`mjswan.compile.tracer._WRITE_FIELDS`):
- *
- * | kind            | fields                | mjData target            |
- * |-----------------|-----------------------|--------------------------|
- * | `joint_state`   | `position`,`velocity` | `qpos`/`qvel` at joint ids |
- * | `root_pose`     | `pose` (7: xyz+wxyz)  | free-joint `qpos[adr..adr+7]` |
- * | `root_velocity` | `velocity` (6: lin+ang) | free-joint `qvel[dofadr..+6]` |
+ * The kinds mirror `mjswan.compile.tracer._WRITE_FIELDS`.
  */
 
 type MjModel = import('mujoco').MjModel;
@@ -54,11 +43,8 @@ export function findFreeJoint(mjModel: MjModel): number {
 }
 
 /**
- * Apply one write target's values to `mjData`.
- *
- * Returns true if anything was written. Silently returns false when the model
- * has no matching target (e.g. a `root_pose` write on a fixed-base entity) so a
- * scene mismatch degrades rather than throwing inside the step loop.
+ * Apply one write target to `mjData`, returning whether anything was written. False for a
+ * model with no such target, so a scene mismatch degrades rather than throwing.
  */
 export function applyEntityWrite(
   mjModel: MjModel,

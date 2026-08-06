@@ -1,12 +1,10 @@
 /**
- * The slot reader (ADR 0005 §6): what a traced graph's declared inputs resolve to
- * against a live `mjModel`/`mjData`.
+ * What a traced graph's declared inputs resolve to against a live `mjModel`/`mjData` —
+ * the browser-side half of the Python parity harness, which proves the graph matches
+ * mjlab but not the numbers fed into it.
  *
- * These assertions are the browser-side half of the Python parity harness. Parity
- * proves the *graph* matches mjlab; nothing else proves the *numbers fed into it*
- * do, and a wrong field here produces a plausible-looking policy that walks into
- * a wall. So each field is checked against mjlab's own definition, computed by
- * hand from a fake model whose addresses are deliberately not the identity.
+ * Each field is checked against mjlab's own definition, computed by hand from a fake
+ * model whose addresses are deliberately not the identity.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -16,12 +14,9 @@ import { slotDims } from '../session';
 type Mutable = Record<string, unknown>;
 
 /**
- * A two-entity scene, mjlab-style: names prefixed, `robot` attached first.
- *
- * `robot` has a free joint (excluded from `joint_pos`, as mjlab keeps it in
- * `free_joint_q_adr`) plus a ball and two hinges — so qpos and qvel addresses
- * differ, and a reader that conflated them would show up here. `cube` follows,
- * shifting every `robot` address away from a naive 0-based guess.
+ * A two-entity scene, mjlab-style: names prefixed, `robot` attached first with a free
+ * joint (excluded from `joint_pos`), a ball and two hinges, so its qpos and qvel
+ * addresses differ. `cube` follows, shifting `robot` off a naive 0-based guess.
  */
 function fakeScene() {
   const jointNames = ['robot/floating_base', 'robot/shoulder', 'robot/elbow', 'robot/wrist', 'cube/free'];
@@ -136,8 +131,7 @@ describe('createSlotReader — entity data fields', () => {
     const biased = createSlotReader(() => context(), {
       jointBias: name => (name === 'elbow' ? 0.25 : 0),
     });
-    // Looked up by *unprefixed* name, and applied to that joint's slots only —
-    // `elbow` is the first hinge, at index 4 (the ball joint occupies 0..3).
+    // By *unprefixed* name, and to that joint only: `elbow` is the hinge at index 4.
     close(biased({ entity: 'robot', field: 'joint_pos_biased' }), [
       0.5, 0.5, 0.5, 0.5, 1.25 + 0.25, -0.75,
     ]);
@@ -199,9 +193,8 @@ describe('createSlotReader — entity data fields', () => {
   });
 
   it('falls back to the whole model only when the model carries no prefixes', () => {
-    // The set_trace_env path: the browser model comes from plain MJCF with no
-    // mjlab attach prefix, and such a scene is single-entity by construction, so
-    // any entity name the build recorded resolves to everything.
+    // The set_trace_env path: a plain-MJCF model has no attach prefix and is
+    // single-entity, so any recorded entity name resolves to everything.
     const plain = context();
     const model = plain.mjModel as unknown as Mutable;
     const encoder = new TextEncoder();
@@ -227,9 +220,8 @@ describe('createSlotReader — entity data fields', () => {
   });
 
   it('does not fall back in a prefixed model, even for an unknown entity', () => {
-    // mjlab attaches its terrain with `prefix=""`, and a misspelled entity name
-    // looks the same from here. Answering either with the robot's joints would be
-    // the silent-wrong-numbers failure the reader exists to prevent.
+    // mjlab attaches terrain with `prefix=""`, indistinguishable from a misspelled
+    // name; answering either with the robot's joints is the failure to prevent.
     close(read({ entity: 'terrain', field: 'joint_pos' }), []);
     expect(read({ entity: 'terrain', field: 'root_link_pos_w' })).toBeNull();
   });
@@ -280,8 +272,7 @@ describe('createSlotReader — sensor slots', () => {
 
   it('matches an unprefixed model sensor against the prefixed build name', () => {
     const { mjModel, mjData } = fakeScene();
-    // Plain-MJCF model: the sensor is `imu_lin_vel`, the build recorded mjlab's
-    // prefixed `robot/imu_lin_vel`.
+    // Plain MJCF names it `imu_lin_vel`; the build recorded `robot/imu_lin_vel`.
     const bare = createSlotReader(() => {
       const encoder = new TextEncoder();
       const bytes: number[] = [];
@@ -355,9 +346,7 @@ describe('createSlotReader — structured sensor fields', () => {
   };
 
   it('says so by name when the build emitted no descriptor', () => {
-    // A `{sensor, field}` slot must never fall through to the builtin path: this
-    // sensor has no `sensordata` window, so that would either miss the name or,
-    // worse, land on some other sensor's numbers.
+    // No `sensordata` window, so falling through would land on another sensor.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const read = createSlotReader(() => ({ ...context(), mujoco: {} as never }));
     expect(read(SCAN)).toBeNull();

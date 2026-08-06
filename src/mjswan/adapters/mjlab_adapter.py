@@ -322,8 +322,7 @@ def _adapt_command_cfg(term: Any) -> MjswanCommandTermConfig:
 
     assert spec.serializer is not None
     serialized = dict(spec.serializer(term))
-    # A native term may still own a reset-time graph (ADR 0005 §3): the class stays
-    # native, its randomization is traced. Resolved at build time, like every trace.
+    # A native term may still own a reset-time graph for its randomization.
     reset_trace = spec.reset_trace(term) if spec.reset_trace is not None else None
     return MjswanCommandTermConfig(
         term_name=spec.ts_name,
@@ -369,8 +368,7 @@ def adapt_commands(
 
 
 _ACTION_CLASS_ALIASES: dict[str, str] = {
-    # myosuite ships its own muscle action cfg outside mjlab's class hierarchy.
-    # Translate it to mjswan's MuscleActivationActionCfg.
+    # myosuite's muscle action cfg sits outside mjlab's hierarchy; translate it.
     "MyoMuscleActivationActionCfg": "MuscleActivationActionCfg",
 }
 
@@ -409,8 +407,7 @@ def _adapt_action_cfg(term: Any) -> MjswanActionTermCfg | None:
         if val is not dataclasses.MISSING:
             kwargs[f.name] = val
 
-    # mjlab namespaces actuator names as "{entity_name}/{name}"; prefix them
-    # so they match the fully-qualified policy_joint_names at runtime.
+    # Prefix with the entity name, as mjlab does, to match policy_joint_names at runtime.
     if entity_name and "actuator_names" in kwargs:
         raw = kwargs["actuator_names"]
         if isinstance(raw, (list, tuple)):

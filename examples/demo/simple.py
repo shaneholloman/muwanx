@@ -16,8 +16,7 @@ import mjswan
 from mjswan.envs.mdp.actions import JointPositionActionCfg
 from mjswan.trace_env import build_single_entity_trace_env
 
-# This demo's own arm pose offset; the gains it rides on are in the policy's
-# own config (`assets/unitree_g1/locomotion.json`).
+# This demo's own arm pose offset; the gains it rides on live in `locomotion.json`.
 _G1_OFFSET = {
     "left_shoulder_pitch_joint": 0.5,
     "right_shoulder_pitch_joint": -0.5,
@@ -49,9 +48,8 @@ def setup_builder() -> mjswan.Builder:
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
         name="G1",
     ).set_trace_env(
-        # The env the policy's observation terms are traced against (ADR 0005 §6).
-        # An mjlab scene brings its own; this one is a plain MJCF, so it needs the
-        # entity built explicitly — from the robot alone, not the scene's floor.
+        # The env the observation terms are traced against. An mjlab scene brings its own; this
+        # plain MJCF needs the entity built explicitly, from the robot alone.
         build_single_entity_trace_env(
             lambda: mujoco.MjSpec.from_file("assets/unitree_g1/g1.xml")
         )
@@ -69,8 +67,8 @@ def setup_builder() -> mjswan.Builder:
         name="Locomotion",
         config_path="assets/unitree_g1/locomotion.json",
         actions={
-            # Only the offset: the scale and the PD gains ride with the policy in
-            # `locomotion.json`, and a term overrides just the fields it names.
+            # Only the offset: scale and PD gains ride with the policy, and a term overrides just
+            # the fields it names.
             "joint_pos": JointPositionActionCfg(
                 entity_name="robot",
                 actuator_names=(".*",),

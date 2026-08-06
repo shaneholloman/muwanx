@@ -1,14 +1,10 @@
 /**
- * Observation terms under ADR 0005: traced-ONNX bodies and the natively-computed
- * markers, plus the clip/scale pipeline they share.
+ * Traced-ONNX and natively-computed observation terms, plus the clip/scale pipeline they
+ * share. The parity harness validates the graph's math; what is tested here is that a
+ * term feeds exactly the slots it declares under the build's input names, clips before
+ * scaling, holds its declared width, and degrades to the last good value.
  *
- * The graph's math is validated Python-side by the parity harness. What matters
- * here is the native half: that a term feeds exactly the slots it declares under
- * the build-supplied input names, applies clip-then-scale like mjlab, holds its
- * declared width, and degrades to the last good value rather than feeding zeros
- * into the policy when a slot is unavailable.
- *
- * The ONNX session is injected as a fake, so these run headless with no ORT.
+ * The ONNX session is a fake, so these run headless with no ORT.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -75,8 +71,7 @@ describe('OnnxObservation', () => {
       session,
       readSlot: () => new Float32Array([0, 0, -1]),
     });
-    // PolicyRunner lays out the group synchronously at load, so `size` must be
-    // known before any (async) inference has happened.
+    // PolicyRunner lays out the group synchronously, before any inference has run.
     expect(obs.size).toBe(3);
     expect(session.calls.length).toBe(0);
   });
@@ -194,8 +189,7 @@ describe('NativeObservation', () => {
   });
 
   it('resolves its width from the runtime when the build could not supply one', () => {
-    // A command that only exists browser-side (a native UiCommand) has no
-    // build-time width, so the first live read fixes the group layout.
+    // A browser-only command has no build-time width, so the first read fixes the layout.
     const obs = new NativeObservation(
       fakeRunner({ commands: { velocity: Float32Array.from([0, 0, 0]) } }),
       { name: 'velocity_cmd', native: 'command', command_name: 'velocity' },
@@ -204,10 +198,8 @@ describe('NativeObservation', () => {
   });
 
   it('reads only the named action term\'s slice, not the vector head', () => {
-    // Two action terms: `arm` occupies [0,3), `gripper` [3,4). mjlab's
-    // `last_action("gripper")` is `get_term("gripper").raw_action` — the tail. Before
-    // `action_offset` was read this returned [1, 2, 3] truncated to width 1, i.e.
-    // `arm`'s first number: the right width, the wrong term.
+    // `arm` occupies [0,3) and `gripper` [3,4), so `last_action("gripper")` is the tail.
+    // Without `action_offset` it truncates to `arm`'s first number — right width, wrong term.
     const obs = new NativeObservation(
       fakeRunner({ lastActions: Float32Array.from([1, 2, 3, 9]) }),
       {
@@ -222,8 +214,7 @@ describe('NativeObservation', () => {
   });
 
   it('reads the whole vector when the term names no action term', () => {
-    // The bare `mdp.last_action`, which every reference task uses. No offset is
-    // emitted for it, and the whole vector is the right answer.
+    // The bare `mdp.last_action` every reference task uses: no offset, the whole vector.
     const obs = new NativeObservation(
       fakeRunner({ lastActions: Float32Array.from([1, 2, 3, 9]) }),
       { name: 'actions', native: 'prev_action', size: 4 },
@@ -232,9 +223,8 @@ describe('NativeObservation', () => {
   });
 
   it('refuses to build when command_name names no command term', () => {
-    // The miss used to arrive as a zero block inside the policy's input vector,
-    // logged nowhere: `getCommand` returns an empty array, `conformToSize` pads it
-    // to the declared width. A slot the scene means to leave empty is `constant`.
+    // Otherwise the miss arrives as a zero block in the policy's input vector, logged
+    // nowhere. A slot the scene means to leave empty says so with `constant`.
     expect(
       () =>
         new NativeObservation(fakeRunner({ commands: { twist: new Float32Array(3) } }), {
@@ -254,8 +244,7 @@ describe('NativeObservation', () => {
   });
 
   it('still zero-fills when the embedding runs no CommandManager', () => {
-    // Deliberately not an error: an absent manager is a host that runs no commands,
-    // which is not evidence of a wrong *name*. The build supplied the width.
+    // Not an error: a host that runs no commands is not evidence of a wrong name.
     const runner = { getContext: () => null } as unknown as PolicyRunner;
     const obs = new NativeObservation(runner, {
       name: 'velocity_cmd',

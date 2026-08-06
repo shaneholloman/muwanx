@@ -339,8 +339,7 @@ def run_command_parity(
                 tr.passed = False
         tr.steps_checked += 1
 
-    # resample_mask=False: no resample, but _update_command still runs on prev
-    # state (e.g. velocity's standing-zero / heading). Reference = update-only.
+    # resample_mask=False: no resample, but _update_command still runs on prev state.
     snap = _snapshot_state(term)
     prev = {f: getattr(term, f).detach().clone() for f in state_fields}
     dyn_feeds = _dyn_feeds()

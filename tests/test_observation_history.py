@@ -18,8 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-# `mjswan.compile` imports torch at load time (it is the build-time tracer), so
-# the package import below has to wait for the skip.
+# `mjswan.compile` imports torch, so the package import below waits for the skip.
 torch = pytest.importorskip("torch")
 
 from mjswan._onnx_build import (  # noqa: E402

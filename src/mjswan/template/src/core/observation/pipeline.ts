@@ -1,11 +1,7 @@
 /**
- * The native half of the observation pipeline (ADR 0005 §Decision table).
- *
- * mjlab's order is compute → noise → clip → scale → delay → history. Noise and
- * delay are training-only and dropped (ADR 0005 §4); history is owned by the
- * surrounding group in `PolicyRunner`. What is left here is clip → scale, applied
- * identically to a term whose value came from an ONNX graph and to one the
- * runtime supplies natively, so the two can never drift.
+ * The native half of mjlab's compute → noise → clip → scale → delay → history: noise and
+ * delay are training-only, history belongs to the group. Clip → scale runs identically for
+ * graph-backed and native terms, so the two cannot drift.
  */
 
 /** Per-element or scalar scaling, as emitted by the build. */
@@ -18,12 +14,7 @@ export interface ObservationPipelineConfig {
   clip?: ObservationClip;
 }
 
-/**
- * Apply clip then scale, in place, returning the same array.
- *
- * Clip-before-scale matches mjlab: the limits are expressed in the term's own
- * units, before any scaling is applied.
- */
+/** Apply clip then scale in place — mjlab's order, since limits are in term units. */
 export function applyObservationPipeline(
   values: Float32Array,
   config: ObservationPipelineConfig,
@@ -38,9 +29,7 @@ export function applyObservationPipeline(
   if (typeof scale === 'number') {
     for (let i = 0; i < values.length; i++) values[i] *= scale;
   } else if (Array.isArray(scale)) {
-    // A per-element scale shorter than the value is applied elementwise as far
-    // as it goes; the build emits one entry per element, so a mismatch means a
-    // stale config rather than something to silently pad.
+    // The build emits one entry per element, so a short array means a stale config.
     for (let i = 0; i < values.length && i < scale.length; i++) values[i] *= scale[i];
   }
   return values;

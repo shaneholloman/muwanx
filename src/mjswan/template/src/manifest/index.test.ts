@@ -91,9 +91,8 @@ describe('parseManifest', () => {
   });
 
   it('delivers the traced term graphs a policy.json refers to (ADR 0005)', async () => {
-    // A post-ADR-0005 policy is one graph per traced term alongside the network.
-    // Keyed by the config-relative path, since that is what the runtime looks a
-    // session up by; fetched relative to policy.json, like the network itself.
+    // One graph per traced term beside the network, keyed by the config-relative path
+    // the runtime looks a session up by, and fetched relative to policy.json.
     const traced = {
       onnx: { path: 'walk.onnx' },
       observations: {
@@ -122,8 +121,7 @@ describe('parseManifest', () => {
   });
 
   it('resolves event graphs relative to the model, not to policy.json', async () => {
-    // Event graphs are written beside the scene model, and a scene may have them
-    // with no policy at all.
+    // Event graphs sit beside the scene model, and a scene may have them with no policy.
     const withEvents: AppConfig = {
       ...CONFIG,
       projects: [

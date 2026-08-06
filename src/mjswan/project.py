@@ -178,30 +178,18 @@ class ProjectHandle:
         apply_mjlab_sim_options(scene.spec, getattr(env_cfg, "sim", None))
         handle = self.add_scene(spec=scene.spec, name=task_id)
 
-        # A live, reset() env is what ONNX tracing (ADR 0005) runs authored term
-        # functions against — `func(env, **params)` reads `env.scene[name].data.X`
-        # regardless of whether `func` is one of this env's own configured
-        # manager terms, so a fresh env constructed straight from `env_cfg` is
-        # the right (and only) source of truth, not the `Scene` built above
-        # (which lacks the manager/torch machinery `Entity.data` properties need).
+        # Tracing runs term functions against a live, reset() env, so it cannot be the `Scene`
+        # above, which lacks the manager/torch machinery `Entity.data` needs.
         handle._config.mjlab_env = ManagerBasedRlEnv(env_cfg, device="cpu")
         handle._config.mjlab_env.reset()
-        # The task's own control rate, not a guess. `step_dt` is
-        # `sim.mujoco.timestep * decimation`, and the two disagree across tasks —
-        # Cartpole is 0.01 x 5 = 0.05 while the locomotion tasks are 0.005 x 4 = 0.02
-        # — so anything derived from the model's timestep alone is wrong for some of
-        # them.
+        # The task's own rate: tasks disagree (Cartpole 0.05, locomotion 0.02).
         handle._config.control_dt = float(handle._config.mjlab_env.step_dt)
         viewer_cfg = _adapt_mjlab_viewer_config(getattr(env_cfg, "viewer", None))
         if viewer_cfg is not None:
             handle.set_viewer(viewer_cfg)
         terrain_data = _extract_terrain_data(scene)
         if terrain_data:
-            # Expose terrain spawn positions as data.  Using them to override
-            # the spawn event (patch-based spawning) is a task-side concern —
-            # the spawn event itself is a mjswan browser enhancement, not an
-            # mjlab term — so core only surfaces the data here.  See
-            # examples/mjlab/defaults/events for the task-side wiring.
+            # Core only surfaces the data; overriding the spawn event with it is task-side.
             handle._config.terrain_data = terrain_data
         events = getattr(env_cfg, "events", None)
         if events:

@@ -1,19 +1,10 @@
 /**
- * Orchestrator-owned seeded PRNG (ADR 0005 §2).
+ * The one PRNG behind every `rand` input the runtime feeds a term graph — never
+ * `Math.random()`, and never ONNX's own `RandomUniform`/`RandomNormal`, whose PRNG the
+ * spec leaves open. With the seed owned here, a recorded session replays bit-for-bit.
  *
- * All randomness the runtime feeds to ONNX term bodies — Event and Command
- * `rand` inputs — comes from here, never from `Math.random()` and never from
- * ONNX's own `RandomUniform`/`RandomNormal` (whose PRNG the spec does not
- * mandate, so it diverges across ORT-Web versions/EPs). Because the seed is
- * owned and persisted by the orchestrator, a recorded session replays
- * bit-for-bit — the "share this exact run" viewer feature.
- *
- * This is unrelated to the build-time RNG spy/replay used by the Python parity
- * harness; that one records mjlab's own draws to validate traced math.
- *
- * Algorithm: SplitMix64-seeded xoshiro128** — small, fast, and fully specified
- * here so the sequence is reproducible across browsers and engine versions
- * (a library's internal change must never alter a recorded replay).
+ * xoshiro128** seeded by SplitMix32, spelled out rather than imported: a library's
+ * internal change must never alter a recorded replay.
  */
 
 export class SeededRng {
@@ -64,13 +55,8 @@ export class SeededRng {
   }
 
   /**
-   * Fill an ONNX `rand` input: `n` uniform draws, each scaled to its own range.
-   *
-   * A traced term consumes `rand` in the order its draws were recorded at build
-   * time; `ranges` is the matching per-element `[low, high]` list from the term's
-   * config (`rand_ranges`). An element with no range falls back to [0, 1), which
-   * is only ever right by accident — mjlab's ranges are typically centred on zero
-   * and often zero-width — so it warns once rather than quietly jittering.
+   * Fill an ONNX `rand` input: `n` draws in the order the build recorded them, each scaled
+   * by its `rand_ranges` entry. An element with no range warns and falls back to [0, 1).
    */
   randVector(n: number, ranges?: ReadonlyArray<readonly [number, number]>): Float32Array {
     if (n > 0 && (ranges?.length ?? 0) < n && !this.warnedRangeless) {

@@ -105,8 +105,7 @@ def setup_builder() -> mjswan.Builder:
     )
     scene.set_trace_env(trace_env)
 
-    # joint_names -> joint_ids is resolved against the trace env by the build
-    # (mjswan._onnx_build), the same way mjlab's own managers resolve it.
+    # The build resolves joint_names -> joint_ids against the trace env, as mjlab does.
     finger_joints = SceneEntityCfg(name="robot", joint_names=list(JOINT_NAMES))
 
     scene.set_viewer(

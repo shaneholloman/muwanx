@@ -13,9 +13,8 @@ import type { CommandDefinition } from '../../core/command';
 import type { CommandDescriptor } from '../../engine/types';
 
 /**
- * The engine's descriptor mapping, duplicated from `createEngine` rather than
- * imported — importing it pulls in the MuJoCo WASM loader, which this does not
- * need. The field names are what the assertions below pin.
+ * The engine's descriptor mapping, duplicated rather than imported: importing
+ * `createEngine` pulls in the MuJoCo WASM loader. The field names are what is pinned.
  */
 function toDescriptor(def: CommandDefinition): CommandDescriptor {
   const config = def.config;
@@ -71,8 +70,7 @@ describe('adjustable_range in the command descriptor', () => {
   });
 
   it('carries no id of its own — it is not a settable command', () => {
-    // `CommandControls.set` is keyed by command id; the range control has none,
-    // which is the type-level statement that it stays app-local.
+    // `set` is keyed by command id, and the range control has none — it stays app-local.
     const descriptor = toDescriptor({
       id: 'velocity:lin_vel_x',
       groupName: 'velocity',

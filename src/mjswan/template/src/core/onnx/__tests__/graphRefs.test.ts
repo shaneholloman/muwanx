@@ -36,8 +36,7 @@ describe('policyGraphRefs', () => {
   });
 
   it('ignores the policy network, whose `onnx` is an object', () => {
-    // The network itself arrives as PolicyInput.onnx; only `{path}` is in the
-    // config. Treating it as a term graph would try to load it twice.
+    // The network arrives as PolicyInput.onnx; treating it as a term graph loads it twice.
     expect(policyGraphRefs({ onnx: { path: 'walk.onnx' } })).toEqual([]);
   });
 
@@ -81,8 +80,7 @@ describe('eventGraphRefs', () => {
 
 describe('policyGraphRefs — fused groups', () => {
   it('collects a fused group graph, named by `fused` rather than `onnx`', () => {
-    // The whole group is one graph (ADR 0005 §4). A collector that only looked at
-    // `onnx` would deliver no bytes at all for such a policy.
+    // The whole group is one graph, so an `onnx`-only collector delivers no bytes.
     expect(
       policyGraphRefs({
         onnx: { path: 'walk.onnx' },
@@ -96,8 +94,7 @@ describe('policyGraphRefs — fused groups', () => {
   });
 
   it('collects a fused termination graph beside its native siblings', () => {
-    // Terminations fuse too, under a reserved key, since one graph covers
-    // several named terms (ADR 0005 §4).
+    // Terminations fuse too, under a reserved key: one graph, several named terms.
     expect(
       policyGraphRefs({
         terminations: {

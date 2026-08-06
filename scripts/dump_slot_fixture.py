@@ -33,8 +33,7 @@ OUT = (
     / "src/mjswan/template/src/core/onnx/__tests__/fixtures/slotFields.json"
 )
 
-# One task with two prefixed entities, sites and a free-jointed object; one with
-# builtin sensors, a floating base and 29 joints.
+# One task with prefixed entities, sites and a free joint; one with sensors and 29 joints.
 TASKS = ("Mjlab-Lift-Cube-Yam", "Mjlab-Velocity-Flat-Unitree-G1")
 
 # Every field the reader implements, so a newly-added one cannot skip the check.
@@ -97,8 +96,7 @@ def _dump_task(task_id: str) -> dict[str, Any]:
     with contextlib.redirect_stdout(io.StringIO()):
         env = ManagerBasedRlEnv(cfg, device="cpu")
         env.reset()
-        # A few steps so nothing under test is still at its reset value (a reader
-        # that returned qpos0 would pass at t=0).
+        # A few steps, so a reader that just returned qpos0 cannot pass at t=0.
         for _ in range(3):
             env.sim.forward()
             env.scene.update(env.step_dt)
@@ -107,8 +105,7 @@ def _dump_task(task_id: str) -> dict[str, Any]:
     model = {name: int(getattr(mj_model, name)) for name in MODEL_INTS}
     for name in MODEL_ARRAYS:
         model[name] = [int(v) for v in getattr(mj_model, name).reshape(-1).tolist()]
-    # The name table is a NUL-separated byte blob; ship it as a list of ints so
-    # the fixture stays plain JSON.
+    # The NUL-separated name blob ships as a list of ints, to keep the fixture plain JSON.
     model["names"] = list(bytes(mj_model.names))
 
     data = {name: _flat(getattr(env.sim.data, name)[0]) for name in DATA_ARRAYS}
@@ -124,17 +121,14 @@ def _dump_task(task_id: str) -> dict[str, Any]:
             except Exception:  # noqa: BLE001 — a field this entity cannot report
                 continue
             fields[field] = _flat(value[0] if value.ndim > 0 else value)
-        # `joint_pos_biased` is `joint_pos + encoder_bias`, and the walking tasks
-        # randomize that bias at reset — so the reader can only match if it is
-        # given the same bias, keyed by mjlab's unprefixed joint name.
+        # The walking tasks randomize `encoder_bias`, so the reader needs the same bias.
         bias = _flat(entity_data.encoder_bias[0])
         entities[entity_name] = {
             "fields": fields,
             "encoder_bias": dict(zip(entity.joint_names, bias, strict=True)),
         }
 
-    # Only builtin sensors are `sensordata` windows; a ContactSensor's `data` is a
-    # dataclass, and the tracer rejects those in the slot path already.
+    # Only builtin sensors are `sensordata` windows; the tracer already rejects the rest.
     sensors: dict[str, list[float]] = {}
     for name, sensor in env.scene.sensors.items():
         value = sensor.data

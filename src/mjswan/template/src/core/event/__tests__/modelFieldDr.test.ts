@@ -62,8 +62,7 @@ function config(over: Partial<ModelFieldDrConfig> = {}): ModelFieldDrConfig {
     operation,
     distribution: 'uniform',
     shared_random: false,
-    // Mirrors what the build emits: `abs` overwrites, the other two are relative
-    // to the compiled default.
+    // As the build emits: `abs` overwrites, the others use the compiled default.
     uses_defaults: operation === 'add' || operation === 'scale',
     set_const: false,
     ...over,
@@ -96,15 +95,13 @@ describe('applyModelFieldDr', () => {
     const before = friction('floor');
     expect(apply(config(), new SeededRng(1))).toBe(true);
     expect(friction('robot/foot_collision')[0]).toBeCloseTo(0.7, 6);
-    // The scoping is the whole point: mjlab's config targets fingertip or foot
-    // collision geoms, not the world.
+    // The scoping is the point: mjlab targets fingertip or foot geoms, not the world.
     expect(friction('floor')).toEqual(before);
     expect(friction('robot/torso_collision')[0]).not.toBeCloseTo(0.7, 6);
   });
 
   it('writes only the targeted axis, so sibling events compose', () => {
-    // Lift-Cube-Yam randomizes friction axes 0, 1 and 2 as three separate events.
-    // A version writing the whole triple would erase the other two.
+    // Lift randomizes friction axes as three events; writing the triple would erase two.
     const before = friction('robot/foot_collision');
     apply(config({ axis_ranges: { '1': [0.05, 0.05] } }), new SeededRng(1));
     const after = friction('robot/foot_collision');
@@ -124,10 +121,8 @@ describe('applyModelFieldDr', () => {
   });
 
   it('does not let two add events on one axis accumulate', () => {
-    // mjlab's `add`/`scale` read the *compile-time* default, not the live value, so
-    // a second event on the same axis offsets the same base rather than the first
-    // event's output. Reading the live field would drift by however many events
-    // happened to target the axis — silently, and differently per task.
+    // `add`/`scale` read the compile-time default, so a second event on one axis offsets
+    // the same base. Reading the live field would drift by however many events hit it.
     const base = friction('robot/foot_collision')[0];
     const defaults = new ModelFieldDefaults(mjModel);
     const rng = new SeededRng(1);
@@ -137,8 +132,7 @@ describe('applyModelFieldDr', () => {
   });
 
   it('gives every geom the same draw under shared_random', () => {
-    // mjlab's foot friction shares one coefficient across both feet rather than
-    // letting them differ.
+    // mjlab's foot friction shares one coefficient across both feet.
     const names = ['robot/foot_collision', 'robot/torso_collision'];
     apply(
       config({ entity_names: names, axis_ranges: { '0': [0.2, 1.8] }, shared_random: true }),
@@ -154,8 +148,7 @@ describe('applyModelFieldDr', () => {
   });
 
   it('is reproducible from the seed', () => {
-    // ADR 0005 §2: a recorded session replays, so the draws cannot come from
-    // anywhere but the seeded stream.
+    // A recorded session replays, so the draws can only come from the seeded stream.
     const cfg = config({ axis_ranges: { '0': [0.2, 1.8] } });
     apply(cfg, new SeededRng(42));
     const first = friction('robot/foot_collision')[0];
@@ -166,8 +159,7 @@ describe('applyModelFieldDr', () => {
   });
 
   it('draws log-uniformly when asked', () => {
-    // A [0.01, 1] range spends equal probability per decade, so samples cluster
-    // low — a uniform draw would average near 0.5.
+    // A [0.01, 1] log range clusters low; a uniform draw would average near 0.5.
     const rng = new SeededRng(3);
     const samples: number[] = [];
     for (let i = 0; i < 40; i++) {
@@ -184,8 +176,7 @@ describe('applyModelFieldDr', () => {
   });
 
   it('calls mj_setConst for an inertial field', () => {
-    // `body_ipos` feeds precomputed constants; skipping this would half-apply the
-    // perturbation.
+    // `body_ipos` feeds precomputed constants, so skipping this half-applies it.
     const setConst = vi.spyOn(mujoco, 'mj_setConst');
     apply(
       config({

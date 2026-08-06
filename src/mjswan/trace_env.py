@@ -101,10 +101,8 @@ def build_single_entity_trace_env(
                 geom.margin = 0.0
         return spec
 
-    # The keyframe is what the browser resets to (`mj_resetDataKeyframe`), so it is
-    # also what `default_joint_pos` has to be: mjlab's default is `{".*": 0.0}`,
-    # which bakes a zero default into every `*_rel` observation and leaves the
-    # policy reading its whole stand pose as error from the first frame.
+    # The browser resets to the keyframe, so `default_joint_pos` must match it — mjlab's
+    # `{".*": 0.0}` would bake a zero default into every `*_rel` observation.
     keyframe_pos = _keyframe_joint_pos(_spec_fn())
     init_state = EntityCfg.InitialStateCfg()
     if keyframe_pos:
@@ -115,8 +113,7 @@ def build_single_entity_trace_env(
     env = ManagerBasedRlEnv(env_cfg, device=device)
     env.reset()
     if commands:
-        # After reset(): mjlab builds its own (empty) manager during construction,
-        # and this env is never stepped, so nothing else consults it.
+        # After reset(), since mjlab builds its own empty manager during construction.
         env.command_manager = TraceCommandManager(commands)
     return env
 

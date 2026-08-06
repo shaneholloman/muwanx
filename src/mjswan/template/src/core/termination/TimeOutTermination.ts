@@ -1,16 +1,9 @@
 /**
- * `TimeOutTermination`: mjlab's `time_out`, kept native (ADR 0005 §2).
+ * mjlab's `time_out`, native because its body compares env-level step counters rather
+ * than reading entity state — there is nothing to put in a graph. Evaluates the build's
+ * `elapsed_s >= episode_length_s` against time the manager accumulates from `dt`.
  *
- * mjlab's own body compares env-level step counters rather than reading any
- * entity state, so the tracer classifies it as native by construction — there is
- * nothing to put in a graph. The build emits
- * `{native: "elapsed_s >= episode_length_s", episode_length_s}` and this term
- * evaluates exactly that comparison against elapsed wall-clock episode time the
- * manager accumulates from the control `dt`.
- *
- * Note this is a *truncation*, not a failure: the manager keeps `time_out` terms
- * separate so a timeout reports `truncated` while a real termination reports
- * `terminated`.
+ * A *truncation*, not a failure: the manager keeps the two apart.
  */
 
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
@@ -31,9 +24,7 @@ export class TimeOutTermination extends TerminationBase {
     getElapsedS: () => number,
   ) {
     super(runner, config);
-    // A task with no finite horizon (mjlab's play configs set an effectively
-    // infinite episode_length_s) never times out; treat a missing or
-    // non-positive value the same way rather than firing every frame.
+    // No finite horizon never times out; nor does a missing value, which would fire always.
     const declared = config.episode_length_s ?? 0;
     this.episodeLengthS = declared > 0 ? declared : Number.POSITIVE_INFINITY;
     this.getElapsedS = getElapsedS;

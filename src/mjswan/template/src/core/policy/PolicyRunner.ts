@@ -35,12 +35,7 @@ export type PolicyRunnerOptions = {
   observations?: Record<string, ObservationConstructor>;
   /** App-supplied motion clips (name → bytes), exposed to terms via getMotionData. */
   motions?: Array<{ name: string; data: Bytes }>;
-  /**
-   * Deps for ONNX-backed observation terms (ADR 0005): the loaded `.onnx`
-   * sessions keyed by the path each entry's `onnx` field names, and the reader
-   * for the dynamic state slots those graphs declare. Absent for a policy with
-   * no traced observations.
-   */
+  /** The loaded graphs and slot reader traced observations need; absent if none. */
   onnxSessions?: OnnxSessionCache;
   readOnnxSlot?: SlotReader;
 };
@@ -110,11 +105,8 @@ export class PolicyRunner {
       }
     }
     if (state) {
-      // Priming a history buffer means computing a frame, which is async once a
-      // term is ONNX-backed (ADR 0005) — while `reset()` is called from the
-      // engine's synchronous public `resetSimulation()`. So flag it and prime on
-      // the next collect instead, filling every slot with the frame that is
-      // actually about to be used rather than a separately-computed one.
+      // Priming computes a frame, which is async for an ONNX term while `reset()` is not.
+      // Flag it and prime on the next collect, which uses the frame actually about to run.
       for (const [key, config] of Object.entries(this.historyConfig)) {
         if (config.steps > 1) this.historyNeedsPrime[key] = true;
       }
@@ -132,7 +124,7 @@ export class PolicyRunner {
     }
   }
 
-  /** Async because ONNX-backed terms run ORT inference (ADR 0005 §8). */
+  /** Async because ONNX-backed terms run ORT inference. */
   async collectObservationsByKey(state: PolicyState): Promise<Record<string, Float32Array>> {
     this.update(state);
     const outputs: Record<string, Float32Array> = {};
@@ -143,8 +135,7 @@ export class PolicyRunner {
         const frame = await this.buildFrame(obsList, state);
         const buffer = this.historyBuffers[key];
         if (this.historyNeedsPrime[key]) {
-          // First frame after a reset: every slot is this frame, so the policy
-          // never sees a history of zeros it was not trained on.
+          // First frame after a reset: fill every slot, never a history of untrained zeros.
           for (let i = 0; i < history.steps; i++) buffer.set(frame, i * frame.length);
           delete this.historyNeedsPrime[key];
         } else {
@@ -235,11 +226,7 @@ export class PolicyRunner {
     return this.config;
   }
 
-  /**
-   * Resolve an app-supplied motion clip's raw bytes by name (cached), or null
-   * if not supplied. Custom terms that need clip data read this slot instead of
-   * fetching a URL — the app owns and feeds all bytes (ADR 0004 §4/§10).
-   */
+  /** An app-supplied clip's bytes by name (cached); custom terms read this, never a URL. */
   getMotionData(name: string): Promise<ArrayBuffer | null> {
     const cached = this.motionCache.get(name);
     if (cached) return cached;
@@ -291,9 +278,7 @@ export class PolicyRunner {
     this.defaultObsKey = null;
 
     const buildTerm = (entry: ObservationConfigEntry): ObservationBase => {
-      // ONNX-traced and natively-computed terms (ADR 0005) bypass the class
-      // registry: they are one generic handler each, configured entirely by data,
-      // so `entry.name` is the term's own identity rather than a class to look up.
+      // Traced and native terms bypass the registry, so `entry.name` is the term's identity.
       if (isOnnxObservationConfig(entry)) {
         return this.buildOnnxObservation(entry);
       }
@@ -307,10 +292,7 @@ export class PolicyRunner {
       return new ObsClass(this, entry);
     };
 
-    // Per-term history wraps the term (mjlab stacks per term, before concatenating);
-    // the legacy registry classes take `history_steps` themselves, so only the
-    // ONNX/native entries the build emits `history_length`/`history_offsets` for are
-    // wrapped here.
+    // mjlab stacks per term. Only ONNX/native entries wrap: registry classes self-stack.
     const buildObservation = (entry: ObservationConfigEntry): ObservationBase => {
       const base = buildTerm(entry);
       const offsets =
@@ -321,8 +303,7 @@ export class PolicyRunner {
     };
 
     for (const [key, value] of Object.entries(obsConfig)) {
-      // A fused group (ADR 0005 §4) is one graph for all its terms; the per-term
-      // list below is what a group that could not fuse still uses.
+      // A fused group is one graph for all its terms; below is the unfused path.
       if (isFusedObservationConfig(value)) {
         const fused = this.buildFusedObservation(key, value);
         this.registerGroup(key, [fused], [{ name: key }], undefined, value.layout);
@@ -340,9 +321,7 @@ export class PolicyRunner {
           components?: ObservationConfigEntry[];
         };
         if (Array.isArray(configValue.components)) {
-          // Group-level history owns the stacking here, so each component computes a
-          // single frame. Same builder as the array shape, so this group form gets
-          // ONNX/native terms too rather than only registry classes.
+          // Group history owns the stacking, so each component computes one frame.
           const obsList = configValue.components.map((entry) =>
             buildObservation({ ...entry, history_steps: 1 }),
           );
@@ -368,12 +347,8 @@ export class PolicyRunner {
   }
 
   /**
-   * Build a traced-ONNX observation term, or throw if its deps are missing.
-   *
-   * Unlike `OnnxCommand`/`OnnxEvent` — which warn and skip, so one absent session
-   * cannot take down a whole scene — an observation is part of the policy's input
-   * vector. Dropping it would silently shift every later term's offset and feed
-   * the network a differently-shaped observation, so this fails loudly instead.
+   * Build a traced-ONNX observation term, or throw: unlike a command or event, dropping one
+   * shifts every later term's offset in the policy's input vector.
    */
   private buildOnnxObservation(entry: OnnxObservationConfig): OnnxObservation {
     const session = this.options.onnxSessions?.get(entry.onnx);
@@ -387,12 +362,7 @@ export class PolicyRunner {
     return new OnnxObservation(this, entry, { session, readSlot });
   }
 
-  /**
-   * Build the single handler for a fused group, or throw.
-   *
-   * Loud like the per-term case, and for the same reason: a group with no graph is
-   * a policy with no input vector, not a degraded one.
-   */
+  /** Build the single handler for a fused group, or throw, as the per-term case does. */
   private buildFusedObservation(
     key: string,
     config: FusedObservationConfig
@@ -437,15 +407,8 @@ export class PolicyRunner {
     obsList: ObservationBase[],
     state: PolicyState
   ): Promise<Float32Array> {
-    // Compute every term first, then size the buffer from the actual arrays, so
-    // an observation whose output length changes between frames can never
-    // overflow `set()` (a term's `size` getter may lag its output — e.g. it is
-    // cached from the previous frame). The guard keeps a clear error for a
-    // genuine size mismatch.
-    //
-    // Terms are kicked off together and awaited as a batch: an ONNX-backed term
-    // (ADR 0005) runs async ORT inference, and awaiting them one at a time would
-    // serialize the group's graphs for no reason.
+    // Sized from the actual arrays, since a term's `size` getter may lag its output, and
+    // kicked off as a batch so the group's graphs do not serialize.
     const arrays = await Promise.all(
       obsList.map(async (obs) => {
         const value = await obs.compute(state);

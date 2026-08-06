@@ -30,9 +30,8 @@ def main() -> int:
 
     from mjswan.compile import run_parity
 
-    # Use the light play env (N=1, no corruption), but re-add `push_robot` — play
-    # mode pops it (go1/env_cfgs.py:242). It is the clean exerciser of the
-    # dynamic-slot + root-velocity entity_write path (no branches, no env_origins).
+    # The light play env (N=1), plus `push_robot` which play mode pops — the clean exerciser of
+    # the dynamic-slot + root-velocity entity_write path.
     cfg = unitree_go1_flat_env_cfg(play=True)
     cfg.events["push_robot"] = EventTermCfg(
         func=push_by_setting_velocity,

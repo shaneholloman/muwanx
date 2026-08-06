@@ -87,12 +87,6 @@ def _require_control_dt(scene: Any) -> float:
     return float(scene.control_dt)
 
 
-# NOTE: a transitional name-collision check (ts_src ts_name vs a named
-# declarative built-in) lived here.  After ADR 0003, all built-in obs/term/event
-# are composition graphs with no named classes, so a ts_src term cannot shadow a
-# built-in — the check had no surface left and was removed.
-
-
 class Builder:
     """Builder for creating mjswan applications.
 
@@ -304,8 +298,7 @@ class Builder:
         root_config = {
             "version": __version__,
             "uses_custom_js": uses_custom_js,
-            # Runtime plugin module (author custom-MDP terms), loaded by the app
-            # in trusted contexts and passed to createEngine (ADR 0004 §10).
+            # Author custom-MDP terms, loaded by the app in trusted contexts only.
             **({"plugins": "assets/plugins.js"} if uses_custom_js else {}),
             "projects": [
                 {
@@ -540,24 +533,20 @@ class Builder:
             native_sizes = policy_native_sizes(data, policy.commands)
             obs_config = data.get("observations", {})
             for key, group in policy.observations.items():
-                # Avoid overwriting existing groups (e.g. an ONNX "policy"
-                # group already present from config_path).
+                # Avoid overwriting existing groups
+                # (e.g. ONNX "policy" group from config_path)
                 target_key = key
                 if target_key in obs_config:
                     target_key = f"{key}_monitor"
-                # `target_key` names the fused graph too, so two groups in one
-                # policy cannot overwrite each other's `obs/<group>.onnx`.
+                # `target_key` names the fused graph too, so two groups cannot collide.
                 obs_config[target_key] = serialize_observation_group(
                     group, env, scene_dir, target_key, native_sizes
                 )
             data["observations"] = obs_config
         if policy.actions:
-            # The term *set* is the Python one, but each term is merged field-wise
-            # over the authored config (`config_path`). That config is the policy's
-            # own, and for a motor-actuator robot it is where the PD gains the
-            # runtime needs live — the model carries none. `to_dict` omits the
-            # fields a term leaves unset, so a scene can tweak, say, the offset
-            # without restating the gains.
+            # The term *set* is the Python one, but each term merges field-wise over the authored
+            # config, where a motor robot's PD gains live. `to_dict` omits unset fields, so a scene
+            # can tweak the offset without restating the gains.
             authored = data.get("actions", {})
             data["actions"] = {
                 name: {**authored.get(name, {}), **cfg.to_dict()}
@@ -643,16 +632,11 @@ class Builder:
                     build_frontend=build_frontend,
                 )
 
-            # Copy only the built SPA into the output. Everything the standalone
-            # app needs is produced into the client build's dist/, so copying just
-            # that — rather than the whole template dir followed by a dev-file
-            # cleanup pass — keeps dev scaffolding (src/, node_modules/, configs,
-            # test dirs, stray .DS_Store, …) out of the output by construction.
+            # Only the built SPA: everything the app needs lands in dist/, so dev scaffolding stays
+            # out by construction rather than by a cleanup pass.
             built_dist = template_dir / "dist"
             if built_dist.is_dir():
-                # Dev-only artifacts vite emits into dist/ that the app doesn't
-                # need: fixtures/ (E2E scene copied from public/) and the SPA
-                # build-cache key (see _build_client).
+                # Dev-only artifacts vite emits into dist/: the E2E fixture and the build-cache key.
                 spa_excludes = {"fixtures", ".mjswan-build-meta.json"}
                 for item in built_dist.iterdir():
                     if item.name in spa_excludes:
@@ -682,8 +666,7 @@ class Builder:
         assets_dir = output_path / "assets"
         assets_dir.mkdir(exist_ok=True)
 
-        # Compile author custom-MDP terms into a standalone runtime ESM beside
-        # config.json (esbuild; never rebuilds the engine). ADR 0004 §10.
+        # Author custom-MDP terms compile to a runtime ESM beside config.json, via esbuild.
         if _build_uses_custom_js() and client_builder is not None:
             print("Compiling custom-MDP term module (plugins.js)...")
             client_builder.build_plugins_module(output_path / "assets" / "plugins.js")
@@ -751,11 +734,8 @@ class Builder:
                         scene.model = None
                     gc.collect()
 
-                    # Serialize scene-level events now that scene_dir and the
-                    # scene's live env (if any) are both known — same timing as
-                    # observations/terminations below. Overwrites `scene.events`
-                    # in place with the final JSON list `_save_config_json`
-                    # (called after this loop) reads.
+                    # Needs scene_dir and the live env, so it happens here; overwrites `scene.events`
+                    # in place with the JSON list `_save_config_json` reads after this loop.
                     if scene.events:
                         from ._onnx_build import serialize_events
 
@@ -823,10 +803,7 @@ class Builder:
 
                     progress.advance(task)
 
-        # Save root configuration (project metadata and structure) — after the
-        # scene loop above, since it reads each scene's `events`, which the
-        # loop just resolved from raw EventTermCfg objects into their final
-        # ONNX-traced JSON form (same timing as observations/terminations).
+        # After the scene loop, which resolves each scene's `events` into the JSON form.
         self._save_config_json(output_path)
 
         print(f"✓ Saved mjswan application to: {output_path}")

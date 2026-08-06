@@ -59,10 +59,8 @@ describe('CommandManager: resetTerms', () => {
   }
 
   it('awaits each term in config order, not concurrently', () => {
-    // mjlab loops `self._terms.items()` and each reset *is* the term's resample,
-    // which may write to the sim — so two terms touching the same element resolve
-    // last-writer-wins by config order. `Promise.all` would interleave, giving
-    // ['slow:start', 'fast:start', 'fast:done', 'slow:done'].
+    // Each reset *is* the term's resample and may write to the sim, so overlaps resolve
+    // last-writer-wins by config order. `Promise.all` would interleave the four events.
     const order: string[] = [];
     const manager = new CommandManager();
     const terms = (manager as unknown as { terms: Map<string, unknown> }).terms;

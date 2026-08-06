@@ -45,33 +45,15 @@ import type { RaycastSensorDescriptor } from '../onnx/raycast';
 import { createSlotReader } from '../onnx/slotReader';
 import { SeededRng } from '../rng';
 
-/**
- * Seed for the term PRNG (ADR 0005 §2). Fixed rather than time-derived so a plain
- * page load is reproducible; a "share this run" feature overrides it per session.
- */
+/** Fixed rather than time-derived, so a plain page load replays identically. */
 const DEFAULT_TERM_SEED = 0x5eed;
 
-/** Reused when no policy is loaded, so a policy-less frame allocates nothing. */
 const EMPTY_ACTIONS = new Float32Array(0);
 
-/**
- * Frame pacing for a scene with no policy, where there is no trained control rate to
- * match — only the viewer's own step budget. A scene *with* a policy carries its rate
- * in the config (`ResolvedScene.controlDt`) and the build refuses to emit one without
- * it, so this is never a fallback for a real task.
- */
+/** Only for a policy-less scene; a policy carries its own rate in `controlDt`. */
 const DEFAULT_VIEWER_CONTROL_DT = 0.02;
 
-/**
- * Encoder bias by joint name, for the slot reader's `joint_pos_biased`.
- *
- * mjlab randomizes `encoder_bias` per episode and `joint_pos_biased` is what a
- * trained policy observed; the export captures the bias into `policy.json`
- * aligned to `policy_joint_names`. Keyed by name because the reader needs it in
- * *entity*-joint order, which is not the action order this array is in. Empty
- * when the config carries no bias — mjlab's own zero-bias default, under which
- * `joint_pos_biased` is just `joint_pos`.
- */
+/** Keyed by joint name: the slot reader needs entity-joint order, not action order. */
 function buildJointBias(config: PolicyConfig): Map<string, number> {
   const bias = new Map<string, number>();
   const values = config.encoder_bias;
@@ -83,13 +65,7 @@ function buildJointBias(config: PolicyConfig): Map<string, number> {
   return bias;
 }
 
-/**
- * Structured-sensor descriptors from every observation group in a policy config.
- *
- * They ride on the group rather than the policy because only a fused group knows
- * which sensors its slots name; gathering them here keeps the slot reader from
- * having to know about groups at all.
- */
+/** Flattens the per-group sensor descriptors so the slot reader needn't know groups. */
 function collectRaycastSensors(
   config: PolicyConfig
 ): Record<string, RaycastSensorDescriptor> {
@@ -106,7 +82,7 @@ function collectRaycastSensors(
 export type ResolvedPolicy = {
   config: PolicyConfig;
   onnx: ArrayBuffer;
-  /** Traced term graphs, keyed by the config-relative path (ADR 0005 §4). */
+  /** Traced term graphs, keyed by the config-relative path. */
   graphs?: Array<{ name: string; data: ArrayBuffer }>;
   motions: Array<{ name: string; data: Bytes; default?: boolean }>;
   /** Policy-scoped custom terms (observations / terminations / commands). */
@@ -128,9 +104,9 @@ export type ResolvedScene = {
   viewer?: ViewerConfig | null;
   events?: EventConfig[] | null;
   terrainData?: TerrainData | null;
-  /** Seconds per control step (mjlab's `step_dt`); the build emits it per scene. */
+  /** Seconds per control step (mjlab's `step_dt`). */
   controlDt?: number | null;
-  /** Traced event-term graphs, keyed by the model-relative path (ADR 0005 §4). */
+  /** Traced event-term graphs, keyed by the model-relative path. */
   graphs?: Array<{ name: string; data: ArrayBuffer }>;
   /** Scene-scoped custom terms (events). */
   plugins?: EnginePlugins;
@@ -201,7 +177,7 @@ export class mjswanRuntime {
   private running: boolean;
   private timestep: number;
   private decimation: number;
-  /** Seconds per control step, from the scene config; null for a policy-less scene. */
+  /** Null for a policy-less scene. */
   private controlDt: number | null;
   private loadingScene: Promise<void> | null;
   private resizeObserver: ResizeObserver | null;
@@ -225,39 +201,17 @@ export class mjswanRuntime {
   private currentSplatTransform: SplatTransform;
   private cameraState: ViewerState;
   private commandManager: CommandManager;
-  // Instance-scoped custom terms: scene-scoped (events) and policy-scoped
-  // (observations / terminations / commands). No module-global registries.
   private scenePlugins: EnginePlugins;
   private policyPlugins: EnginePlugins;
-  /**
-   * Traced term-body graphs (ADR 0005 §4), split by lifetime: event graphs belong
-   * to the scene, everything else to the policy, so `setPolicy` replaces one
-   * without disturbing the other.
-   */
+  // Split by lifetime, so `setPolicy` leaves the scene's event graphs alone.
   private policyGraphs: OnnxSessionCache;
   private sceneGraphs: OnnxSessionCache;
-  /**
-   * The single seeded PRNG every ONNX term draws `rand` from (ADR 0005 §2), so a
-   * session replays bit-for-bit. Scene-lifetime: reseeded per `loadEnvironment`.
-   */
+  /** Shared by every ONNX term's `rand` input; reseeded per `loadEnvironment`. */
   private termRng: SeededRng;
-  /**
-   * The seed every scene's `termRng` is built from (ADR 0005 §2).
-   *
-   * Held rather than only passed on, because a caller recording a session has to
-   * be able to read back the seed the run actually used — a seed the app cannot
-   * observe is a seed it cannot persist, and replay needs the value, not the
-   * default.
-   */
+  /** Held so an app recording a session can persist the seed the run used. */
   private readonly termSeed: number;
-  /** Reads the dynamic state a traced graph declares as inputs (ADR 0005 §6). */
   private readonly readOnnxSlot: SlotReader;
-  /** Encoder bias by joint name, from the active policy config; see `SlotReaderOptions`. */
   private jointBias = new Map<string, number>();
-  /**
-   * Descriptors for structured sensors the policy's slots name (mjlab's height
-   * scan). Policy-scoped, since they come out of `policy.json`'s groups.
-   */
   private raycastSensors: Record<string, RaycastSensorDescriptor> = {};
 
   constructor(mujoco: MainModule, container: HTMLElement, termSeed = DEFAULT_TERM_SEED) {
@@ -270,8 +224,7 @@ export class mjswanRuntime {
     this.policyGraphs = new OnnxSessionCache();
     this.sceneGraphs = new OnnxSessionCache();
     this.termRng = new SeededRng(termSeed);
-    // Reads `this.mjModel`/`this.mjData` per call rather than capturing them, so a
-    // scene rebuild is picked up without rewiring every manager.
+    // Re-reads mjModel/mjData per call so a scene rebuild needs no rewiring.
     this.readOnnxSlot = createSlotReader(
       () => ({
         mujoco: this.mujoco,
@@ -389,11 +342,9 @@ export class mjswanRuntime {
   async loadEnvironment(scene: ResolvedScene): Promise<void> {
     this.scenePlugins = scene.plugins ?? {};
     this.terrainData = scene.terrainData ?? null;
-    // Read here rather than in `buildSceneFromMjz`, which is handed the model bytes
-    // alone; it needs the rate to derive `decimation` from the model's timestep.
+    // Needed before `buildSceneFromMjz`, which derives `decimation` from it.
     this.controlDt = scene.controlDt && scene.controlDt > 0 ? scene.controlDt : null;
-    // A fresh scene is a fresh run: reseed so two loads of the same scene draw the
-    // same randomness (ADR 0005 §2).
+    // Reseed so two loads of the same scene draw the same randomness.
     this.termRng = new SeededRng(this.termSeed);
     this.sceneGraphs.clear();
     await this.sceneGraphs.load(scene.graphs ?? []);
@@ -447,8 +398,7 @@ export class mjswanRuntime {
 
     this.applyViewerConfig(scene.viewer ?? null);
 
-    // `mode="startup"` terms fire once, after the model and policy exist — they
-    // write to mjData (domain randomization), so there has to be an mjData.
+    // `mode="startup"` fires once, after the model and policy exist.
     if (this.eventManager && this.mjModel && this.mjData) {
       await this.eventManager.startup(this.eventContext());
       this.mujoco.mj_forward(this.mjModel, this.mjData);
@@ -469,17 +419,12 @@ export class mjswanRuntime {
     };
   }
 
-  /**
-   * Initialize the CommandManager (clear).
-   * Commands are registered from policy config in loadPolicyConfig().
-   */
+  /** Clear only; terms are registered from the policy config in `loadPolicyConfig`. */
   private initializeCommands(): void {
     this.commandManager.clear();
   }
 
-  /**
-   * Initialize commands from policy config
-   */
+  /** Initialize commands from policy config */
   private initializeCommandsFromConfig(
     commands: CommandsConfig,
     context: CommandTermContext
@@ -489,22 +434,9 @@ export class mjswanRuntime {
     console.log('[mjswanRuntime] Commands loaded from policy config:', Object.keys(commands));
   }
 
-  /**
-   * Public method to reset the simulation state
-   * Can be called from UI components via the CommandManager
-   */
+  /** Reset the simulation state; callable from the UI via the CommandManager. */
   resetSimulation(): void {
-    // Stays synchronous — ADR 0004 keeps the engine's public verbs sync. The sim
-    // state and the policy's ORT carry reset before this returns; the ordered terms
-    // (reset events, then the policy and command resets) land after the events'
-    // inference, the accepted lag of ADR 0005 §8. The step loop awaits them instead,
-    // because there the writes have a reader in the same frame (`mj_forward`, then
-    // the command resample).
-    //
-    // The deferral is bounded by one reset's inference — tens of microseconds against
-    // a 20 ms control step — and resolves through the microtask queue even when a
-    // scene has no reset events at all, so the stored actions are zeroed well before
-    // the loop's next physics step either way.
+    // Sync by contract, so the reset terms land a microtask late; the step loop awaits.
     void this.resetSimulationState().catch((error) => {
       console.warn('[mjswanRuntime] reset terms failed:', error);
     });
@@ -575,12 +507,7 @@ export class mjswanRuntime {
       this.syncStaticBodiesFromData();
 
       this.timestep = this.mjModel.opt.timestep || 0.001;
-      // From the task, never inferred. `decimation` used to come from a hardcoded
-      // 0.02 s control step, which is right for the locomotion and manipulation tasks
-      // (0.005 x 4) and wrong for Cartpole (0.01 x 5 = 0.05) — both Cartpole variants
-      // ran 2.5x too fast, silently, because nothing about a wrong control rate
-      // raises. The build emits mjlab's `step_dt` per scene; a scene with no policy
-      // has no rate to get wrong, so it keeps the old default for viewer-only use.
+      // Never inferred: a wrong control rate runs the policy off-speed silently.
       this.decimation = Math.max(
         1,
         Math.round((this.controlDt ?? DEFAULT_VIEWER_CONTROL_DT) / this.timestep),
@@ -609,8 +536,7 @@ export class mjswanRuntime {
     await this.loadingScene;
   }
 
-  // Unpack the app-supplied .mjz bytes into the VFS, then build the scene.
-  // No scene cache to reclaim on OOM, so surface it directly as WasmMemoryLimitError.
+  // No scene cache to reclaim on OOM, so surface it as WasmMemoryLimitError directly.
   private async buildSceneFromMjz(model: ArrayBuffer): Promise<void> {
     try {
       const xmlPath = await loadMjzFile(this.mujoco, model);
@@ -675,12 +601,7 @@ export class mjswanRuntime {
     return this.commandManager;
   }
 
-  /**
-   * The seed this instance's traced terms draw their randomness from.
-   *
-   * Readable so an app can persist it with a recording; without it the only seed
-   * in play is a module default the caller can neither choose nor observe.
-   */
+  /** The seed this instance's traced terms draw from, so an app can persist it. */
   get seed(): number {
     return this.termSeed;
   }
@@ -719,10 +640,7 @@ export class mjswanRuntime {
     };
   }
 
-  /**
-   * Overwrite the camera pose. Body tracking (if any) keeps following after
-   * this — it applies a per-frame delta — and OrbitControls stay live.
-   */
+  /** Overwrite the camera pose; body tracking and OrbitControls both stay live. */
   setCameraView(view: Partial<CameraView>): void {
     const cur = this.getCameraView();
     const lookat = view.lookat ?? cur.lookat;
@@ -772,12 +690,8 @@ export class mjswanRuntime {
       const target = this.timestep * this.decimation;
 
       if (this.mjModel && this.mjData) {
-        // The loop body mirrors `ManagerBasedRlEnv.step()` (ADR 0005 §8), which
-        // spends exactly one `forward()` per step and places it deliberately.
-        // Observations read the state the *previous* iteration's forward left
-        // (the scene/policy load paths forward before the loop starts), so the
-        // cycle is the same one mjlab runs: forward → command → event → obs →
-        // action → physics → term → reset → forward.
+        // Mirrors mjlab's `ManagerBasedRlEnv.step()`, one forward per step:
+        // forward → command → event → obs → action → physics → term → reset.
         if (this.policyRunner && this.policyStateBuilder) {
           const state = this.policyStateBuilder.build();
           const obs = await this.policyRunner.collectObservationsByKey(state);
@@ -785,48 +699,29 @@ export class mjswanRuntime {
         }
         this.executeSimulationSteps();
 
-        // Terminations read pre-forward mjData, so derived quantities (`xpos`,
-        // `xquat`, `site_xpos`, `cvel`, `sensordata`) lag `qpos`/`qvel` by one
-        // physics substep — `mj_step` runs its forward kinematics *before*
-        // integrating. mjlab accepts exactly this staleness for the same reason
-        // (its `step()` docstring: consistent every step, so the MDP stays
-        // well-defined) rather than paying for a second forward.
+        // Pre-forward, as in mjlab: derived state lags by one substep, consistently.
         if (this.terminationManager && this.policyStateBuilder) {
           const postState = this.policyStateBuilder.build();
           const result = this.terminationManager.evaluate(postState, target);
           if (result.done) {
-            // Awaited: everything in here writes state the `mj_forward` below is
-            // what publishes — the reset events, and the command resample that now
-            // runs with them rather than after the forward (see `resetChain`).
-            //
-            // Caught so one failing graph costs a reset, not the run: `resetChain`
-            // propagates deliberately, and the step loop is the caller that has to
-            // keep going.
+            // Awaited so the writes precede the forward; caught so a failure costs a reset.
             try {
               await this.resetSimulationState({ forward: false });
             } catch (error) {
               console.warn('[mjswanRuntime] reset terms failed:', error);
             }
-            // Last, as in mjlab (`_reset_idx` ends with `termination_manager.reset`);
-            // everything before it is ordered inside `resetSimulationState`.
+            // Last, as in mjlab's `_reset_idx`.
             this.terminationManager.reset();
           }
         }
 
-        // The one forward. It resolves the decimation loop's staleness and picks
-        // up a reset's writes, so everything after it reads fresh derived state.
+        // The one forward: clears the loop's staleness and publishes a reset's writes.
         this.mujoco.mj_forward(this.mjModel, this.mjData);
         this.updateCachedState();
 
-        // After the forward, as in mjlab: a command term reading `site_xpos` or a
-        // traced interval event reading `root_link_vel_w` would otherwise see the
-        // pre-integration values, and on a reset frame the pre-reset ones.
         this.commandManager.update(target);
         this.commandManager.updateDebugVisuals();
-        // Advances `mode="interval"` timers (mjlab's mid-episode randomization) and
-        // the reset gates' step counters. Awaited so the mode's terms resolve in config
-        // order, and caught for the same reason the reset block is: one failing graph
-        // should cost a frame's events, not the run.
+        // Awaited so `mode="interval"` terms resolve in config order.
         try {
           await this.eventManager?.tick(target, this.eventContext());
         } catch (error) {
@@ -856,8 +751,7 @@ export class mjswanRuntime {
     this.policyGraphs.clear();
     this.jointBias.clear();
     this.raycastSensors = {};
-    // Note: eventManager, sceneGraphs and terrainData are scene-level state set in
-    // loadEnvironment; do not clear here.
+    // eventManager, sceneGraphs and terrainData are scene-level; do not clear here.
 
     // Clear existing commands when switching policies
     this.commandManager.clear();
@@ -867,10 +761,7 @@ export class mjswanRuntime {
     }
 
     if (!this.mjModel || !this.mjData) {
-      // Stays a warning while the load failures below throw: this is a caller-ordering
-      // precondition, not a bad bundle. `loadEnvironment` builds the model before it
-      // reaches here, and every `setPolicy` caller loads a scene first, so it is
-      // unreachable from the shipped app.
+      // A caller-ordering mistake, not a bad bundle — unreachable from the app.
       console.warn('Policy config loaded before MuJoCo model is ready.');
       return;
     }
@@ -880,8 +771,7 @@ export class mjswanRuntime {
       await this.policyGraphs.load(policy.graphs ?? []);
       this.jointBias = buildJointBias(config);
       this.raycastSensors = collectRaycastSensors(config);
-      // Motion metadata lives in policy.json; the app supplies the bytes as
-      // MotionInput[]. Merge the bytes onto each motion entry by name.
+      // Metadata comes from policy.json, bytes from the app; merge them by name.
       if (Array.isArray(config.motions)) {
         const dataByName = new Map(policy.motions.map((m) => [m.name, m.data]));
         config.motions = config.motions.map((motion) => ({
@@ -897,9 +787,7 @@ export class mjswanRuntime {
       }
       this.initialQpos = Array.isArray(config.initial_qpos) ? (config.initial_qpos as number[]) : null;
       this.initialQvel = Array.isArray(config.initial_qvel) ? (config.initial_qvel as number[]) : null;
-      // `resetSimulationState` does the forward; a second one here would be
-      // redundant work on every policy load. Awaited — this path is already async,
-      // so the reset terms may as well land before the commands are rebuilt below.
+      // Does its own forward; awaited so the reset terms precede the rebuild below.
       await this.resetSimulationState();
 
       // Initialize commands from policy config if present
@@ -912,7 +800,7 @@ export class mjswanRuntime {
           bodies: this.bodies,
           mujocoRoot: this.mujocoRoot,
           requestReset: () => this.resetSimulation(),
-          // Traced commands (ADR 0005 §3) run a graph per frame off these.
+          // Traced commands run a graph per frame off these.
           rng: this.termRng,
           onnxSessions: this.policyGraphs,
           readOnnxSlot: this.readOnnxSlot,
@@ -944,10 +832,8 @@ export class mjswanRuntime {
           locomotion: LocomotionPolicy,
         },
         observations: { ...Observations, ...this.policyPlugins.observations },
-        // Expose the app-supplied clips to custom terms (they read bytes via
-        // runner.getMotionData instead of fetching — ADR 0004 §4/§10).
+        // Custom terms read clip bytes via `runner.getMotionData` rather than fetching.
         motions: policy.motions,
-        // Traced observation terms (ADR 0005 §4): a graph each, fed from the sim.
         onnxSessions: this.policyGraphs,
         readOnnxSlot: this.readOnnxSlot,
       });
@@ -975,14 +861,6 @@ export class mjswanRuntime {
       this.policyRunner.reset(state);
       this.policyControl = this.buildPolicyControl(config, runner, this.policyStateBuilder);
 
-      // A decimation override inferred from an `fps` field on observation entries used
-      // to sit here. It was dead twice over: no observation entry has ever carried
-      // `fps` (the only `fps` the build emits is motion-clip metadata), and the scan
-      // only walked array-shaped groups while a fused group — mandatory for v1, ADR
-      // §4 — is an object. Being the sole writer of the old `policyCtrlDt`, it also
-      // meant the hardcoded 0.02 s was the only path. The rate now comes from the
-      // scene config, resolved before the model is built.
-
       // Initialize termination manager if termination config is present
       if (config.terminations && Object.keys(config.terminations).length > 0) {
         this.terminationManager = new TerminationManager(
@@ -1005,17 +883,8 @@ export class mjswanRuntime {
         pdEnabled: this.policyControl !== null,
       });
     } catch (error) {
-      // Rethrown, not warned. Everything inside this try is load-bearing for the
-      // policy: the observation groups, the action control map, the termination
-      // manager, the network itself. Swallowing meant a scene reported a successful
-      // load and then ran with no policy at all — and it disarmed the loud failures
-      // the binding checks depend on (a missing observation graph, a
-      // `generated_commands` name no command term provides), turning "this bundle is
-      // wrong" into one console line.
-      //
-      // The fields are assigned as the load progresses, so a failure partway leaves a
-      // runner with no ONNX module, or a module with no control map. Clear them: either
-      // a policy loaded or there is none, never half of one.
+      // Everything above is load-bearing, so rethrow rather than report success, and
+      // clear the partially-assigned fields so a failure leaves no policy, not half of one.
       this.policyRunner = null;
       this.policyStateBuilder = null;
       this.policyControl = null;
@@ -1069,13 +938,11 @@ export class mjswanRuntime {
 
       const kp = this.normalizeControlArray(configStiffness, n, 0.0, subsetJointNames);
       const kd = this.normalizeControlArray(configDamping, n, 0.0, subsetJointNames);
-      // Pattern-keyed, so resolved by `resolveActionClip` rather than by the
-      // exact-name `normalizeControlArray` its siblings above use.
+      // Pattern-keyed, unlike the exact-name siblings above.
       const { clipLo, clipHi } = resolveActionClip(configClip, subsetJointNames, n);
 
-      // Detect per-actuator whether the scene uses position actuators (biastype=affine,
-      // ctrl=target_pos, PD handled internally by MuJoCo) or motor actuators
-      // (biastype=none, ctrl=torque, PD must be computed externally from kp/kd).
+      // Position actuators (biastype=affine) take a target and run their PD in MuJoCo;
+      // motor actuators (biastype=none) take a torque and need the PD computed here.
       const positionActuator: boolean[] = mapping.ctrlAdr.map((adr) => {
         if (adr < 0 || !this.mjModel) return false;
         return this.mjModel.actuator_biastype[adr] === affineBiasValue;
@@ -1280,18 +1147,11 @@ export class mjswanRuntime {
 
   /**
    * Put the sim back to its initial state, fire `mode="reset"` events, then reset
-   * the command terms — in that order, which is mjlab's (see `resetChain`).
+   * the command terms — mjlab's order (see `resetChain`).
    *
-   * Async because the ordering is: the events' writes have to land before anything
-   * reads or overwrites them. The sim state and the policy's own ORT carry still
-   * reset **synchronously**, before the first `await`, so a caller that cannot await
-   * (the public `resetSimulation()`) still gets an immediately-reset sim and only the
-   * term half arrives late.
-   *
-   * `forward: false` when the caller runs its own `mj_forward` right after — the
-   * step loop does, because ADR 0005 §8 allows exactly one forward per step and
-   * mjlab spends it *after* the reset block (`ManagerBasedRlEnv.step`), covering
-   * the reset write and the decimation loop's one-substep staleness in one call.
+   * The sim state resets synchronously, before the first `await`, so a caller that
+   * cannot await still gets an immediately-reset sim. Pass `forward: false` when the
+   * caller runs its own `mj_forward` right after.
    */
   private async resetSimulationState({ forward = true }: { forward?: boolean } = {}): Promise<void> {
     if (!this.mjModel || !this.mjData) {
@@ -1314,9 +1174,7 @@ export class mjswanRuntime {
         qvel[i] = this.initialQvel[i];
       }
     }
-    // The policy's own carry, reset with the sim state rather than with the terms:
-    // it reads nothing from the scene, so there is no order to respect and a caller
-    // that cannot await should still see it cleared immediately.
+    // Reset with the sim state, not the terms: it reads nothing from the scene.
     if (this.onnxModule) {
       this.onnxInputDict = this.onnxModule.initInput();
     }
@@ -1328,13 +1186,11 @@ export class mjswanRuntime {
       policy: this.policyRunner,
       commands: this.commandManager,
       context: this.eventContext(),
-      // Read after the events land, which is why it is a thunk. Null on the
-      // `loadPolicyConfig` path, where no runner exists yet.
+      // A thunk so it reads state after the events land.
       buildState: () => this.policyStateBuilder?.build(),
     });
 
-    // Re-checked rather than relying on the narrowing above: the scene can be
-    // disposed while the reset events are in flight.
+    // Re-checked: the scene can be disposed while the reset events are in flight.
     if (forward && this.mjModel && this.mjData) {
       this.mujoco.mj_forward(this.mjModel, this.mjData);
       this.updateCachedState();
@@ -1474,8 +1330,7 @@ export class mjswanRuntime {
     const f = new THREE.Vector3(force.x, force.y, force.z);
     const torque = new THREE.Vector3().crossVectors(r, f);
 
-    // Set xfrc_applied
-    // xfrc_applied: (nbody, 6) = [fx, fy, fz, tx, ty, tz] for each body
+    // Set xfrc_applied xfrc_applied: (nbody, 6) = [fx, fy, fz, tx, ty, tz] for each body
     const offset = bodyId * 6;
     this.mjData.xfrc_applied[offset + 0] = force.x;
     this.mjData.xfrc_applied[offset + 1] = force.y;
@@ -1645,8 +1500,7 @@ export class mjswanRuntime {
     this.policyRunner = null;
     this.policyStateBuilder = null;
 
-    // ONNX session, splat, and collider are not cache-managed; free them here
-    // or they leak across navigations (a live splat worker freezes the tab).
+    // Not cache-managed, so they leak across navigations unless freed here.
     if (this.onnxModule) {
       this.onnxModule.dispose();
       this.onnxModule = null;
@@ -1670,9 +1524,8 @@ export class mjswanRuntime {
     this.mjData = null;
     this.mjModel = null;
 
-    // NOTE: Do NOT dispose Three.js resources here as they may be cached
-    // The cache manager will handle their disposal when evicting
-    // Just clear references
+    // NOTE: Do NOT dispose Three.js resources here as they may be cached The cache manager
+    // will handle their disposal when evicting Just clear references
     // this.disposeThreeJSResources();
 
     window.removeEventListener('resize', this.onWindowResize);

@@ -24,10 +24,9 @@ export default defineConfig({
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
-          // Escape hatch for a sandbox whose pre-installed Chromium does not match
-          // the build this Playwright version wants to download (e.g. a CI container
-          // that ships one at a fixed path). Unset locally — Playwright resolves its
-          // own browser.
+          // Escape hatch for a sandbox whose pre-installed Chromium does not match the build
+          // this Playwright version wants to download (e.g. a CI container that ships one at
+          // a fixed path). Unset locally — Playwright resolves its own browser.
           ...(process.env.PW_CHROMIUM_PATH
             ? { executablePath: process.env.PW_CHROMIUM_PATH }
             : {}),

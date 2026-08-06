@@ -65,8 +65,7 @@ export type PolicyConfig = {
   damping?: number[] | number;
   control_type?: string;
   onnx?: {
-    // ONNX weights arrive as bytes via PolicyInput.onnx; only the io-key metadata
-    // is read from policy.json.
+    // Weights arrive as bytes via PolicyInput.onnx; policy.json holds only the io keys.
     meta?: {
       in_keys?: string[];
       out_keys?: (string | string[])[];

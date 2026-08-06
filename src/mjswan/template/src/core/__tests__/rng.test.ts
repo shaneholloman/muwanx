@@ -99,27 +99,18 @@ describe('SeededRng', () => {
 // ---------------------------------------------------------------------------
 // What a seed alone does *not* buy.
 //
-// ADR 0005 §2 wants a recorded session to replay, and the tests above establish the
-// half that holds: the sequence is a pure function of the seed, so startup domain
-// randomization and every resample schedule reproduce exactly. *Bit-for-bit* replay
-// does not hold, and is deliberately not pursued — it is not simultaneously
-// satisfiable with §8's non-blocking async boundary (see the §2 rows in the
-// companion brief). These tests pin the mechanism so the limitation stays visible
-// rather than being rediscovered as a bug.
-//
-// Every traced term draws from *one* shared stream (`runtime.termRng`), and each of
-// `OnnxCommand.update`, `OnnxEvent.fire`, `OnnxTermination.evaluate` and
-// `FusedTermination.kick` skips its run when a previous one is still in flight
-// ("skip, never queue" — the async boundary ADR §8 chose over blocking the loop).
-// Whether a given frame skips depends on how long ORT took against the frame
-// budget, which is wall-clock and therefore machine-dependent.
+// The tests above establish the half that holds: the sequence is a pure function of the
+// seed, so startup DR and every resample schedule reproduce. *Bit-for-bit* replay does
+// not, and is not pursued — it is not satisfiable alongside the non-blocking async
+// boundary, since every traced term draws from one shared stream and each skips its run
+// while a previous one is in flight. Whether a frame skips is wall-clock, so
+// machine-dependent. Pinned here so the limitation stays visible.
 // ---------------------------------------------------------------------------
 
 describe('SeededRng — shared-stream coupling (documents a replay limitation)', () => {
   it('shifts every later draw when one consumer skips a frame', () => {
-    // Two terms alternating draws off one stream, and the same two with term A
-    // skipping a single frame — as it would on a machine where that frame's
-    // inference had not settled.
+    // Two terms alternating draws off one stream, and the same two with term A skipping a
+    // single frame — as it would on a machine where that frame's inference had not settled.
     const drawBoth = (skipFrame: number | null): number[] => {
       const rng = new SeededRng(4242);
       const fromB: number[] = [];
@@ -132,8 +123,7 @@ describe('SeededRng — shared-stream coupling (documents a replay limitation)',
 
     const steady = drawBoth(null);
     const withSkip = drawBoth(2);
-    // Frames before the skip agree; everything after it is a different number for
-    // a term that did nothing differently.
+    // Frames before the skip agree; after it, a term that did nothing differently diverges.
     expect(withSkip.slice(0, 2)).toEqual(steady.slice(0, 2));
     expect(withSkip.slice(2)).not.toEqual(steady.slice(2));
   });

@@ -11,9 +11,7 @@ import json
 
 import pytest
 
-# The mjswan.compile package imports torch at load time (it is the build-time
-# tracer); this serialization logic is pure-Python but still needs the package to
-# import. Fast (no env build), skipped when the examples extras are absent.
+# Pure-Python serialization, but `mjswan.compile` imports torch at load time.
 torch = pytest.importorskip("torch")
 
 from mjswan.compile import (  # noqa: E402
@@ -63,26 +61,22 @@ def test_command_config_shape():
     cfg = command_config(
         export, onnx_ref="command/twist.onnx", resampling_time_range=(3.0, 8.0)
     )
-    # "name" is the CommandManager registry key (always "OnnxCommand" — the one
-    # generic handler); the term's own id ("twist") is the caller's dict key in
-    # PolicyConfig.commands, kept here only as "term_id" for diagnostics.
+    # "name" is the registry key (always "OnnxCommand"); the term's own id is the
+    # caller's dict key, kept as "term_id" for diagnostics.
     assert cfg["name"] == "OnnxCommand"
     assert cfg["term_id"] == "twist"
     assert cfg["onnx"] == "command/twist.onnx"
     assert cfg["command_field"] == "vel_command_b"
     assert cfg["rand_dim"] == 6
     assert cfg["resampling_time_range"] == [3.0, 8.0]
-    # dynamic runtime read threaded as a declared input slot; `input` names the
-    # graph input to feed it as, so the runtime never re-derives it
+    # `input` names the graph input, so the runtime never re-derives it
     assert {
         "entity": "robot",
         "field": "heading_w",
         "input": "robot__heading_w",
     } in cfg["input_slots"]
-    # Every state field carries shape + dtype + init (ADR 0005 §3): the runtime
-    # allocates from the first two and starts the term where the build found it from
-    # the third, rather than zero-filling and relying on the first resample to
-    # overwrite every field.
+    # The runtime allocates from shape + dtype and starts the term at `init`, rather
+    # than zero-filling and relying on the first resample.
     for sf in cfg["state_fields"]:
         assert set(sf) == {"name", "shape", "dtype", "init"}
         expected = 1
@@ -146,8 +140,7 @@ def test_slot_to_json_entity_data():
 
 
 def test_slot_to_json_sensor():
-    # A whole-sensor read (mjlab's builtin_sensor) is its own slot shape, and the
-    # MJCF path in the name is folded to an identifier for the graph input.
+    # A whole-sensor read is its own slot shape, its MJCF path folded to an identifier.
     assert slot_to_json((_SENSOR_NS, "robot/imu_lin_vel")) == {
         "sensor": "robot/imu_lin_vel",
         "input": "sensor__robot_imu_lin_vel",
@@ -191,9 +184,8 @@ def test_slots_json_drops_a_slot_the_exporter_folded_away():
 
 
 def test_unknown_data_fields_default_to_dynamic():
-    # Baking a field that actually varies is silent corruption, so only the
-    # model-derived constants are listed and anything else errs toward dynamic.
-    # (`site_pos_w` was silently frozen while the allowlist ran the other way.)
+    # Only model-derived constants are listed, so anything else errs toward dynamic:
+    # baking a field that varies is silent corruption.
     assert _is_dynamic_field("site_pos_w")
     assert _is_dynamic_field("some_future_mjlab_field")
     assert not _is_dynamic_field("default_joint_pos")
@@ -227,10 +219,8 @@ def test_write_command_artifact(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# A native command's traced reset graph (ADR 0005 §3): `MotionCommand`'s
-# reference-state-initialization jitter. The motion player stays native — a clip
-# lookup is not term math — while the `sample_uniform` around it is traced, so the
-# browser needs no hand-written randomness for it.
+# A native command's traced reset graph: `MotionCommand`'s RSI jitter. The clip lookup
+# stays native, the `sample_uniform` around it is traced.
 # ---------------------------------------------------------------------------
 
 
@@ -295,16 +285,13 @@ def test_native_command_emits_a_traced_reset_graph(tmp_path):
     # The native term's own params survive untouched...
     assert entry["name"] == "TrackingCommand"
     assert entry["sampling_mode"] == "start"
-    # ...and the graph rides alongside them in exactly the shape `OnnxEvent`
-    # consumes, so the runtime needs no second way to evaluate a graph that draws
-    # `rand` and emits entity writes.
+    # ...and the graph rides alongside in the shape `OnnxEvent` consumes.
     graph = entry["reset_graph"]
     assert graph["mode"] == "reset"
     assert graph["onnx"] == "command/motion_reset.onnx"
     assert graph["rand_dim"] == 2  # one draw per joint
-    # The bounds the body drew from, per element. The graph consumes the sampler's
-    # *output*, so it carries no bounds itself and the runtime would otherwise draw
-    # [0, 1) — a whole radian of joint jitter where the term asked for ±0.1.
+    # The graph consumes the sampler's output, so without these the runtime draws
+    # [0, 1) — a radian of joint jitter where the term asked for ±0.1.
     flat = [v for pair in graph["rand_ranges"] for v in pair]
     assert flat == pytest.approx([-0.1, 0.1, -0.1, 0.1], abs=1e-7)
     assert [t["kind"] for t in graph["write_targets"]] == ["joint_state"]
@@ -346,11 +333,9 @@ def test_command_without_a_reset_trace_is_unchanged(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# An observation term the tracer cannot follow must fail the build, not degrade.
-# Both degradations shipped a silently-wrong policy: dropping the term shortens
-# the vector the network was trained on, and baking a time-varying term freezes an
-# input. mjlab's `height_scan` hit the second one on both Velocity-Rough tasks —
-# 187 frozen terrain heights, fed forever, with nothing in the output saying so.
+# An untraceable observation must fail the build: dropping it shortens the vector the
+# network was trained on, and baking it freezes a live input (187 frozen terrain heights,
+# in `height_scan`'s case).
 # ---------------------------------------------------------------------------
 
 
@@ -416,8 +401,8 @@ def test_term_reading_nothing_is_a_constant_not_untraceable():
 
     with pytest.raises(ConstantTerm) as excinfo:
         trace_term(_reads_nothing, {}, _opaque_state_env(), name="padding")
-    # A `ConstantTerm` is safe to bake; an `UntraceableTerm` is not. They are
-    # indistinguishable from "no graph inputs" alone, hence two types.
+    # A `ConstantTerm` is safe to bake, an `UntraceableTerm` is not, and "no graph
+    # inputs" alone cannot tell them apart.
     assert not isinstance(excinfo.value, UntraceableTerm)
 
 
@@ -530,10 +515,8 @@ def test_structured_sensor_fields_become_one_slot_each():
 
 
 # ---------------------------------------------------------------------------
-# Termination fusion (ADR 0005 §4). The payoff scales with the traced-term count:
-# mjlab's locomotion and manipulation tasks have 0-1, but the tracking tasks
-# behind `examples/mjlab/g1_spinkick` and `unitree_rl` have three
-# (`anchor_pos`, `anchor_ori`, `ee_body_pos`) beside the native `time_out`.
+# Termination fusion, whose payoff scales with the traced-term count: the locomotion and
+# manipulation tasks have 0-1, the tracking tasks three beside the native `time_out`.
 # ---------------------------------------------------------------------------
 
 
@@ -594,17 +577,14 @@ def test_terminations_fuse_into_one_graph_with_one_lane_per_term(tmp_path):
         tmp_path,
     )
 
-    # The native marker keeps its own entry — it reads no state, so there is
-    # nothing to fuse it into.
+    # The native marker keeps its own entry: it reads no state to fuse.
     assert entries["time_out"]["native"] == "elapsed_s >= episode_length_s"
     assert entries["time_out"]["episode_length_s"] == 20.0
 
     fused = entries[FUSED_TERMINATION_KEY]
     assert fused["fused"] == "term/terminations.onnx"
     assert (tmp_path / fused["fused"]).exists()
-    # One lane per term, in graph output order, each carrying whether it is a
-    # truncation — the manager needs both to report `reasons` and split
-    # terminated from truncated.
+    # One lane per term in graph output order, each flagged truncation or not.
     assert fused["lanes"] == [
         {"name": "too_low", "time_out": False},
         {"name": "tipped", "time_out": False},
@@ -663,17 +643,13 @@ def test_fused_lanes_match_the_terms_run_individually(tmp_path):
 
     assert export.lanes == ["too_low", "never", "tipped"]
     assert lanes.tolist() == expected
-    # And the lanes genuinely differ, so agreement is not a coincidence: the
-    # robot is at z=0.4, below 0.5 but above 0.1, and is upright.
+    # The lanes differ, so agreement is no coincidence: z=0.4, upright.
     assert expected == [True, False, False]
 
 
 # ---------------------------------------------------------------------------
-# Stateful-term initial values (ADR 0005 §3): "names, shapes, *and initial
-# values*". Only the first two were emitted, so the runtime zero-filled — correct
-# for a term whose first resample overwrites every field, which is every reference
-# task, and wrong for one carrying a counter or a held value. That the reference
-# tasks all start at zero is exactly why the omission was invisible.
+# Stateful-term initial values: without them the runtime zero-fills, which is wrong for
+# a term carrying a counter or a held value rather than resampling every field.
 # ---------------------------------------------------------------------------
 
 
@@ -684,8 +660,7 @@ class _StatefulTerm:
 
     def __init__(self):
         self.cfg = type("_Cfg", (), {"entity_name": None})()
-        # A held offset and a latched flag: neither is re-drawn on resample, so
-        # zero-filling them browser-side would start the term somewhere else.
+        # Neither is re-drawn on resample, so zero-filling would start the term elsewhere.
         self.bias = torch.tensor([[0.25, -0.5, 1.75]])
         self.latched = torch.tensor([True])
         self.command = torch.tensor([[0.0, 0.0, 0.0]])
@@ -717,8 +692,7 @@ def test_traced_state_fields_carry_the_terms_initial_values(tmp_path):
     # A bool field round-trips as a bool rather than as 1.0.
     assert specs["latched"]["init"] == [True]
     assert specs["latched"]["dtype"] == "bool"
-    # A field the resample does overwrite still reports its pre-resample value;
-    # the runtime needs somewhere to start on frame 0 either way.
+    # Even an overwritten field reports its pre-resample value: frame 0 needs a start.
     assert specs["command"]["init"] == [0.0, 0.0, 0.0]
 
 

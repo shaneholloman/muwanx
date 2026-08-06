@@ -1,32 +1,18 @@
-"""Dump an N-step rollout-parity fixture from live mjlab tasks.
+"""Dump an N-step rollout-parity fixture from live mjlab tasks, for
+``rolloutParity.test.ts`` — the only check that runs the whole chain composed:
+reader → fused graph → clip/scale → concat → group vector, and reader → termination
+graph → lanes → OR-reduce.
 
-ADR 0005's first acceptance criterion is an N-step rollout whose observations and
-termination flags match the mjlab reference. Everything shipped so far verifies a
-*piece*: the Python harness proves each traced graph reproduces its mjlab term,
-``slotReaderParity`` proves the reader feeds those graphs mjlab's numbers, and the
-manager unit tests prove the pipeline arithmetic. Nothing checked the whole chain
-composed — reader → fused graph → clip/scale → concat → group vector, and reader →
-termination graph → lanes → OR-reduce — which is where a layout offset or a
-misordered lane would hide.
+**States are replayed, not co-simulated.** mjlab integrates with ``mujoco_warp`` and
+the browser with MuJoCo's WASM, so a free-running comparison would measure MuJoCo
+against itself. Each step's ``mjModel``/``mjData`` arrays are captured alongside
+mjlab's own observation vector and termination verdicts *at that state*.
 
-**Why states are replayed rather than co-simulated.** mjlab integrates with
-``mujoco_warp``; the browser runs MuJoCo's own WASM build. Two different
-integrators do not agree step-for-step, so a free-running trajectory comparison
-would measure MuJoCo against itself, not mjswan against mjlab. Instead each step's
-mjlab state is captured and replayed: the fixture carries the ``mjModel``/``mjData``
-arrays the reader indexes at that step, and mjlab's own observation vector and
-termination verdicts *at that same state*. That isolates exactly the layer mjswan
-owns. (Physics is MuJoCo's own code on both sides and is out of scope for this
-comparison.)
+Verdicts are re-evaluated at the recorded state rather than taken from
+``env.step()``, which computes them one substep stale — a step-loop concern the
+runtime reproduces, not a question about the graph.
 
-Termination verdicts are evaluated fresh at the recorded state rather than taken
-from ``env.step()``'s return, because mjlab computes terminations *before* its
-single ``forward()`` and therefore on derived quantities one substep stale. That
-staleness is a step-loop concern (the runtime reproduces it — see the §8 row in the
-companion brief), not a question about whether the graph matches the term.
-
-Only the group mjswan actually ships is dumped (mjlab's ``actor``, which the
-examples map to ``policy``); ``critic`` is training-only and never reaches a bundle.
+Only ``actor`` is dumped; ``critic`` is training-only and never reaches a bundle.
 
 Regenerate with::
 
@@ -49,16 +35,12 @@ os.environ.setdefault("MUJOCO_GL", "disable")
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "src/mjswan/template/src/core/engine/__tests__/fixtures/rollout"
 
-# Cartpole is ADR 0005's named acceptance criterion and the minimal shape (two
-# entity-data slots, one native termination). G1-Velocity-Flat is the wide one:
-# builtin-sensor slots, `joint_pos_biased` (so the randomized encoder bias has to
-# travel), seven terms in one 99-wide fused group, native `prev_action`/`command`
-# inputs, and a traced `fell_over` termination beside the native `time_out`.
+# Cartpole is the minimal shape (two entity-data slots, one native termination);
+# G1-Velocity-Flat the wide one (builtin sensors, `joint_pos_biased`, seven terms in a
+# 99-wide fused group, native inputs, a traced termination beside `time_out`).
 #
-# Deliberately excluded, each already covered on its own: Velocity-Rough adds a
-# `height_scan` raycast slot (`raycast.test.ts`, against the real WASM) and
-# Lift-Cube-Yam adds a command-state slot needing a live `OnnxCommand`
-# (`OnnxCommand` tests). Both need a stub the fixture format does not carry yet.
+# Velocity-Rough's raycast slot and Lift-Cube-Yam's command-state slot are covered by
+# `raycast.test.ts` and the `OnnxCommand` tests; both need a stub this format lacks.
 TASKS = ("Mjlab-Cartpole-Balance", "Mjlab-Velocity-Flat-Unitree-G1")
 
 STEPS = 20
@@ -76,11 +58,8 @@ MODEL_ARRAYS = (
     "sensor_adr",
     "sensor_dim",
 )
-# `mjData` fields, sliced to env 0 (the browser runs a single env), each paired
-# with the `mjModel` count that decides whether the model has any of that element.
-# The count is consulted rather than caught: mjlab wraps warp arrays for torch, and
-# warp cannot give a torch dtype for a *zero-length vector* array — Cartpole has no
-# sites, so reading `site_xpos` raises instead of returning empty.
+# `mjData` fields sliced to env 0, each with the `mjModel` count for that element — consulted
+# rather than caught, since warp raises on a zero-length vector array (Cartpole has no sites).
 DATA_ARRAYS = (
     ("qpos", "nq"),
     ("qvel", "nv"),
@@ -154,11 +133,8 @@ def _native_inputs(env: Any, group_entry: dict[str, Any]) -> dict[str, list[floa
     return natives
 
 
-# Root pitches to sweep, in radians. Chosen to bracket an orientation limit from
-# both sides and to come back under it: a term that latched once it fired, or one
-# whose threshold sat in the wrong place, would show up as the wrong steps firing.
-# mjlab's `bad_orientation` compares `projected_gravity_b`, so pitching the root is
-# the shortest route to flipping it.
+# Root pitches bracketing an orientation limit and coming back under it, so a latching term
+# or a misplaced threshold fires on the wrong steps.
 TILT_PITCHES = (0.0, 0.4, 1.2, 1.6, 2.2, 2.8, 0.2)
 
 
@@ -205,8 +181,7 @@ def _dump_task(task_id: str, out_dir: Path) -> dict[str, Any]:
         env = ManagerBasedRlEnv(cfg, device="cpu")
         env.reset()
 
-    # The same serializers the Builder runs, writing the same graph bytes a bundle
-    # would carry — so the test loads what really ships, not a stand-in.
+    # The Builder's own serializers, so the test loads the bytes that really ship.
     group_entry = serialize_observation_group(
         _adapt_obs_group(cfg.observations["actor"]), env, out_dir, group_name="policy"
     )
@@ -248,16 +223,10 @@ def _dump_task(task_id: str, out_dir: Path) -> dict[str, Any]:
         env.step(torch.tensor([action], dtype=torch.float32))
         record(action)
 
-    # A natural rollout keeps the robot upright, so every termination reads False
-    # and the comparison would only prove the graph raises no false positives — a
-    # graph hardwired to False would pass it. Tilting the root through the limit
-    # makes an orientation term fire, so both polarities are covered.
+    # A natural rollout stays upright, so a graph hardwired to False would pass; tilt past it.
     _append_tilt_sweep(env, cfg, record, num_actions)
 
-    # `joint_pos_biased` observes `joint_pos + encoder_bias`, and the walking tasks
-    # randomize that bias at startup — a bundle ships it in `policy.json`, so the
-    # reader has to be handed the same lookup. Keyed by mjlab's unprefixed joint
-    # name, which is unique across a scene.
+    # The walking tasks randomize `encoder_bias`, so the reader needs the same lookup.
     encoder_bias: dict[str, float] = {}
     for entity_name in env.scene.entities:
         entity = env.scene[entity_name]

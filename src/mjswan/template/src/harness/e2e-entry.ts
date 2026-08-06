@@ -36,8 +36,7 @@ async function main(): Promise<void> {
   const sceneUrl = new URLSearchParams(location.search).get('scene') ?? '/fixtures/container.mjz';
   const states: MjswanEngineState[] = [];
 
-  // A caller-chosen seed, so the test can check the value survives the whole
-  // option → runtime → snapshot path rather than only that *some* seed exists.
+  // Caller-chosen, so the test checks the value survives option → runtime → snapshot.
   const engine = await createEngine(element, { termSeed: HARNESS_SEED });
   engine.subscribe((state) => states.push(state));
 

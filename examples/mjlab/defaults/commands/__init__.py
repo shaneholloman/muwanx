@@ -30,10 +30,8 @@ from mjswan import CommandBinding, register_command
 from mjswan.command import _serialize_motion_command
 
 # ---------------------------------------------------------------------------
-# LiftingCommand (Lift-Cube-Yam) — traces directly, no override needed.
-# `_resample_command` writes the cube's pose/velocity via
-# `write_root_link_pose_to_sim`/`write_root_link_velocity_to_sim`
-# (captured as `entity_write`, brief §3b); `target_pos` is the only state.
+# LiftingCommand (Lift-Cube-Yam) — traces directly. `_resample_command`'s pose/velocity
+# writes are captured as `entity_write`, and `target_pos` is the only state.
 # ---------------------------------------------------------------------------
 
 
@@ -58,12 +56,9 @@ register_command(
 
 
 # ---------------------------------------------------------------------------
-# UniformVelocityCommand (velocity tasks) — needs a trace-friendly override:
-# the real `_resample_command` uses tensor-method RNG (`r.uniform_()`, invisible
-# to the sample_uniform spy) and `_update_command` uses `.nonzero()` + index
-# assignment (data-dependent control flow). The override below is numerically
-# equivalent at N=1, using `sample_uniform` (spyable) and `torch.where`
-# (branch-free) instead (ADR 0005 §3a).
+# UniformVelocityCommand (velocity tasks) — needs a trace-friendly override: the real
+# `_resample_command` uses RNG the spy cannot see and `_update_command` branches on data.
+# The override is equivalent at N=1, via `sample_uniform` and `torch.where`.
 # ---------------------------------------------------------------------------
 
 
@@ -189,9 +184,7 @@ register_command(
 
 
 # ---------------------------------------------------------------------------
-# MotionCommand (tracking tasks) — the motion player stays native (the clip
-# lookup is a data lookup, not term math), but its *reference-state
-# initialization* randomization is term math and is traced.
+# MotionCommand (tracking tasks) — the clip lookup stays native, the RSI jitter is traced.
 # ---------------------------------------------------------------------------
 
 _POSE_KEYS = ("x", "y", "z", "roll", "pitch", "yaw")
@@ -258,9 +251,7 @@ def motion_rsi_offset(
     root_lin_vel = asset.data.root_link_lin_vel_w + velocity_samples[:, 0:3]
     root_ang_vel = asset.data.root_link_ang_vel_w + velocity_samples[:, 3:6]
 
-    # Joint positions: one offset per joint, then mjlab's clip to the soft limits.
-    # The TypeScript this replaces omitted that clip, so a large enough jitter
-    # could seed the episode outside the robot's own limits.
+    # One offset per joint, then mjlab's clip — without it a large jitter starts out of range.
     joint_pos = asset.data.joint_pos + sample_uniform(
         joint_position_range[0],
         joint_position_range[1],
@@ -303,10 +294,7 @@ def _motion_rsi_trace(cfg: Any) -> tuple[Any, dict[str, Any]] | None:
     )
 
 
-# `MotionCommandCfg` is already bound to the native `TrackingCommand` in
-# `mjswan.command`; re-registering here adds the traced reset graph without
-# disturbing that. The motion player stays native — the clip lookup is a data
-# lookup — while the jitter around it becomes mjlab's own math in ONNX.
+# `MotionCommandCfg` already binds to the native `TrackingCommand`; this adds its reset graph.
 register_command(
     "MotionCommandCfg",
     CommandBinding(

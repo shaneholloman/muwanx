@@ -48,10 +48,7 @@ function contextFor(task: TaskFixture): SlotReaderContext {
   return { mjModel, mjData } as unknown as SlotReaderContext;
 }
 
-/**
- * `float32` round-tripping is the whole point of the read (mjData is float64), so
- * compare at float32 resolution rather than float64.
- */
+/** mjData is float64 and the read casts to float32, so compare at float32 resolution. */
 function expectClose(actual: Float32Array, expected: number[], label: string): void {
   expect(actual.length, `${label}: length`).toBe(expected.length);
   for (let i = 0; i < expected.length; i++) {
@@ -62,10 +59,8 @@ function expectClose(actual: Float32Array, expected: number[], label: string): v
 
 describe.each(Object.keys(TASKS))('slot reader vs mjlab — %s', taskId => {
   const task = TASKS[taskId];
-  // The walking tasks randomize `encoder_bias` at reset, and it is what
-  // `joint_pos_biased` observes; a bundle carries it in `policy.json`, so the
-  // reader is given the same lookup here. Every entity's bias is merged, which is
-  // safe because mjlab's joint names are unique across a scene.
+  // The walking tasks randomize the `encoder_bias` that `joint_pos_biased` observes, so
+  // the reader gets the same lookup. Merging every entity's is safe: joint names are unique.
   const jointBias = new Map<string, number>();
   for (const entity of Object.values(task.entities)) {
     for (const [joint, bias] of Object.entries(entity.encoder_bias)) {
@@ -76,9 +71,7 @@ describe.each(Object.keys(TASKS))('slot reader vs mjlab — %s', taskId => {
     jointBias: name => jointBias.get(name) ?? 0,
   });
 
-  // mjlab attaches the terrain with `prefix=""`, so it is not name-resolvable in
-  // an assembled scene — a documented limitation of the reader, asserted below
-  // rather than papered over here.
+  // mjlab attaches terrain with `prefix=""`, so it is not name-resolvable — asserted below.
   const cases: Array<[string, string, number[]]> = [];
   for (const [entity, { fields }] of Object.entries(task.entities)) {
     if (entity === 'terrain') continue;
@@ -101,8 +94,7 @@ describe.each(Object.keys(TASKS))('slot reader vs mjlab — %s', taskId => {
   });
 
   it('reports the prefix-free terrain as unavailable, not as another entity', () => {
-    // The failure mode worth guarding: `terrain` matching no prefix must not fall
-    // back to the whole model and hand the graph the robot's joints.
+    // `terrain` matching no prefix must not fall back and hand over the robot's joints.
     expect(read({ entity: 'terrain', field: 'joint_pos', input: 'terrain__joint_pos' })).toEqual(
       new Float32Array(0),
     );
@@ -110,8 +102,7 @@ describe.each(Object.keys(TASKS))('slot reader vs mjlab — %s', taskId => {
   });
 
   it('covers every field the reader implements', () => {
-    // Guards against a field being added to the reader but never compared with
-    // mjlab: regenerate the fixture, and the new field appears here.
+    // Guards a field added to the reader but never compared: regenerate, and it appears.
     const checked = new Set(cases.map(([, field]) => field));
     for (const field of [
       'joint_pos',

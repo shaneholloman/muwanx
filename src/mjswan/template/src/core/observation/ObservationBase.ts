@@ -24,13 +24,6 @@ export abstract class ObservationBase<TConfig extends ObservationConfig = Observ
   /** Return a promise that resolves once the observation is ready to compute. */
   preload?(): Promise<void>;
 
-  /**
-   * Produce this frame's value.
-   *
-   * May return a promise: an ONNX-backed term (ADR 0005) runs ORT inference,
-   * which is async, and observations are awaited rather than skipped because they
-   * feed the policy directly (§8). The group awaits all terms in parallel, so a
-   * synchronous term costs nothing extra.
-   */
+  /** This frame's value; a promise for an ONNX term, awaited with the group in parallel. */
   abstract compute(state: PolicyState): Float32Array | number[] | Promise<Float32Array>;
 }

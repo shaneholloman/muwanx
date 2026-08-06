@@ -1,32 +1,13 @@
 /**
- * Browser-side `RayCastSensor` readings (ADR 0005 §6).
+ * Reproduces mjlab's `RayCastSensor._compute_data` with `mj_ray`. A structured
+ * sensor has no `sensordata` window to read, so the rays are cast here; the term's
+ * own arithmetic stays in the traced graph.
  *
- * mjlab's height scan is a *structured* sensor: its data is ray hits, not a
- * `sensordata` window, so unlike a builtin sensor there is nothing in `mjData` to
- * read — the rays have to be cast here. `mj_ray` is in the WASM build, so they can
- * be, and state collection is native by design anyway; the term's arithmetic
- * (`frame_z - hit_z`, `miss_value` where the ray missed) stays in the traced graph.
+ * The build ships the generated ray offsets in the descriptor rather than having
+ * this file re-derive them, so mjlab's grid/pinhole/ring patterns all work here.
  *
- * The build bakes the pattern into the descriptor rather than the runtime
- * re-deriving it (`raycast_sensor_descriptor`): mjlab has several pattern
- * generators — grid, pinhole, ring — and shipping the generated offsets means a
- * pattern this file has never heard of works anyway.
- *
- * What is reproduced, from `RayCastSensor._compute_data`:
- *
- * 1. Each frame's world pose comes from the named body/site/geom.
- * 2. `ray_alignment` decides how much of that rotation reaches the rays —
- *    `base` all of it, `yaw` the heading only (what a height map wants, so the
- *    grid stays level as the robot pitches), `world` none.
- * 3. Origins are `frame_pos + R · offset`, directions `R · direction`. Note the
- *    origin uses the *physical* frame position, never the aligned one.
- * 4. A hit beyond `max_distance` counts as a miss (`-1`), matching mjlab's
- *    `masked_fill_(distances > max_distance, -1)`.
- * 5. `hit_pos_w = origin + ray · max(dist, 0)`, so a miss collapses to the origin.
- *
- * `normals_w` is not produced: the emscripten binding does not marshal `mj_ray`'s
- * output pointers back, and no traced term reads normals. A term that did would
- * find the field missing rather than zeros.
+ * `normals_w` is not produced — the emscripten binding does not marshal `mj_ray`'s
+ * output pointers back, and no traced term reads normals.
  */
 
 type MjModel = import('mujoco').MjModel;
@@ -88,12 +69,8 @@ type FramePose = {
 };
 
 /**
- * Yaw-only rotation, reproducing mjlab's `_extract_yaw_rotation`.
- *
- * The frame's x-axis is projected onto the world xy-plane and renormalized. When
- * it is nearly vertical that projection is degenerate, so mjlab falls back to the
- * y-axis — same threshold (0.1) here, because a height map that flipped
- * orientation at steep pitch would feed the policy a rotated grid.
+ * mjlab's `_extract_yaw_rotation`: project the x-axis onto the world xy-plane, falling
+ * back to the y-axis below mjlab's 0.1 threshold where that is degenerate.
  */
 function yawRotation(mat: Float64Array): Float64Array {
   // Column-major access: mat is row-major 3x3, so column j is mat[j], mat[3+j], mat[6+j].
@@ -168,12 +145,7 @@ function findByName(names: string[], wanted: string): number {
   return names.findIndex(name => name === bare || name.endsWith(`/${bare}`));
 }
 
-/**
- * Cast one sensor's rays and return every field it can serve.
- *
- * Computed together because the rays are: `hit_pos_w` needs the same origins and
- * distances `distances` does, and a group asking for both should not cast twice.
- */
+/** Cast one sensor's rays once, serving every field that shares them. */
 export class RaycastSensor {
   private readonly frames: FramePose[] = [];
   private resolvedFor: MjModel | null = null;
@@ -297,8 +269,7 @@ export class RaycastSensor {
           this.geomId,
           null,
         );
-        // mjlab treats an over-range hit as a miss, so the term's `miss_value`
-        // applies to both rather than to "no geom at all" only.
+        // mjlab treats an over-range hit as a miss too, not just "no geom".
         if (distance > max_distance) distance = -1;
         this.distances[ray] = distance;
         const travelled = Math.max(distance, 0);

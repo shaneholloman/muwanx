@@ -31,8 +31,7 @@ from typing import Any, Callable
 
 import torch
 
-# mjlab RNG helpers a term may pull into its module namespace. The spy patches
-# whichever of these names is actually present in the term's globals.
+# mjlab RNG helpers a term may import; the spy patches whichever are in its globals.
 _RNG_NAMES = ("sample_uniform",)
 
 

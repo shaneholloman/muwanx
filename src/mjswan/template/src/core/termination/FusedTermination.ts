@@ -1,22 +1,14 @@
 /**
- * `FusedTermination`: one graph for several termination terms (ADR 0005 §4).
+ * One graph for several termination terms — the same trade as observation fusion, since
+ * the fixed per-`ort.run()` cost does not shrink with the graph.
  *
- * Same trade as observation fusion (companion brief §4b) — the fixed
- * per-`ort.run()` cost does not shrink with the graph, so N small graphs cost N
- * times the overhead to do a handful of comparisons. The difference is the
- * output: a bool *lane* per term rather than one verdict, because the manager
- * reports which term fired and splits `time_out` from real terminations, and
- * OR-ing inside the graph would throw both away.
+ * The output is a bool *lane* per term rather than one verdict: the manager reports
+ * which term fired and splits `time_out` from real terminations, both of which OR-ing
+ * inside the graph would throw away. Lanes wear the single-term interface
+ * (`FusedLane`), and the manager drives the graph once per evaluation.
  *
- * The lanes are handed back to `TerminationManager` as ordinary one-term objects
- * (`FusedLane`), so its OR-reduce, `reasons`, and terminated-vs-truncated logic
- * are untouched by fusion existing. Only one of them drives the graph: the
- * manager calls `step()` once per evaluation, and each lane just reads its bit.
- *
- * **Async boundary.** Same as the per-term `OnnxTermination`: `evaluate()` is
- * synchronous while ORT is not, so a frame arriving mid-inference is skipped
- * rather than queued, and the verdicts are one frame old. A one-frame-late reset
- * is the accepted lag (ADR §8).
+ * **Async boundary.** As in `OnnxTermination`: `evaluate()` is sync while ORT is not, so
+ * a frame arriving mid-inference is skipped and the verdicts are one frame old.
  */
 
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
@@ -96,8 +88,7 @@ export class FusedTermination {
     for (const slot of this.config.input_slots ?? []) {
       const value = this.deps.readSlot(slot);
       if (!value) {
-        // Hold every lane rather than reporting "not done" on absent state — a
-        // real termination slipping through is worse than a late one.
+        // Hold every lane: a termination slipping through is worse than a late one.
         console.warn(
           `[FusedTermination] could not read slot ${slotInputName(slot)}; ` +
             'holding the previous verdicts.',
@@ -116,12 +107,7 @@ export class FusedTermination {
   }
 }
 
-/**
- * One lane of a fused graph, wearing the single-term interface the manager wants.
- *
- * Reading only: the manager drives the shared graph once per evaluation, so N
- * lanes still cost one `ort.run()`.
- */
+/** One lane of a fused graph, read-only — the manager drives the shared graph. */
 export class FusedLane extends TerminationBase {
   constructor(
     runner: PolicyRunner,

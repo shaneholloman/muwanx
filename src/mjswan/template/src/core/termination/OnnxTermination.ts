@@ -1,18 +1,13 @@
 /**
- * `OnnxTermination`: a termination term whose body is a traced ONNX graph
- * (ADR 0005 §1). One generic class covers every traced termination — the graph
- * and its declared input slots are data in `policy.json`.
+ * A termination term whose body is a traced ONNX graph; one generic class covers every
+ * one, since the graph and its input slots are data in `policy.json`.
  *
- * The graph's output is a bool (mjlab's terms return a bool tensor), carried over
- * the wire as ORT's `bool` dtype, i.e. a `Uint8Array` of 0/1. Any non-zero
- * element means "done", matching mjlab's per-env semantics reduced to the single
- * environment this runtime targets (ADR §5).
+ * The output is ORT's `bool` dtype — a `Uint8Array` of 0/1 — and any non-zero element
+ * means done, mjlab's per-env semantics at N=1.
  *
- * **Async boundary.** `TerminationBase.evaluate()` is synchronous, but ORT is not.
- * Rather than block the step loop, this kicks off inference and reports the most
- * recently completed verdict — a frame that arrives while inference is in flight
- * is skipped, not queued, exactly as `OnnxCommand`/`OnnxEvent` do. A one-frame
- * late reset is the accepted lag (ADR §8); an unbounded queue would be worse.
+ * **Async boundary.** `evaluate()` is sync while ORT is not, so this kicks off inference
+ * and reports the last completed verdict; a frame arriving mid-flight is skipped rather
+ * than queued.
  */
 
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
@@ -67,8 +62,7 @@ export class OnnxTermination extends TerminationBase {
     for (const slot of this.onnxConfig.input_slots ?? []) {
       const value = this.deps.readSlot(slot);
       if (!value) {
-        // Cannot evaluate on absent state; hold the previous verdict rather than
-        // reporting "not done" and letting a real termination slip through.
+        // Hold the previous verdict rather than letting a termination slip through.
         console.warn(
           `[OnnxTermination] "${this.config.name}" could not read slot ` +
             `${slotInputName(slot)}; holding the previous verdict.`,

@@ -39,11 +39,8 @@ function toDescriptor(def: CommandDefinition): CommandDescriptor {
 }
 
 /**
- * Resolve traced term graphs to bytes, in parallel.
- *
- * Eager, unlike motions: a term's graph is needed the moment its manager is
- * constructed (a missing session means the term is dropped for the whole
- * session), and they are small — one per term, versus the policy network.
+ * Resolve traced term graphs to bytes, in parallel. Eager unlike motions: a graph is
+ * needed the moment its manager is constructed, and they are small.
  */
 async function resolveGraphs(
   graphs: Record<string, Bytes> | undefined,
@@ -88,8 +85,7 @@ class Engine implements MjswanEngine {
   constructor(runtime: mjswanRuntime) {
     this.runtime = runtime;
     this.state = this.buildState();
-    // The runtime's CommandManager outlives individual loads, so one listener
-    // covers all command-value changes (policy load, reset, auto-termination).
+    // The CommandManager outlives individual loads, so one listener covers every change.
     this.runtime.commands.addEventListener(this.onCommandEvent);
 
     this.camera = {
@@ -159,10 +155,8 @@ class Engine implements MjswanEngine {
   }
 
   async setPolicy(input: PolicyInput | null): Promise<void> {
-    // Records and rethrows like `loadScene`, now that `loadPolicyConfig` reports its
-    // failures instead of warning past them. `refresh()` runs either way, so a
-    // rejected `setPolicy` still leaves the snapshot describing what is actually
-    // loaded — which, on failure, is no policy.
+    // Records and rethrows like `loadScene`. `refresh()` runs either way, so a rejected
+    // `setPolicy` still leaves the snapshot describing what is loaded — on failure, nothing.
     try {
       await this.runtime.loadPolicyConfig(input ? await resolvePolicy(input) : null);
     } catch (err) {
@@ -229,7 +223,7 @@ class Engine implements MjswanEngine {
 
 /**
  * Prepare an engine (MuJoCo WASM + WebGL) in `element`, then `loadScene(...)`.
- * `multithreaded` lazily loads `mujoco/mt` (needs COOP/COEP; the app's call).
+ * `multithreaded` lazily loads `mujoco/mt`, which needs COOP/COEP — the app's call.
  */
 export async function createEngine(
   element: HTMLElement,

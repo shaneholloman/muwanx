@@ -59,9 +59,8 @@ __all__ = [
     "SplatConfig",
     "PolicyConfig",
     "MotionConfig",
-    # MDP bindings (mjlab-name → browser impl; see ADR 0003).
-    # Pre-0.8 register_*_func / register_command_term names remain as deprecated
-    # function aliases via _compat (the *Binding class aliases were removed).
+    # MDP bindings (mjlab-name → browser impl). Pre-0.8 register_*_func /
+    # register_command_term names survive as deprecated aliases via _compat.
     "MdpBinding",
     "ObservationBinding",
     "register_observation",

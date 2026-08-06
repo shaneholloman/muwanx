@@ -22,10 +22,8 @@ describe('IntervalTrigger', () => {
   it('fires once the interval elapses, then resamples', () => {
     const t = new IntervalTrigger({ intervalRangeS: [1.0, 1.0] }, new SeededRng(1));
     let fired = 0;
-    // dt=0.25 is exact in binary, so 3.0s of playback against a fixed 1.0s
-    // interval fires exactly 3 times. (With dt=0.1 the accumulated error leaves
-    // `timeLeft` at ~1e-16 after 10 ticks, so the firing lands one tick later —
-    // correct behaviour, just not tick-exact; see the drift test below.)
+    // dt=0.25 is exact in binary, so 3.0s against a 1.0s interval fires exactly 3 times.
+    // dt=0.1 would accumulate ~1e-16 and land a tick later — see the drift test below.
     for (let i = 0; i < 12; i++) if (t.tick(0.25)) fired++;
     expect(fired).toBe(3);
   });
@@ -44,8 +42,7 @@ describe('IntervalTrigger', () => {
   });
 
   it('carries overshoot so the average rate does not drift', () => {
-    // dt=0.3 against a 1.0s interval: firings at 1.2, 2.1, 3.0, ... — the
-    // remainder rolls forward instead of being discarded.
+    // dt=0.3 against 1.0s fires at 1.2, 2.1, 3.0: the remainder rolls forward.
     const t = new IntervalTrigger({ intervalRangeS: [1.0, 1.0] }, new SeededRng(1));
     let fired = 0;
     for (let i = 0; i < 100; i++) if (t.tick(0.3)) fired++;

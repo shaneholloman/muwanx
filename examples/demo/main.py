@@ -344,9 +344,8 @@ def _add_go1_scene(project) -> None:
         )
     )
 
-    # HiMLoco is not shown: its config asks for an interleaved group-level history
-    # (`{history_steps: 6, interleaved: true}`), and the runtime stores that flag
-    # without applying it — the stack it feeds the policy is frame-major either way.
+    # HiMLoco is not shown: it asks for an interleaved group history, and the runtime stores
+    # that flag without applying it — the stack it feeds the policy is frame-major regardless.
     go1_scene.add_policy(
         policy=onnx.load("assets/unitree_go1/decap.onnx"),
         name="Decap",
@@ -383,9 +382,8 @@ def _add_go1_scene(project) -> None:
 
 
 def _anymal_c_trace_spec() -> mujoco.MjSpec:
-    # scene.mjz was itself exported from a live mjlab Entity build, so it
-    # already carries an "init_state" keyframe; EntityCfg tries to add its
-    # own of the same name when wrapping it again, so drop the existing one.
+    # scene.mjz already carries an "init_state" keyframe from its own Entity build, and
+    # EntityCfg adds one of the same name when wrapping it again — so drop the existing.
     spec = mujoco.MjSpec.from_zip("assets/anymal_c_velocity/scene.mjz")
     for key in list(spec.keys):
         if key.name == "init_state":
@@ -487,9 +485,9 @@ def _add_playground_project(builder: mjswan.Builder) -> None:
     _mjx.put_model = lambda m, **kw: _orig_put_model(m, **{**kw, "impl": "jax"})
 
     # TEMPORARY PATCH:
-    # reacher.py gates on `mujoco.__version__ >= "3.3.0"`, a string compare that
-    # is False for "3.10.0", so it calls the pre-3.3 spec.find_body() that mujoco
-    # has since renamed to spec.body(). Restore the old name as an alias.
+    # reacher.py gates on `mujoco.__version__ >= "3.3.0"`, a string compare that is
+    # False for "3.10.0", so it calls the pre-3.3 spec.find_body() that mujoco has
+    # since renamed to spec.body(). Restore the old name as an alias.
     if not hasattr(mujoco.MjSpec, "find_body"):
         mujoco.MjSpec.find_body = mujoco.MjSpec.body
     try:
@@ -502,9 +500,8 @@ def _add_playground_project(builder: mjswan.Builder) -> None:
                 xml_content = f.read()
             spec = mujoco.MjSpec.from_string(xml_content, env.model_assets)
 
-            # model_assets is consumed at parse time but not stored in spec.assets.
-            # Remap basename keys (as in env.model_assets) to the effective paths
-            # that spec.to_xml() looks up: dir/file (or just file when dir is empty).
+            # model_assets is consumed at parse time but not stored in spec.assets, so remap its
+            # basename keys to the `dir/file` paths spec.to_xml() looks up.
             mesh_dir = spec.meshdir or ""
             tex_dir = spec.texturedir or ""
 

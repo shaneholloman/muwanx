@@ -1,17 +1,12 @@
 /**
- * Per-term observation history (mjlab's `ObservationTermCfg.history_length`).
+ * Per-term observation history (mjlab's `ObservationTermCfg.history_length`), wrapping a
+ * single term because mjlab stacks each term's frames *before* concatenating — where
+ * `PolicyRunner`'s group-level buffer would give step-major order. That is also why a
+ * group with per-term history does not fuse.
  *
- * mjlab stacks each term's frames *before* concatenating the group, so history
- * cannot live at the group level for a group where only some terms carry it — the
- * group-level ring buffer in `PolicyRunner` gives step-major order over the whole
- * concatenated vector, where mjlab gives term-major. This wraps a single term
- * instead, which is also why a group with per-term history does not fuse
- * (`_group_is_fusable`): the stacking happens outside the graph.
- *
- * `offsets` generalises the count: a dense `history_length: n` arrives as
- * `[0..n-1]`, and a policy trained on *sparse* look-back (the offsets that show up
- * in tracking policies, e.g. `[0, 1, 2, 4, 8, 16]`) names them directly. The buffer
- * always holds `max(offsets) + 1` frames; only the named ones reach the output.
+ * `offsets` generalises the count: dense `history_length: n` arrives as `[0..n-1]`, and
+ * a policy trained on sparse look-back names its offsets directly. The buffer holds
+ * `max(offsets) + 1` frames; only the named ones reach the output.
  */
 
 import { ObservationBase, type ObservationConfig } from './ObservationBase';
@@ -74,14 +69,11 @@ export class HistoryObservation extends ObservationBase {
   async compute(state: PolicyState): Promise<Float32Array> {
     const frame = Float32Array.from(await this.base.compute(state));
     if (this.needsPrime) {
-      // First frame after a reset: every slot is this frame, so the policy never
-      // sees a history of zeros it was not trained on (same rule as the
-      // group-level buffer in `PolicyRunner`).
+      // First frame after a reset: fill every slot, never a history of untrained zeros.
       for (const slot of this.frames) slot.set(frame.subarray(0, slot.length));
       this.needsPrime = false;
     } else {
-      // Shift by rotating the array rather than copying `max(offsets)` frames:
-      // the oldest buffer becomes this frame's slot.
+      // Rotate rather than copy: the oldest buffer becomes this frame's slot.
       const oldest = this.frames.pop();
       if (oldest) {
         oldest.set(frame.subarray(0, oldest.length));

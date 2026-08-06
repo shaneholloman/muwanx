@@ -386,9 +386,8 @@ def _motion_rsi_unregistered(cfg: Any) -> None:
     return None
 
 
-# Bridges mjlab's MotionCommandCfg (e.g. isaac_lab_tasks MotionCommandCfg) to the
-# TrackingCommand term. `reset_trace` here only diagnoses its own absence; the real
-# graph comes from an author-side re-registration (see `_motion_rsi_unregistered`).
+# Bridges mjlab's MotionCommandCfg to TrackingCommand. `reset_trace` only diagnoses its
+# own absence; the real graph comes from an author-side re-registration.
 register_command(
     "MotionCommandCfg",
     CommandBinding(

@@ -159,9 +159,8 @@ class ClientBuilder:
             env=build_env,
         )
 
-    # Empty stubs for the engine's Custom* registries. Author terms no longer
-    # inline into the engine bundle (ADR 0004 §10) — they compile to a runtime
-    # plugins.js instead — so these stay empty and the SPA is project-independent.
+    # Empty stubs for the engine's Custom* registries: author terms compile to a runtime
+    # plugins.js instead of inlining, so the SPA stays project-independent.
     _EMPTY_CUSTOM_STUBS = {
         "observation/custom_observations.ts": (
             "// Auto-generated. Custom observations load at runtime via plugins.js"
@@ -360,8 +359,7 @@ class ClientBuilder:
             "source": self._source_fingerprint(),
         }
 
-    # Auto-generated (derived) files, excluded from the source fingerprint: they
-    # are regenerated identically each build, so hashing them would churn the key.
+    # Derived files, excluded from the fingerprint: regenerated identically each build.
     _GENERATED_TS = frozenset(
         {
             "src/core/observation/custom_observations.ts",
@@ -461,9 +459,8 @@ class ClientBuilder:
                 env["MJSWAN_MT"] = "1"
             if debug:
                 env["MJSWAN_DEBUG"] = "1"
-            # The standalone app needs only the SPA build. The library build
-            # (`mjswan.js` createEngine entry, consumed by mjswan Cloud) is produced
-            # by the full `build` script during npm publish — see vite.lib.config.ts.
+            # The standalone app needs only the SPA build; the library build (`mjswan.js`, for
+            # mjswan Cloud) comes from the full `build` script during npm publish.
             script = "build:spa" if self._has_script("build:spa") else "build"
             self.run_build_script(script, env=env)
             (self.project_dir / "dist" / ".mjswan-build-meta.json").write_text(

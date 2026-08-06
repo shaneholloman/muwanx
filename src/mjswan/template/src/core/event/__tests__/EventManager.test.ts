@@ -1,10 +1,7 @@
 /**
- * `EventManager`: mode-aware Event dispatch (ADR 0005 §5, companion brief §4).
- *
- * Previously `onReset()`-only; these tests pin the new behaviour: interval/
- * startup dispatch is genuinely new (not a port), reset stays backward
- * compatible for plugin-registered term classes, and a quiet frame never calls
- * `ort.run()` for a term whose trigger did not fire.
+ * Mode-aware event dispatch: interval/startup dispatch, reset staying compatible with
+ * plugin-registered term classes, and a quiet frame never calling `ort.run()` for a
+ * term whose trigger did not fire.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -16,14 +13,7 @@ import type { ModelFieldDrConfig } from '../modelFieldDr';
 
 const NO_MODEL: EventContext = { mjModel: null, mjData: null };
 
-/**
- * Drain the microtask queue between synchronous `tick()` calls.
- *
- * `tick()` fires an interval term fire-and-forget; a fake session resolving via
- * `Promise.resolve()` still needs a few microtask turns before the in-flight
- * guard clears. A real mainLoop awaits real time between frames, so this only
- * matters for these tight synchronous test loops.
- */
+/** Drain the microtask queue, so an interval term's in-flight guard clears between ticks. */
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 }
@@ -65,8 +55,7 @@ describe('EventManager: legacy reset-only terms (backward compatible)', () => {
   });
 
   it('counts a model-field randomization as a loaded term', () => {
-    // A task whose only events are DR (mjlab's tracking play config: base_com,
-    // foot_friction) otherwise reports "0 event term(s) loaded" while randomizing.
+    // A task whose only events are DR would otherwise report "0 loaded" while randomizing.
     const dr: ModelFieldDrConfig = {
       name: 'base_com',
       kind: 'model_field',
@@ -84,9 +73,7 @@ describe('EventManager: legacy reset-only terms (backward compatible)', () => {
   });
 
   it('skips a build-marked native term without warning', () => {
-    // The build says why it left the term to the engine (`reason`); reporting it
-    // as a missing plugin sends the reader looking for one that was never meant
-    // to exist. mjlab's `encoder_bias` is the live example.
+    // The build's `reason`, not a missing plugin the reader would go looking for.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const mgr = new EventManager(
       [{ name: 'encoder_bias', mode: 'startup', native: true, reason: 'wrote nothing traceable' }],
@@ -216,19 +203,15 @@ describe('EventManager: mode="startup"', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Ordering. mjlab's `EventManager.apply` loops a mode's terms in config order and
-// every write is an assignment (`data.qpos[env_ids, q_slice] = position`), so two
-// terms touching the same element resolve last-writer-wins by config order. These
-// used to fire through `Promise.all`, which made that *resolution* order instead —
-// invisible while writes are disjoint, as they are on every reference task, and
-// nondeterministic the moment they overlap.
+// Ordering. mjlab loops a mode's terms in config order and every write is an
+// assignment, so two terms touching one element resolve last-writer-wins by config
+// order — not by whichever graph resolved first.
 // ---------------------------------------------------------------------------
 
 describe('EventManager: dispatch order matches mjlab', () => {
   /** Two reset terms whose sessions resolve out of config order. */
   function outOfOrderDeps(applied: string[]): Promise<EventManagerDeps> {
-    // `slow` is declared first but resolves last. Under `Promise.all` its write
-    // would land second; looping in config order puts it first, as mjlab does.
+    // `slow` is declared first but resolves last, so `Promise.all` would invert them.
     const slow: OnnxSession = {
       run: async () => {
         for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -264,8 +247,7 @@ describe('EventManager: dispatch order matches mjlab', () => {
       await outOfOrderDeps(applied),
     );
     await manager.onReset(NO_MODEL);
-    // Config order. `Promise.all` would give ['fast', 'slow'] — the slow term's
-    // write landing last and winning any overlap it should have lost.
+    // Config order; `Promise.all` would give ['fast', 'slow'] and let `slow` win.
     expect(applied).toEqual(['slow', 'fast']);
   });
 
@@ -284,9 +266,7 @@ describe('EventManager: dispatch order matches mjlab', () => {
   });
 
   it('fires interval terms in config order too', async () => {
-    // The mode that kept its fire-and-forget dispatch longest, on the since-expired
-    // grounds that the step loop had nothing to await into. mjlab runs one loop over
-    // the mode's terms — decrement, fire, next — so config order decides an overlap.
+    // mjlab runs one loop — decrement, fire, next — so config order decides an overlap.
     const applied: string[] = [];
     const manager = new EventManager(
       [
@@ -314,9 +294,7 @@ describe('EventManager: dispatch order matches mjlab', () => {
   });
 
   it('advances the reset gates even when an interval term fails', async () => {
-    // The counters are bookkeeping for `min_step_count_between_reset` with no ordering
-    // tie to the interval terms, so a rejecting graph must not stall them — which is
-    // why they advance before anything can throw.
+    // The gate counters advance before anything can throw: a bad graph must not stall them.
     const sessions = new OnnxSessionCache(() =>
       Promise.resolve({ run: () => Promise.reject(new Error('graph missing')) }),
     );
@@ -335,8 +313,7 @@ describe('EventManager: dispatch order matches mjlab', () => {
       {},
       { sessions, rng: new SeededRng(1) },
     );
-    // `OnnxEvent.fire` reports a missing model rather than throwing, so this rejects
-    // only because the session does.
+    // `OnnxEvent.fire` reports a missing model, so this rejects only via the session.
     await expect(manager.tick(0.02, NO_MODEL)).rejects.toThrow('graph missing');
   });
 });

@@ -116,8 +116,7 @@ describe('OnnxTermination', () => {
     expect(session.calls.length).toBe(callsWhileAvailable);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
-    // ...and the last verdict stands. Reporting "not done" instead would let a
-    // real termination slip through.
+    // ...and the last verdict stands, rather than letting a termination slip through.
     expect(term.evaluate({} as never)).toBe(true);
   });
 
@@ -150,8 +149,7 @@ describe('TimeOutTermination', () => {
   });
 
   it('never fires without a finite episode length', () => {
-    // mjlab's play configs set an effectively infinite horizon; a missing or
-    // non-positive value must not mean "time out every frame".
+    // mjlab's play configs use an infinite horizon; a missing value must not fire always.
     for (const episode_length_s of [undefined, 0]) {
       const term = new TimeOutTermination(
         runner,
@@ -269,8 +267,7 @@ describe('FusedTermination', () => {
     manager.evaluate({} as never, 0.02); // kicks inference
     await settle();
     const result = manager.evaluate({} as never, 0.02);
-    // Two evaluations, two runs — one apiece, not one per lane. That ratio is
-    // the whole point of fusing: unfused this would be 8.
+    // Two evaluations, two runs — one apiece, not one per lane; unfused this would be 8.
     expect(session.calls.length).toBe(2);
     expect(result.reasons).toEqual(['anchor_ori']);
     expect(result.terminated).toBe(true);
@@ -278,8 +275,7 @@ describe('FusedTermination', () => {
   });
 
   it('keeps the truncation split per lane', async () => {
-    // The `time_out` lane is a truncation; a lane beside it is not. Collapsing
-    // the graph to a single OR would lose exactly this.
+    // `time_out` truncates while its neighbour does not — a single OR would lose that.
     const session = laneSession([0, 0, 0, 1]);
     const manager = new TerminationManager({ __fused__: FUSED } as never, {}, runner, {
       onnxSessions: { get: () => session } as never,
@@ -320,8 +316,7 @@ describe('FusedTermination', () => {
     available = false;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await group.step();
-    // Not re-run, and the verdicts stand — reporting "not done" would let a real
-    // termination through.
+    // Not re-run, and the verdicts stand rather than letting a termination through.
     expect(session.calls.length).toBe(1);
     expect(group.verdict(0)).toBe(true);
     expect(warn).toHaveBeenCalled();

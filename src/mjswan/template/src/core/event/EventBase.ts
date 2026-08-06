@@ -3,11 +3,7 @@ import type { OnnxInputSlot } from '../onnx/session';
 export type EventConfig = {
   name: string;
   params?: Record<string, unknown>;
-  /**
-   * ONNX-backed events (ADR 0005 §3/§4) carry these; a plain `EventConfig` (no
-   * `mode`/`onnx`) is a reset-only plugin-registered term, unchanged.
-   * See `OnnxEventConfig` in `./OnnxEvent` for the authoritative shape.
-   */
+  /** Set for an ONNX-backed event; without `mode`/`onnx` it is a reset-only plugin term. */
   mode?: 'startup' | 'reset' | 'interval';
   /** Set by the build for a term it could not trace; `reason` says why. */
   native?: boolean;
@@ -25,11 +21,7 @@ export type EventConfig = {
 export type EventContext = {
   mjModel: import('mujoco').MjModel | null;
   mjData: import('mujoco').MjData | null;
-  /**
-   * The WASM module. Needed by a model-field randomization, which calls
-   * `mj_setConst` after touching an inertial field; absent for terms that only
-   * write `mjData`.
-   */
+  /** Only a model-field randomization needs it, to call `mj_setConst`. */
   mujoco?: import('mujoco').MainModule | null;
   terrainData?: TerrainData | null;
 };

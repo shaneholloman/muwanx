@@ -19,25 +19,18 @@ export type TerminationResult = {
   reasons: string[];
 };
 
-/**
- * Deps for ONNX-backed termination terms (ADR 0005), mirroring the observation
- * ones. Absent for a policy whose terminations are all native or legacy.
- */
+/** Absent for a policy whose terminations are all native or legacy. */
 export type TerminationManagerDeps = {
   onnxSessions?: OnnxSessionCache;
   readOnnxSlot?: SlotReader;
 };
 
-/** Whether an entry names a traced-ONNX termination (ADR 0005). */
+/** Whether an entry names a traced-ONNX termination. */
 function isOnnxEntry(entry: TerminationConfigEntry): entry is OnnxTerminationConfig {
   return typeof (entry as { onnx?: unknown }).onnx === 'string';
 }
 
-/**
- * Whether an entry is the native `time_out` marker. Matched on `native` being
- * present rather than on its exact text: the string is a human-readable
- * description of the comparison, not a wire enum.
- */
+/** Matched on `native` being present: its text is a description, not a wire enum. */
 function isNativeTimeOutEntry(
   entry: TerminationConfigEntry,
 ): entry is TimeOutTerminationConfig {
@@ -96,12 +89,8 @@ export class TerminationManager {
   }
 
   /**
-   * Expand a fused graph into one manager entry per lane.
-   *
-   * The lanes look like ordinary terms from here, so the OR-reduce, `reasons` and
-   * truncation split below need to know nothing about fusion. Warns and skips the
-   * whole group on missing deps, matching the per-term case: losing reset
-   * conditions beats taking down the scene.
+   * Expand a fused graph into one entry per lane, so the logic below need not know about
+   * fusion. Skips the group on missing deps: lost reset conditions beat a dead scene.
    */
   private addFusedGroup(
     entry: FusedTerminationConfig,
@@ -129,11 +118,8 @@ export class TerminationManager {
   }
 
   /**
-   * Build a traced-ONNX termination, or warn and skip it.
-   *
-   * Unlike an observation — which is part of the policy's input vector, so a
-   * missing one would silently reshape it — dropping a termination only loses one
-   * reset condition. Warning and continuing keeps the rest of the scene running.
+   * Build a traced-ONNX termination, or warn and skip: unlike an observation, dropping one
+   * loses a reset condition rather than reshaping the policy's input vector.
    */
   private buildOnnxTermination(
     name: string,
@@ -153,12 +139,7 @@ export class TerminationManager {
     return new OnnxTermination(runner, { ...entry, name }, { session, readSlot });
   }
 
-  /**
-   * Evaluate every term, OR-reducing to one verdict with `time_out` split out
-   * (ADR 0005's manager table).
-   *
-   * `dt` is the control step, accumulated for the native `time_out` comparison.
-   */
+  /** OR-reduce every term to one verdict, `time_out` split out; `dt` feeds its counter. */
   evaluate(state: PolicyState, dt = 0): TerminationResult {
     this.elapsedS += dt;
     // Drive each fused graph once, before its lanes are read below.

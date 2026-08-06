@@ -113,13 +113,10 @@ class _TermCfg:
         self.mode = mode
 
 
-# --- mjlab's wrappers, reproduced with their real signatures. The defaults are the
-# part under test, so they have to be defaults here too, not values passed in.
-#
-# The bodies write nothing, which is faithful: the real ones write `env.sim.model`,
-# which the tracer's recording proxy does not wrap. Writing a model field and
-# writing nothing are indistinguishable from the tracer's side — which is exactly
-# why these events fall through to the descriptor. ---
+# mjlab's wrappers with their real signatures: the defaults are what is under test, so
+# they must be defaults here too. The bodies write nothing, which is faithful — the real
+# ones write `env.sim.model`, which the recording proxy does not wrap, and that is why
+# these events fall through to the descriptor.
 
 
 def geom_friction(  # noqa: PLR0917 — mjlab's own arity; the signature is the fixture
@@ -187,9 +184,7 @@ class TestScope:
         ]
 
     def test_it_resolves_the_cfg_itself_when_given_raw_params(self):
-        # `serialize_event` hands over already-resolved params, but the descriptor is
-        # public and must not depend on that: an unresolved cfg has to come out
-        # scoped, not as all five of the robot's geoms.
+        # The descriptor is public, so it cannot assume `serialize_event` resolved first.
         term = _TermCfg(
             geom_friction, {"asset_cfg": _fingertips(), "ranges": (0.3, 1.5)}
         )
@@ -264,8 +259,7 @@ class TestWrapperDefaults:
         assert descriptor["operation"] == "abs"
 
     def test_uses_defaults_tracks_the_operation(self):
-        # mjlab's `Operation.uses_defaults`: `add`/`scale` combine with the compiled
-        # default so repeated events do not accumulate; `abs` overwrites.
+        # `Operation.uses_defaults`: `add`/`scale` use the compiled default, `abs` overwrites.
         def described(operation):
             return model_field_dr_descriptor(
                 _TermCfg(
@@ -300,8 +294,7 @@ class TestWrapperDefaults:
         assert descriptor["operation"] == "scale"
 
     def test_set_const_comes_from_the_recompute_level(self):
-        # `mj_setConst` is owed for inertial fields and not for friction. mjlab
-        # records which on the function, so it is read rather than guessed per field.
+        # mjlab records whether `mj_setConst` is owed on the function, so it is read.
         assert (
             model_field_dr_descriptor(
                 _TermCfg(
@@ -344,8 +337,7 @@ class TestAxes:
         }
 
     def test_explicit_axes_win_over_the_default(self):
-        # Lift's three friction events each name one axis, which is what keeps them
-        # from clobbering one another.
+        # Lift's three friction events each name one axis, so they compose.
         assert self._described({"ranges": (1e-4, 2e-2), "axes": [1]})[
             "axis_ranges"
         ] == {1: [1e-4, 2e-2]}
@@ -363,15 +355,13 @@ class TestAxes:
         }
 
     def test_axes_narrow_a_keyed_range_rather_than_widening_it(self):
-        # mjlab's `_prepare_axis_ranges` keeps only the target axes, so a range for
-        # an axis nobody targets is dropped instead of written.
+        # `_prepare_axis_ranges` drops a range for an axis nobody targets.
         assert self._described(
             {"ranges": {0: (0.3, 1.5), 2: (1e-5, 5e-3)}, "axes": [0]}
         )["axis_ranges"] == {0: [0.3, 1.5]}
 
     def test_a_target_axis_with_no_range_is_left_undescribed(self):
-        # mjlab raises here; the browser cannot draw for an axis with no bounds, so
-        # the event stays a native marker with the tracer's reason attached.
+        # The browser cannot draw for an unbounded axis, so it stays a native marker.
         assert self._described({"ranges": {0: (0.3, 1.5)}, "axes": [0, 1]}) is None
 
 
@@ -382,8 +372,7 @@ class TestNotDescribable:
         def encoder_bias(env, env_ids, asset_cfg=None, bias_range=(0.0, 0.0)):
             raise AssertionError("never called")
 
-        # Velocity's `encoder_bias` writes an offset the runtime already applies from
-        # `policy.json`; it is not an `mjModel` field and must not be described as one.
+        # `encoder_bias` is not an `mjModel` field: the runtime applies it from the config.
         assert (
             model_field_dr_descriptor(
                 _TermCfg(encoder_bias, {"asset_cfg": _EntityCfg("robot")}), _Env()

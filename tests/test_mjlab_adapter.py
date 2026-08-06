@@ -111,9 +111,8 @@ FakeMjlabJointEffortActionCfg = _make_mjlab_class(
     damping=None,
 )
 
-# myosuite4's `MyoMuscleActivationActionCfg` is standalone (not a dataclass and
-# does not inherit BaseActionCfg), so we mirror only the fields the adapter
-# inspects: `entity_name` and `actuator_names`.
+# `MyoMuscleActivationActionCfg` is standalone (no dataclass, no BaseActionCfg),
+# so mirror only the fields the adapter inspects.
 FakeMyoMuscleActivationActionCfg = _make_mjlab_class(
     "MyoMuscleActivationActionCfg",
     entity_name="robot",
@@ -184,10 +183,9 @@ class TestAdaptObservations:
         assert term.history_length == 3
 
     def test_mjlab_asset_cfg_kept_intact_for_tracing(self):
-        # A plain (non-Binding) func is traced to ONNX at build time
-        # (ADR 0005) via `func(env, **params)` — params must reach the tracer
-        # unchanged, including the real `asset_cfg` object mjlab's own
-        # function expects, not a flattened entity_name/joint_names stand-in.
+        # A plain (non-Binding) func is traced to ONNX at build time (ADR 0005) via `func(env,
+        # **params)` — params must reach the tracer unchanged, including the real `asset_cfg`
+        # object mjlab's own function expects, not a flattened entity_name/joint_names stand-in.
         mjlab_func = _make_mjlab_obs_func("joint_pos_rel")
         asset_cfg = FakeMjlabSceneEntityCfg(
             name="robot", joint_names=("joint1", "joint2")
@@ -203,9 +201,8 @@ class TestAdaptObservations:
         assert term.params["asset_cfg"] is asset_cfg
 
     def test_any_mjlab_obs_func_passes_through_for_tracing(self):
-        # ADR 0005: there is no mjswan-side mirror to resolve by name — any
-        # mjlab function (however unfamiliar) is passed straight through and
-        # traced to ONNX at build time.
+        # ADR 0005: there is no mjswan-side mirror to resolve by name — any mjlab function
+        # (however unfamiliar) is passed straight through and traced to ONNX at build time.
         mjlab_func = _make_mjlab_obs_func("nonexistent_function")
         mjlab_term = FakeMjlabObsTermCfg(func=mjlab_func)
         mjlab_group = FakeMjlabObsGroupCfg(terms={"x": mjlab_term})
@@ -215,8 +212,7 @@ class TestAdaptObservations:
         assert result["policy"].terms["x"].func is mjlab_func
 
     def test_multiple_groups(self):
-        # `base_ang_vel` and `projected_gravity` are DSL terms (ADR 0003) —
-        # the adapter resolves them to callables.
+        # The adapter resolves these to callables.
         f1 = _make_mjlab_obs_func("base_ang_vel")
         f2 = _make_mjlab_obs_func("projected_gravity")
         g1 = FakeMjlabObsGroupCfg(terms={"ang": FakeMjlabObsTermCfg(func=f1)})
@@ -240,8 +236,7 @@ class TestAdaptObservations:
                 )
             }
         )
-        # Tracking observations are DSL terms (ADR 0003) — the adapter
-        # resolves them to callables instead of ObservationBinding sentinels.
+        # The adapter resolves these to callables, not ObservationBinding sentinels.
         assert result is not None
         assert callable(result["policy"].terms["anchor"].func)
         assert callable(result["policy"].terms["body"].func)
@@ -264,8 +259,7 @@ class TestAdaptTerminations:
         assert result["time_out"] is cfg
 
     def test_mjlab_term_converted(self):
-        # `bad_orientation` is a DSL term (ADR 0003) — the adapter
-        # resolves it to a callable instead of a TerminationBinding sentinel.
+        # The adapter resolves this to a callable, not a TerminationBinding sentinel.
         mjlab_func = _make_mjlab_term_func("bad_orientation")
         mjlab_cfg = FakeMjlabTermTermCfg(
             func=mjlab_func,
@@ -292,8 +286,7 @@ class TestAdaptTerminations:
         assert callable(result["timeout"].func)
 
     def test_mjlab_term_keeps_asset_cfg_intact_for_tracing(self):
-        # Same as observations — a plain func's params reach the tracer
-        # unchanged (ADR 0005), no asset_cfg -> entity_name flattening.
+        # As with observations, a plain func's params reach the tracer unflattened.
         mjlab_func = _make_mjlab_term_func("bad_orientation")
         asset_cfg = FakeMjlabSceneEntityCfg(name="robot", body_names=("torso_link",))
         mjlab_cfg = FakeMjlabTermTermCfg(
@@ -308,8 +301,7 @@ class TestAdaptTerminations:
         assert term.params == {"limit_angle": 1.0, "asset_cfg": asset_cfg}
 
     def test_any_mjlab_term_func_passes_through_for_tracing(self):
-        # ADR 0005: no mjswan-side mirror to resolve by name — any mjlab
-        # function passes straight through and is traced to ONNX at build time.
+        # No mjswan-side mirror: any mjlab function passes straight through to the tracer.
         mjlab_func = _make_mjlab_term_func("nonexistent_term")
         mjlab_cfg = FakeMjlabTermTermCfg(func=mjlab_func)
 
@@ -421,10 +413,9 @@ class TestAdaptedSerialization:
     """Ensure adapted plain-callable terms defer to ONNX tracing (ADR 0005)."""
 
     def test_adapted_obs_to_dict_requires_tracing(self):
-        # A plain-callable func (mjlab's own, resolved by the adapter with no
-        # mirror lookup) cannot be serialized via to_dict()/to_list() directly
-        # — it must be traced to ONNX against a live env at build time
-        # (mjswan._onnx_build.serialize_observation_group).
+        # A plain-callable func (mjlab's own, resolved by the adapter with no mirror lookup)
+        # cannot be serialized via to_dict()/to_list() directly — it must be traced to ONNX
+        # against a live env at build time (mjswan._onnx_build.serialize_observation_group).
         mjlab_func = _make_mjlab_obs_func("last_action")
         mjlab_term = FakeMjlabObsTermCfg(func=mjlab_func)
         mjlab_group = FakeMjlabObsGroupCfg(terms={"la": mjlab_term})
@@ -505,10 +496,9 @@ class TestMuscleActionAdaptation:
         assert d["actuator_names"] == ["robot/m1", "robot/m2"]
 
     def test_normalize_defaults_to_true_when_source_lacks_field(self):
-        # MyoMuscleActivationActionCfg has no `normalize` field and always
-        # applies the sigmoid mapping in upstream; the adapted cfg must keep
-        # the mjswan default (normalize=True), which serializes as the key
-        # being omitted (default-suppression).
+        # MyoMuscleActivationActionCfg has no `normalize` field and always applies the sigmoid
+        # mapping in upstream; the adapted cfg must keep the mjswan default (normalize=True),
+        # which serializes as the key being omitted (default-suppression).
         mjlab_cfg = FakeMyoMuscleActivationActionCfg(
             entity_name="robot",
             actuator_names=("m1",),
@@ -535,9 +525,8 @@ class TestMuscleActionAdaptation:
         assert result["muscles"].offset == 0.0
 
     def test_class_name_alias_dispatch(self):
-        # The adapter looks up the source class name in _ACTION_CLASS_ALIASES.
-        # If the source class is renamed upstream, this test would catch the
-        # break by failing dispatch.
+        # The adapter looks up the source class name in _ACTION_CLASS_ALIASES. If the source
+        # class is renamed upstream, this test would catch the break by failing dispatch.
         mjlab_cfg = FakeMyoMuscleActivationActionCfg()
         assert type(mjlab_cfg).__name__ == "MyoMuscleActivationActionCfg"
 

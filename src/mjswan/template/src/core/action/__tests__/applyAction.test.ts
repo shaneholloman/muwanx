@@ -1,14 +1,9 @@
 /**
- * Native action application (ADR 0005 §7).
+ * Action is the one manager with no graph, so no traced-parity check reaches it — the
+ * arithmetic here is the implementation, and it decides what force reaches the sim.
  *
- * Action is the one manager with no graph, so no traced-parity check reaches it —
- * the arithmetic here *is* the implementation. It also decides what force reaches
- * the sim, which makes a sign or an offset the difference between a robot that
- * walks and one that falls over quietly.
- *
- * The `encoder_bias` subtraction is the sharp one: a policy trained against a
- * biased joint reading has to have that bias removed from its target, or every
- * joint sits a fixed distance from where the policy meant.
+ * The sharp case is `encoder_bias`: without subtracting it from the target, every joint
+ * sits a fixed distance from where the policy meant.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -46,8 +41,7 @@ function term(over: Partial<ResolvedActionTerm> = {}): ResolvedActionTerm {
     kp: new Float32Array(n),
     kd: new Float32Array(n),
     muscleNormalize: true,
-    // Unbounded by default: a clip is opt-in, and ±Infinity is what
-    // `resolveActionClip` leaves for a target no pattern names.
+    // Unbounded by default: `resolveActionClip` leaves ±Infinity for an unnamed target.
     clipLo: new Float32Array(n).fill(-Infinity),
     clipHi: new Float32Array(n).fill(Infinity),
     ...over,
@@ -74,8 +68,7 @@ describe('applyAction — joint_position', () => {
   });
 
   it('runs the PD itself for a motor actuator', () => {
-    // `biastype=none`: `ctrl` is a torque, so the browser owes the PD that a
-    // position actuator would have got from MuJoCo.
+    // `biastype=none`: `ctrl` is a torque, so the browser owes the PD itself.
     const data = fakeData(1, [0.2], [0.5]);
     applyAction(
       data,
@@ -107,8 +100,7 @@ describe('applyAction — joint_position', () => {
       [term({ ctrlAdr: [-1, 0], actionScale: Float32Array.from([1, 1]) })],
       Float32Array.from([9, 0.3]),
     );
-    // Only the second joint reached an actuator; a negative address must not wrap
-    // to the end of the buffer.
+    // Only the second joint has an actuator; a negative address must not wrap.
     expect(data.ctrl[0]).toBeCloseTo(0.3, 6);
   });
 });
@@ -147,8 +139,7 @@ describe('applyAction — other kinds', () => {
   });
 
   it('leaves ctrl at rest for a kind it does not implement', () => {
-    // The Python cfg raises for the unsupported kinds, so reaching here means a
-    // config from somewhere else — better a still actuator than a garbage torque.
+    // The Python cfg raises for these, so a still actuator beats a garbage torque.
     const data = fakeData(2);
     applyAction(data, [term({ controlType: 'tendon_length' })], Float32Array.from([1, 1]));
     expect(Array.from(data.ctrl)).toEqual([0, 0]);
@@ -202,18 +193,13 @@ describe('stepPhysics', () => {
 });
 
 // ---------------------------------------------------------------------------
-// `clip` (mjlab's `BaseActionCfg.clip`). It was declared on the Python cfg,
-// never serialized and never applied, so a task that set it got it silently
-// dropped. No reference task sets it — all three are `clip=None` — which is
-// exactly why the drop was invisible.
+// `clip` (mjlab's `BaseActionCfg.clip`), which no reference task sets.
 // ---------------------------------------------------------------------------
 
 describe('applyAction — clip', () => {
   it('bounds the processed action *before* the encoder bias is removed', () => {
-    // The distinguishing case. mjlab clamps `raw * scale + offset` and only then
-    // does `apply_actions` subtract the bias, so with a bias the final ctrl sits
-    // *outside* the declared bound by exactly that bias. Clamping the target
-    // instead would pin ctrl to 0.5 and look plausible.
+    // The distinguishing case: mjlab clamps before `apply_actions` subtracts the bias, so
+    // the final ctrl sits outside the bound by it. Clamping the target would pin it to 0.5.
     const data = fakeData(1);
     applyAction(
       data,
@@ -289,8 +275,7 @@ describe('resolveActionClip', () => {
   });
 
   it('resolves a pattern by fullmatch, as mjlab does', () => {
-    // `hip_.*` must take both hips and leave the knee alone. A substring match
-    // would be wrong the other way: `hip` alone matches nothing.
+    // Anchored: `hip_.*` takes both hips, while `hip` alone matches nothing.
     const { clipLo, clipHi } = resolveActionClip({ 'hip_.*': [-2, 2] }, NAMES, 3);
     expect(Array.from(clipLo)).toEqual([-2, -2, -Infinity]);
     expect(Array.from(clipHi)).toEqual([2, 2, Infinity]);

@@ -105,8 +105,7 @@ export function quatToRot6d(quat: ArrayLike<number>): number[] {
   const r20 = 2.0 * (xz - wy);
   const r21 = 2.0 * (yz + wx);
 
-  // mjlab uses `matrix_from_quat(q)[..., :2].reshape(...)`, which flattens the
-  // first two matrix columns in row-major order.
+  // mjlab's `matrix_from_quat(q)[..., :2]`: the first two columns, row-major.
   return [r00, r01, r10, r11, r20, r21];
 }
 

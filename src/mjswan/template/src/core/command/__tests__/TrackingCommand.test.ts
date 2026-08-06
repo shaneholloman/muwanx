@@ -1,9 +1,8 @@
 /**
- * `motion` stays a native command (a clip lookup is data, not math), so the
- * tracking task's traced observations and terminations read their
- * `{command: "motion", field}` slots off `TrackingCommand` itself. This pins the
- * one part of that which can be silently wrong: the re-anchoring frame, mjlab's
- * `update_relative_body_poses`.
+ * `motion` stays a native command (a clip lookup is data, not math), so the tracking task's
+ * traced observations and terminations read their `{command: "motion", field}` slots off
+ * `TrackingCommand` itself. This pins the one part of that which can be silently wrong: the
+ * re-anchoring frame, mjlab's `update_relative_body_poses`.
  */
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
@@ -42,14 +41,10 @@ describe('reanchorBodyPositions', () => {
 });
 
 /**
- * The `ref_*` look-ahead window — the slots a policy trained on a window of the
- * reference trajectory reads, which mjlab's own `MotionCommand` has no equivalent
- * of (it exposes the current frame only).
- *
- * A wrong window is silent: the policy still runs, just tracking the wrong part of
- * the clip. So the offset→frame mapping, the edge clamping, and the not-ready
- * fallback are all pinned. No model is needed — the reference buffers are the
- * command's own state, and a null `mjModel` skips the ghost skeleton.
+ * The `ref_*` look-ahead window, which mjlab's `MotionCommand` has no equivalent of. A
+ * wrong window is silent — the policy runs, tracking the wrong part of the clip — so the
+ * offset→frame mapping, edge clamping and not-ready fallback are all pinned. No model
+ * needed: the reference buffers are the command's own state.
  */
 function trackingCommand(timeSteps: number[], frames: number): TrackingCommand {
   const config = {
@@ -86,8 +81,7 @@ describe('TrackingCommand ref window', () => {
   it('clamps a window running off either end rather than wrapping', () => {
     const term = trackingCommand([-4, 0, 4], 3);
     term.refIdx = 0;
-    // Wrapping would read frame 2 for the -4 offset, i.e. the end of the clip as
-    // the recent past. Clamping repeats frame 0.
+    // Wrapping would read frame 2 for the -4 offset; clamping repeats frame 0.
     close(term.getStateField('ref_root_pos_w')!, [0, 0, 0, 0, 0, 0, 2, 0, 0]);
   });
 

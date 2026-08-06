@@ -28,15 +28,12 @@ from typing import Any
 
 from .tracer import CommandExport, slots_json
 
-# Authoritative JSON Schema for one OnnxCommand config entry. The TS runtime
-# validates the manifest against this at load time (brief §6); the Python emitter
-# self-checks against the lighter `validate_command_config` below.
+# Authoritative JSON Schema for one OnnxCommand config entry; the TS runtime
+# validates against it at load time.
 #
-# "name" is the registry key CommandManager looks up a class by — always the
-# literal "OnnxCommand" here, matching every other *_command() factory's wire
-# convention in command.py, not the term's own identity (that is the outer dict
-# key in PolicyConfig.commands, e.g. commands={"twist": ...}). "term_id" carries
-# the traced term's own name for diagnostics only.
+# "name" is the registry key CommandManager resolves a class by — always the literal
+# "OnnxCommand" — not the term's identity, which is its key in `commands`. "term_id"
+# is the traced term's own name, for diagnostics.
 COMMAND_JSON_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "OnnxCommand",
@@ -58,9 +55,7 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
         "onnx": {"type": "string"},
         "command_field": {"type": "string"},
         "rand_dim": {"type": "integer", "minimum": 0},
-        # One [low, high] per element of `rand`, in draw order. The traced graph
-        # consumes the sampler's *output*, so the bounds live nowhere else and the
-        # runtime would otherwise draw [0, 1) for every element.
+        # One [low, high] per `rand` element, in draw order — the graph carries none itself.
         "rand_ranges": {
             "type": "array",
             "items": {
@@ -80,17 +75,12 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
                     "name": {"type": "string"},
                     "shape": {"type": "array", "items": {"type": "integer"}},
                     "dtype": {"type": "string"},
-                    # Flattened initial value (ADR 0005 §3), so the runtime starts
-                    # the term where the build found it rather than at zero.
+                    # So the runtime starts the term where the build found it.
                     "init": {"type": "array", "items": {"type": ["number", "boolean"]}},
                 },
             },
         },
-        # Three slot shapes (mjswan.compile.tracer.slot_to_json): an ``Entity.data``
-        # read carries entity+field; a whole-sensor read carries sensor; another
-        # command term's state carries command+field. All carry ``input`` (the graph
-        # input name to feed the value as) and ``shape`` (the traced rank, which the
-        # runtime cannot recover from a flat value array).
+        # Slot shapes per `tracer.slot_to_json`; all carry ``input`` and ``shape``.
         "input_slots": {
             "type": "array",
             "items": {
@@ -249,9 +239,8 @@ def validate_command_config(cfg: dict[str, Any]) -> list[str]:
     if cfg.get("name") != "OnnxCommand":
         errors.append("'name' must be 'OnnxCommand' (the registry key)")
 
-    # One [low, high] per rand element, or the runtime silently draws [0, 1) for
-    # the ones it has no range for — which for a zero-width range (mjlab's empty
-    # `pose_range`) is the difference between "no jitter" and a metre of it.
+    # One [low, high] per rand element, or the runtime falls back to [0, 1) — for a
+    # zero-width range, the difference between no jitter and a metre of it.
     ranges = cfg.get("rand_ranges")
     if isinstance(ranges, list) and len(ranges) != cfg.get("rand_dim", 0):
         errors.append(
