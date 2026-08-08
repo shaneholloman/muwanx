@@ -23,7 +23,7 @@ __all__ = ["ClientBuilder", "ensure_node_env", "build_client"]
 class ClientBuilder:
     """Manages isolated Node.js environment and client builds."""
 
-    NODE_VERSION = "25.5.0"
+    NODE_VERSION = "24.19.0"
 
     def __init__(self, project_dir: Path) -> None:
         self.project_dir = Path(project_dir).resolve()
@@ -478,9 +478,7 @@ class ClientBuilder:
             shutil.rmtree(self.nodeenv_dir)
 
 
-def ensure_node_env(
-    project_dir: Path, node_version: str = "25.5.0", clean: bool = False
-) -> Path:
+def ensure_node_env(project_dir: Path, clean: bool = False) -> Path:
     builder = ClientBuilder(project_dir)
     builder.create_env(clean=clean)
     return builder.nodeenv_dir

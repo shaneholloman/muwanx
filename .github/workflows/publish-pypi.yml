@@ -45,7 +45,7 @@ jobs:
       - name: Setup Node.js for template build
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Build web template
         working-directory: src/mjswan/template
