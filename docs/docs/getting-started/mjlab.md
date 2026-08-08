@@ -60,10 +60,11 @@ project = builder.add_project(name="ANYmal C")
 task_id = "Mjlab-Velocity-Flat-Anymal-C"
 env_cfg = load_env_cfg(task_id, play=True)
 
-scene = project.add_scene_mjlab(task_id, play=True)
+scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
 scene.add_policy_wandb(
     "<entity>/<project>/<run_id>",
     task_id=task_id,
+    observations=env_cfg.observations["actor"],
     commands=env_cfg.commands,
     actions=env_cfg.actions,
     terminations=env_cfg.terminations,
@@ -71,6 +72,8 @@ scene.add_policy_wandb(
 
 builder.build().launch()
 ```
+
+`observations` takes the task's actor group directly — `"critic"` is training-only, and mjlab exports only the actor to ONNX. All four are needed: a policy attached without `observations` has nothing to feed the network, and one without `actions` has no way to reach the actuators. See [Policy Config Format](../notes/policy-config.md) for the details.
 
 `add_policy_wandb` accepts a `list[str]` for the run path if you want to bundle checkpoints from multiple runs together. The latest checkpoint (highest training step) is marked as the default.
 

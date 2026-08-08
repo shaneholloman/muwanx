@@ -259,7 +259,7 @@ class SceneHandle:
         metadata: dict[str, Any] | None = None,
         source_path: str | None = None,
         config_path: str | None = None,
-        observations: dict[str, ObservationGroupCfg] | dict[str, Any] | None = None,
+        observations: ObservationGroupCfg | Mapping[str, Any] | Any | None = None,
         commands: Mapping[str, Any] | None = None,
         actions: Mapping[str, ActionTermCfg] | Mapping[str, Any] | None = None,
         terminations: dict[str, TerminationTermCfg] | dict[str, Any] | None = None,
@@ -267,6 +267,7 @@ class SceneHandle:
         policy_num_actions: int | None = None,
         default_joint_pos: list[float] | None = None,
         encoder_bias: list[float] | None = None,
+        clip_actions: float | None = None,
         initial_qpos: list[float] | None = None,
         initial_qvel: list[float] | None = None,
         extras: dict[str, Any] | None = None,
@@ -280,9 +281,16 @@ class SceneHandle:
             metadata: Optional metadata dictionary for the policy.
             source_path: Optional source path for the policy ONNX file.
             config_path: Optional source path for the policy config JSON file.
-            observations: Observation group configurations.  Accepts both
+            observations: Either a **single** observation group — mjlab's
+                ``env_cfg.observations["actor"]`` — or a dict of them keyed by
+                ONNX input name. Prefer the single-group form: the key is the
+                input name the runtime feeds, not a free label, and an ONNX
+                policy exported by mjlab has exactly one input. Accepts both
                 mjswan and mjlab ``ObservationGroupCfg`` instances — mjlab
                 types are converted automatically (mjlab is a soft dependency).
+                A group named for a training-only mjlab network (``"critic"``)
+                is dropped with a warning: only the actor is exported to ONNX,
+                so nothing consumes it.
             commands: Command term configurations. Accepts both mjswan and
                 mjlab ``CommandTermCfg`` instances. Custom mjlab terms are
                 converted through the Python command-term registry.
@@ -293,6 +301,12 @@ class SceneHandle:
             policy_num_actions: Output width for policies whose action count
                 cannot be inferred from ``policy_joint_names`` (e.g.
                 muscle-driven policies driving actuators, not joints).
+            clip_actions: Symmetric bound the raw policy output is clamped to
+                before any action term sees it, mirroring rsl-rl's
+                ``RslRlVecEnvWrapper`` (``clip_actions`` on the mjlab runner
+                config). Distinct from ``ActionTermCfg.clip``, which bounds
+                ``raw * scale + offset`` per target. ``add_policy_wandb`` fills
+                it in from the task's runner config.
             initial_qpos: Optional initial qpos payload serialized into the
                 generated policy config JSON.
             initial_qvel: Optional initial qvel payload serialized into the
@@ -315,18 +329,14 @@ class SceneHandle:
                 name="Locomotion",
                 config_path="locomotion.json",
                 commands={"velocity": mjswan.velocity_command()},
-                observations={
-                    "policy": ObservationGroupCfg(
-                        terms={
-                            "base_lin_vel": ObservationTermCfg(
-                                func=obs_fns.base_lin_vel
-                            ),
-                            "joint_pos": ObservationTermCfg(
-                                func=obs_fns.joint_pos_rel, scale=0.5
-                            ),
-                        },
-                    ),
-                },
+                observations=ObservationGroupCfg(
+                    terms={
+                        "base_lin_vel": ObservationTermCfg(func=obs_fns.base_lin_vel),
+                        "joint_pos": ObservationTermCfg(
+                            func=obs_fns.joint_pos_rel, scale=0.5
+                        ),
+                    },
+                ),
             )
         """
         if metadata is None:
@@ -355,6 +365,7 @@ class SceneHandle:
             policy_num_actions=policy_num_actions,
             default_joint_pos=default_joint_pos,
             encoder_bias=encoder_bias,
+            clip_actions=clip_actions,
             initial_qpos=initial_qpos,
             initial_qvel=initial_qvel,
             extras=extras,
@@ -371,10 +382,11 @@ class SceneHandle:
         task_id: str | None = None,
         config_path: str | None = None,
         metadata: dict[str, Any] | None = None,
-        observations: dict[str, ObservationGroupCfg] | dict[str, Any] | None = None,
+        observations: ObservationGroupCfg | Mapping[str, Any] | Any | None = None,
         commands: Mapping[str, Any] | None = None,
         actions: Mapping[str, ActionTermCfg] | Mapping[str, Any] | None = None,
         terminations: dict[str, TerminationTermCfg] | dict[str, Any] | None = None,
+        clip_actions: float | None = None,
         extras: dict[str, Any] | None = None,
     ) -> list[PolicyHandle]:
         """Add ONNX policies fetched from one or more W&B runs to this scene.
@@ -397,12 +409,17 @@ class SceneHandle:
                 all fetched policies.
             metadata: Optional metadata dictionary applied to all fetched
                 policies.
-            observations: Observation group configurations applied to all
-                fetched policies.
+            observations: Observation groups applied to all fetched policies —
+                a single group (``env_cfg.observations["actor"]``) or a dict of
+                them; see :meth:`add_policy`.
             commands: Command term configurations applied to all fetched policies.
             actions: Action term configurations applied to all fetched policies.
             terminations: Termination term configurations applied to all fetched
                 policies.
+            clip_actions: Overrides the raw-action bound that would otherwise be
+                read from the task's mjlab runner config. Only the
+                ``only_latest=True`` path needs it explicitly — that path skips
+                mjlab entirely, so there is no runner config to read.
             extras: Optional extra JSON payload applied to every fetched policy.
 
         Returns:
@@ -476,6 +493,7 @@ class SceneHandle:
                         commands=commands,
                         actions=actions,
                         terminations=terminations,
+                        clip_actions=clip_actions,
                         extras=extras,
                     )
                     _attach_tracking_motion(
@@ -544,6 +562,11 @@ class SceneHandle:
                                 default_joint_pos=export_context.default_joint_pos
                                 or None,
                                 encoder_bias=export_context.encoder_bias or None,
+                                clip_actions=(
+                                    clip_actions
+                                    if clip_actions is not None
+                                    else export_context.clip_actions
+                                ),
                                 extras=extras,
                             )
                             _attach_tracking_motion(

@@ -467,6 +467,7 @@ class Builder:
             or policy.policy_joint_names
             or policy.policy_num_actions
             or policy.motions
+            or policy.clip_actions is not None
         )
         if not config_path and not has_mdp:
             return None
@@ -517,6 +518,10 @@ class Builder:
             data["default_joint_pos"] = policy.default_joint_pos
         if policy.encoder_bias:
             data["encoder_bias"] = policy.encoder_bias
+        # Not `if policy.clip_actions:` — 0.0 is a legal (degenerate) bound, and dropping
+        # it would silently unclamp the policy.
+        if policy.clip_actions is not None:
+            data["clip_actions"] = float(policy.clip_actions)
         if getattr(policy, "initial_qpos", None):
             data["initial_qpos"] = policy.initial_qpos
         if getattr(policy, "initial_qvel", None):

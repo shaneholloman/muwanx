@@ -215,13 +215,14 @@ Attach an ONNX policy to the scene. `observations`, `commands`, `actions`, and `
 | `metadata` | `dict \| None` | `None` | Arbitrary key-value metadata. |
 | `source_path` | `str \| None` | `None` | Path to the source `.onnx` file. Written to `config.json` for reference. |
 | `config_path` | `str \| None` | `None` | Path to a JSON file describing observations / actions / etc. mjswan merges any Python-side `commands`/`observations`/`actions`/`terminations` into this file. See [Policy Config Format](../notes/policy-config.md). |
-| `observations` | `dict[str, ObservationGroupCfg] \| None` | `None` | Observation groups keyed by ONNX input tensor name (e.g. `"policy"`). Accepts both mjswan and mjlab `ObservationGroupCfg` instances. |
+| `observations` | `ObservationGroupCfg \| dict[str, ObservationGroupCfg] \| None` | `None` | A single observation group — mjlab's `env_cfg.observations["actor"]` — or a dict of them keyed by **ONNX input tensor name**. Prefer the single group: the key is an input name the runtime feeds, not a label, and a wrong one fails silently at playback. A `"critic"` group is dropped with a warning (only the actor is exported to ONNX). Accepts both mjswan and mjlab `ObservationGroupCfg` instances. |
 | `commands` | `Mapping[str, CommandTermConfig] \| None` | `None` | Command terms keyed by policy-visible name (e.g. `"velocity"`). Use `mjswan.velocity_command()` or `mjswan.ui_command([...])` to construct values. Accepts mjlab `CommandTermCfg` instances too. |
 | `actions` | `Mapping[str, ActionTermCfg] \| None` | `None` | Action term configs keyed by name (e.g. `"joint_pos"`). |
 | `terminations` | `dict[str, TerminationTermCfg] \| None` | `None` | Termination term configs keyed by name. |
 | `policy_joint_names` | `list[str] \| None` | `None` | Ordered list of joint names the policy controls. Required by the browser runtime to map outputs to actuators. |
 | `default_joint_pos` | `list[float] \| None` | `None` | Default (resting) joint positions corresponding to `policy_joint_names`. |
 | `encoder_bias` | `list[float] \| None` | `None` | Per-joint encoder bias (mirrors mjlab's joint-position action path). |
+| `clip_actions` | `float \| None` | `None` | Symmetric bound on the raw policy output, applied before any action term sees it (rsl-rl's `RslRlVecEnvWrapper`). Distinct from `ActionTermCfg.clip`, which bounds `raw * scale + offset` per target. |
 | `initial_qpos` | `list[float] \| None` | `None` | Optional initial qpos serialized into the policy JSON for reset logic. |
 | `initial_qvel` | `list[float] \| None` | `None` | Optional initial qvel serialized into the policy JSON for reset logic. |
 | `extras` | `dict \| None` | `None` | Extra JSON payload merged verbatim into the generated policy config. |
@@ -239,10 +240,11 @@ def add_policy_wandb(
     task_id: str | None = None,
     config_path: str | None = None,
     metadata: dict[str, Any] | None = None,
-    observations: dict[str, ObservationGroupCfg] | None = None,
+    observations: ObservationGroupCfg | dict[str, ObservationGroupCfg] | None = None,
     commands: Mapping[str, Any] | None = None,
     actions: Mapping[str, ActionTermCfg] | None = None,
     terminations: dict[str, TerminationTermCfg] | None = None,
+    clip_actions: float | None = None,
     extras: dict[str, Any] | None = None,
 ) -> list[PolicyHandle]
 ```
@@ -250,6 +252,8 @@ def add_policy_wandb(
 Fetch ONNX policies from one or more W&B runs and attach them all to the scene. Same `observations` / `commands` / `actions` / `terminations` are applied to every policy.
 
 When `only_latest=False` (the default), all `model_*.pt` checkpoints in each run are downloaded and converted to ONNX via mjlab + torch — `task_id` is required. When `only_latest=True`, only the exported `.onnx` artifact is fetched.
+
+`clip_actions` is read from the task's mjlab runner config automatically; pass it explicitly only with `only_latest=True`, which skips mjlab and so has no runner config to read.
 
 **Returns** — `list[PolicyHandle]` (flat across all runs). The latest checkpoint (highest `_<step>` suffix) is marked as the default.
 

@@ -24,7 +24,13 @@ import {
   computeCameraPosition,
   updateCameraFromData,
 } from './viewer_config';
-import { resolveActionClip, stepPhysics, type ResolvedActionTerm } from '../action/applyAction';
+import {
+  clampActions,
+  readClipActions,
+  resolveActionClip,
+  stepPhysics,
+  type ResolvedActionTerm,
+} from '../action/applyAction';
 import { applyResetTerms } from './resetChain';
 import { Observations } from '../observation/observations';
 import { TerminationManager } from '../termination/TerminationManager';
@@ -212,6 +218,7 @@ export class mjswanRuntime {
   private readonly termSeed: number;
   private readonly readOnnxSlot: SlotReader;
   private jointBias = new Map<string, number>();
+  private clipActions: number | null = null;
   private raycastSensors: Record<string, RaycastSensorDescriptor> = {};
 
   constructor(mujoco: MainModule, container: HTMLElement, termSeed = DEFAULT_TERM_SEED) {
@@ -330,6 +337,7 @@ export class mjswanRuntime {
     this.onnxInputDict = null;
     this.onnxInferencing = false;
     this.onnxTimeStep = 0;
+    this.clipActions = null;
     this.terminationManager = null;
     this.eventManager = null;
     this.terrainData = null;
@@ -750,6 +758,7 @@ export class mjswanRuntime {
     this.terminationManager = null;
     this.policyGraphs.clear();
     this.jointBias.clear();
+    this.clipActions = null;
     this.raycastSensors = {};
     // eventManager, sceneGraphs and terrainData are scene-level; do not clear here.
 
@@ -770,6 +779,7 @@ export class mjswanRuntime {
       const config = policy.config;
       await this.policyGraphs.load(policy.graphs ?? []);
       this.jointBias = buildJointBias(config);
+      this.clipActions = readClipActions(config.clip_actions);
       this.raycastSensors = collectRaycastSensors(config);
       // Metadata comes from policy.json, bytes from the app; merge them by name.
       if (Array.isArray(config.motions)) {
@@ -1265,6 +1275,10 @@ export class mjswanRuntime {
         });
         return;
       }
+      // Before `setLastActions`, which is what both the action terms and the
+      // `prev_action` observation slot read — mirroring rsl-rl, where the clamp lands
+      // ahead of `env.step` and so ahead of the action manager recording the action.
+      clampActions(action, this.clipActions);
       this.policyRunner.setLastActions(action);
     } catch (error) {
       console.warn('[PolicyRunner] ONNX inference failed:', error);

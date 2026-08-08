@@ -1,8 +1,19 @@
-"""Action `clip`: the wire field, and the mjlab semantics the browser copies.
+"""Action clipping: the wire fields, and the mjlab semantics the browser copies.
+
+Two *different* bounds live here, and confusing them is the whole risk:
+
+- ``ActionTermCfg.clip`` — per-target, on the action term, applied to
+  ``raw * scale + offset``.
+- ``clip_actions`` — symmetric, on the *runner* config, applied to the policy's raw
+  output before any term sees it. rsl-rl's ``RslRlVecEnvWrapper.step`` clamps ahead of
+  ``env.step``, so mjlab's action manager records the clamped vector and a
+  ``last_action`` observation reads the clamped vector.
 
 `ActionTermCfg.clip` was declared on the config and then dropped — `to_dict()` did
 not emit it and the runtime had nowhere to apply it — so a task that set bounds got
-none. Invisible, because all three reference tasks leave it `None`.
+none. `clip_actions` was read from the runner config, handed to the export-time
+wrapper, and never written to the bundle, so it got none either. Both invisible,
+because the reference tasks leave both `None`.
 
 Two things are checked here, and the second is the one that matters. Emitting the
 field is easy to get right. *Where* the clamp goes is not: mjlab clamps
@@ -43,6 +54,99 @@ def test_to_dict_omits_clip_when_unset():
     from mjswan.envs.mdp.actions import JointPositionActionCfg
 
     assert "clip" not in JointPositionActionCfg(actuator_names=(".*",)).to_dict()
+
+
+def test_clip_actions_reaches_the_policy_json(tmp_path, minimal_model, minimal_onnx):
+    """The runner-config bound has to land in the bundle, or playback runs unclamped."""
+    import json
+
+    from mjswan import Builder
+    from mjswan.utils import name2id
+
+    builder = Builder()
+    scene = builder.add_project(name="P").add_scene(
+        control_dt=0.02, name="S", model=minimal_model
+    )
+    scene.add_policy(name="Policy", policy=minimal_onnx, clip_actions=100.0)
+
+    out = tmp_path / "out"
+    builder._save_web(out)
+    data = json.loads(
+        (
+            out / "main" / "assets" / name2id("S") / f"{name2id('Policy')}.json"
+        ).read_text()
+    )
+    assert data["clip_actions"] == 100.0
+
+
+def test_clip_actions_zero_is_not_dropped(tmp_path, minimal_model, minimal_onnx):
+    """`0.0` pins every action to zero — a real bound, and the one truthiness eats."""
+    import json
+
+    from mjswan import Builder
+    from mjswan.utils import name2id
+
+    builder = Builder()
+    scene = builder.add_project(name="P").add_scene(
+        control_dt=0.02, name="S", model=minimal_model
+    )
+    scene.add_policy(name="Policy", policy=minimal_onnx, clip_actions=0.0)
+
+    out = tmp_path / "out"
+    builder._save_web(out)
+    data = json.loads(
+        (
+            out / "main" / "assets" / name2id("S") / f"{name2id('Policy')}.json"
+        ).read_text()
+    )
+    assert data["clip_actions"] == 0.0
+
+
+def test_clip_actions_absent_when_unset(tmp_path, minimal_model, minimal_onnx):
+    import json
+
+    from mjswan import Builder
+    from mjswan.utils import name2id
+
+    builder = Builder()
+    scene = builder.add_project(name="P").add_scene(
+        control_dt=0.02, name="S", model=minimal_model
+    )
+    scene.add_policy(
+        name="Policy", policy=minimal_onnx, policy_joint_names=["j"]
+    )  # something to serialize
+
+    out = tmp_path / "out"
+    builder._save_web(out)
+    data = json.loads(
+        (
+            out / "main" / "assets" / name2id("S") / f"{name2id('Policy')}.json"
+        ).read_text()
+    )
+    assert "clip_actions" not in data
+
+
+@pytest.mark.slow
+@pytest.mark.mjlab
+def test_rsl_rl_clamps_before_the_env_sees_the_action():
+    """Pin that the clamp precedes `env.step`, since that is what puts it ahead of the
+    action manager — and therefore ahead of any `last_action` observation."""
+    pytest.importorskip("mjlab")
+    import inspect
+
+    from mjlab.rl import RslRlVecEnvWrapper
+
+    source = inspect.getsource(RslRlVecEnvWrapper.step)
+    clamp_at = source.find("clamp")
+    step_at = source.find("self.env.step")
+    assert clamp_at != -1, (
+        "rsl-rl no longer clamps in the wrapper; revisit clip_actions"
+    )
+    assert step_at != -1
+    assert clamp_at < step_at, (
+        "the clamp moved after env.step; the browser applies it before storing the "
+        "action, which would no longer match"
+    )
 
 
 def test_effort_action_also_carries_clip():

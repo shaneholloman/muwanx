@@ -29,16 +29,17 @@ The relevant kwargs (see the [API reference](../api/core.md#scenehandleadd_polic
 |---|---|
 | `policy_joint_names` | Ordered list of joint names the policy controls. Required for browser-side actuator mapping. |
 | `default_joint_pos` | Default pose, one entry per `policy_joint_names`. Used when `use_default_offset=True` on the action term and when an observation subtracts the default pose. |
-| `observations` | `dict[str, ObservationGroupCfg]` keyed by ONNX input tensor name (e.g. `"policy"`). |
+| `observations` | A single `ObservationGroupCfg`, or a `dict` of them keyed by ONNX input tensor name. Prefer the single group — see below. |
 | `actions` | `dict[str, ActionTermCfg]` keyed by term name (e.g. `"joint_pos"`). |
 | `commands` | `dict[str, CommandTermConfig]` keyed by policy-visible command name. |
 | `terminations` | `dict[str, TerminationTermCfg]` keyed by termination name. |
 | `encoder_bias` | Optional per-joint bias; the browser writes `processed_action - encoder_bias` to the actuators (mirrors mjlab). |
+| `clip_actions` | Symmetric bound on the raw policy output, applied before any action term. mirrors rsl-rl's `RslRlVecEnvWrapper`; `add_policy_wandb` fills it in from the task's runner config. Not `ActionTermCfg.clip` — see [Actions](#actions). |
 | `extras` | Arbitrary JSON payload merged verbatim into the generated policy config. |
 
 ## Observations
 
-Each ONNX input tensor maps to one `ObservationGroupCfg`. A group is an ordered dict of `ObservationTermCfg` — the runtime concatenates term outputs in declaration order.
+A group is an ordered dict of `ObservationTermCfg` — the runtime concatenates term outputs in declaration order. Pass the group directly:
 
 ```python
 from mjswan.envs.mdp import observations as obs_fns
@@ -47,29 +48,37 @@ from mjswan.managers.observation_manager import (
     ObservationTermCfg,
 )
 
-obs = {
-    "policy": ObservationGroupCfg(
-        terms={
-            "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
-            "projected_gravity": ObservationTermCfg(
-                func=obs_fns.projected_gravity_isaac
-            ),
-            "joint_pos": ObservationTermCfg(
-                func=obs_fns.joint_positions_isaac,
-                scale=1.0,
-            ),
-            "joint_vel": ObservationTermCfg(
-                func=obs_fns.joint_vel_rel,
-                scale=0.05,
-            ),
-            "last_action": ObservationTermCfg(func=obs_fns.previous_actions),
-            "velocity_cmd": ObservationTermCfg(
-                func=obs_fns.generated_commands,
-                params={"command_name": "velocity"},
-            ),
-        },
-    ),
-}
+obs = ObservationGroupCfg(
+    terms={
+        "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
+        "projected_gravity": ObservationTermCfg(func=obs_fns.projected_gravity_isaac),
+        "joint_pos": ObservationTermCfg(
+            func=obs_fns.joint_positions_isaac,
+            scale=1.0,
+        ),
+        "joint_vel": ObservationTermCfg(
+            func=obs_fns.joint_vel_rel,
+            scale=0.05,
+        ),
+        "last_action": ObservationTermCfg(func=obs_fns.previous_actions),
+        "velocity_cmd": ObservationTermCfg(
+            func=obs_fns.generated_commands,
+            params={"command_name": "velocity"},
+        ),
+    },
+)
+```
+
+### Why not a dict of groups?
+
+`observations` also accepts `dict[str, ObservationGroupCfg]`, but the keys are **ONNX input tensor names**, not labels — the runtime feeds each group's vector as the input of that name, and `in_keys` defaults to `["policy"]`. An ONNX policy exported by mjlab has exactly one input, so the dict form buys nothing and costs a silent failure mode: a group under the wrong key produces a console warning and a policy that never acts. Passing the group itself lets mjswan pick the key.
+
+The dict form is for the rare multi-input policy, where the config's `in_keys` names each input. Groups named for a training-only mjlab network (`"critic"`) are dropped with a warning: only the actor is exported to ONNX, so nothing would consume them, and leaving them in would trace, bundle, and evaluate them every control step for a value nothing reads.
+
+Coming from mjlab, that makes the call:
+
+```python
+observations = env_cfg.observations["actor"]
 ```
 
 `ObservationTermCfg` fields used at runtime: `func` (a built-in sentinel below or a custom one registered via `register_observation`), `params` (forwarded to the browser-side class), `scale`, `clip`, `history_length`. Other mjlab fields (`noise`, `delay_*`) are accepted for config compatibility but ignored — there's no training in the browser.
@@ -136,6 +145,17 @@ actions = {
 `stiffness` and `damping` are mjswan-specific — in mjlab they live on the actuator, but the browser runtime computes PD externally for motor actuators with `biastype=none`, so we need them in the policy config. Both accept a scalar, a per-joint list (aligned with `policy_joint_names`), or a dict keyed by joint name.
 
 `JointVelocityActionCfg`, `TendonLengthActionCfg`, `TendonVelocityActionCfg`, `TendonEffortActionCfg`, and `SiteEffortActionCfg` are exported so mjlab configs import cleanly, but they raise `NotImplementedError` at build time — the browser runtime doesn't support them yet.
+
+### Two clips, and they are not the same bound
+
+| | `ActionTermCfg.clip` | `clip_actions` |
+|---|---|---|
+| Lives on | the action term | the policy (from mjlab's *runner* config) |
+| Shape | `dict` of `{pattern: (min, max)}`, per target | one number, symmetric `[-v, +v]` |
+| Applied to | `raw * scale + offset` | the policy's raw output, before any term |
+| mjlab source | `BaseAction.process_actions` | rsl-rl's `RslRlVecEnvWrapper.step` |
+
+`clip_actions` lands ahead of everything, so a `last_action` observation reads the clamped vector — matching mjlab, where the wrapper clamps before `env.step` and the action manager records what it was handed. `add_policy_wandb` reads it from the task automatically; pass it explicitly only for a hand-built policy or with `only_latest=True`, which skips mjlab entirely.
 
 ## Commands
 

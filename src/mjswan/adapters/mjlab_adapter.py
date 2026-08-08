@@ -174,25 +174,70 @@ def _adapt_obs_group(group: Any) -> MjswanObservationGroupCfg:
     )
 
 
+#: Group names mjlab uses for networks that never leave training. Only the actor is
+#: exported to ONNX (``runner.load(load_cfg={"actor": True})`` in ``mjswan.wandb_io``),
+#: so a group named like this has no input to feed and is dropped rather than traced,
+#: bundled, and evaluated every control step for a value nothing reads.
+_TRAINING_ONLY_OBS_GROUPS = frozenset({"critic"})
+
+#: The key a single observation group lands under. It is the ONNX input name the
+#: runtime feeds, not a free-form label: ``OnnxModule`` defaults ``in_keys`` to
+#: ``['policy']``, and an input it cannot find is a console warning and a policy that
+#: never acts. mjlab's own name for the same group is ``"actor"``.
+DEFAULT_OBS_GROUP_KEY = "policy"
+
+
+def _is_obs_group(value: Any) -> bool:
+    """Whether *value* is a single observation group rather than a dict of them."""
+    if isinstance(value, MjswanObservationGroupCfg):
+        return True
+    # An mjlab group, or any duck-typed stand-in: it carries `terms`, a dict of them does not.
+    return not isinstance(value, Mapping) and hasattr(value, "terms")
+
+
 def adapt_observations(
-    observations: dict[str, Any] | None,
+    observations: Mapping[str, Any] | Any | None,
 ) -> dict[str, MjswanObservationGroupCfg] | None:
     """Adapt observation groups, converting mjlab types if detected.
 
+    Accepts either a mapping of groups keyed by ONNX input name, or a **single**
+    group — mjlab's ``env_cfg.observations["actor"]`` — which lands under
+    :data:`DEFAULT_OBS_GROUP_KEY`. The single-group form exists because that key
+    is not a label the caller is free to choose (see the constant), so spelling
+    ``{"policy": env_cfg.observations["actor"]}`` at every call site put a
+    silent-failure mode in the caller's hands for no gain.
+
     If the values are already ``mjswan.ObservationGroupCfg`` instances they
     are returned as-is.  mjlab ``ObservationGroupCfg`` instances are
-    converted transparently.
+    converted transparently. Groups named for a training-only mjlab network
+    (:data:`_TRAINING_ONLY_OBS_GROUPS`) are dropped with a warning.
     """
     if observations is None:
         return None
-    return {
-        key: group
-        if isinstance(group, MjswanObservationGroupCfg)
-        else _adapt_obs_group(group)
-        if _is_from_mjlab(group)
-        else group
-        for key, group in observations.items()
-    }
+    if _is_obs_group(observations):
+        observations = {DEFAULT_OBS_GROUP_KEY: observations}
+
+    # `Any`-valued while filling: the final branch below passes a group through untouched,
+    # duck-typed rather than either known class, and narrowing to the return type happens
+    # at the boundary as it does in the other `adapt_*`.
+    adapted: dict[str, Any] = {}
+    for key, group in observations.items():
+        if key in _TRAINING_ONLY_OBS_GROUPS:
+            warnings.warn(
+                f"Dropping observation group {key!r}: mjlab exports only the actor "
+                "network, so no ONNX input consumes it. Pass just the policy's own "
+                'group — `observations=env_cfg.observations["actor"]`.',
+                category=RuntimeWarning,
+                stacklevel=3,
+            )
+            continue
+        if isinstance(group, MjswanObservationGroupCfg):
+            adapted[key] = group
+        elif _is_from_mjlab(group):
+            adapted[key] = _adapt_obs_group(group)
+        else:
+            adapted[key] = group
+    return adapted
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +622,7 @@ def adapt_events(
 
 
 __all__ = [
+    "DEFAULT_OBS_GROUP_KEY",
     "adapt_events",
     "adapt_observations",
     "adapt_actions",

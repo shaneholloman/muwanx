@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   applyAction,
+  clampActions,
+  readClipActions,
   resolveActionClip,
   stepPhysics,
   type ResolvedActionTerm,
@@ -297,6 +299,51 @@ describe('resolveActionClip', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { clipLo } = resolveActionClip({ 'ankle_.*': [-1, 1] }, NAMES, 3);
     expect(Array.from(clipLo)).toEqual([-Infinity, -Infinity, -Infinity]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+/**
+ * `clip_actions` is the *other* clip: symmetric, from the runner config, on the raw
+ * policy output. The pair below is what keeps it from collapsing into `resolveActionClip`.
+ */
+describe('readClipActions / clampActions', () => {
+  it('clamps symmetrically in place', () => {
+    const action = Float32Array.from([-3, -0.5, 0.5, 3]);
+    clampActions(action, 1);
+    expect(Array.from(action)).toEqual([-1, -0.5, 0.5, 1]);
+  });
+
+  it('leaves the action untouched when unbounded', () => {
+    const action = Float32Array.from([-3, 3]);
+    clampActions(action, null);
+    expect(Array.from(action)).toEqual([-3, 3]);
+  });
+
+  it('treats 0 as a real bound, not as absent', () => {
+    // The truthiness bug this guards: `0` pins every action to zero, and reading it as
+    // "no bound" would silently run the policy unclamped instead.
+    expect(readClipActions(0)).toBe(0);
+    const action = Float32Array.from([-3, 3]);
+    clampActions(action, readClipActions(0));
+    // `=== 0` rather than a deep-equal: clamping a negative to a `0` bound yields `-0`,
+    // which is numerically zero everywhere it is used but not `toEqual([0, 0])`.
+    expect(action.every((v) => v === 0)).toBe(true);
+  });
+
+  it('reads an absent or non-numeric bound as unbounded', () => {
+    expect(readClipActions(undefined)).toBeNull();
+    expect(readClipActions(null)).toBeNull();
+    expect(readClipActions('1.0')).toBeNull();
+    expect(readClipActions(NaN)).toBeNull();
+    expect(readClipActions(Infinity)).toBeNull();
+  });
+
+  it('refuses a negative bound rather than inverting the clamp', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // `Math.min(-1, Math.max(1, x))` would pin everything to -1; unbounded is the safer read.
+    expect(readClipActions(-1)).toBeNull();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

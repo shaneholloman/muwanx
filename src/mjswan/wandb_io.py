@@ -22,6 +22,13 @@ class PtOnnxExportContext:
     joint_names: list[str]
     default_joint_pos: list[float]
     encoder_bias: list[float]
+    clip_actions: float | None = None
+    """The task's raw-action bound, from its mjlab runner config.
+
+    rsl-rl clamps the policy's output to ``[-clip_actions, +clip_actions]`` before the
+    env ever sees it, so it belongs to the trained policy's contract rather than to the
+    training loop, and playback has to reproduce it.
+    """
 
     def close(self) -> None:
         self.env.close()
@@ -203,6 +210,11 @@ def create_pt_onnx_export_context(
         joint_names=joint_names,
         default_joint_pos=default_joint_pos,
         encoder_bias=encoder_bias,
+        clip_actions=(
+            float(agent_cfg.clip_actions)
+            if agent_cfg.clip_actions is not None
+            else None
+        ),
     )
 
 

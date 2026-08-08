@@ -64,6 +64,13 @@ export type PolicyConfig = {
   stiffness?: number[] | number;
   damping?: number[] | number;
   control_type?: string;
+  /**
+   * Symmetric bound on the raw policy output, mirroring rsl-rl's
+   * `RslRlVecEnvWrapper`. It clamps before `env.step`, so the clamped vector is what
+   * the action terms and any `last_action` observation see — not `ActionConfigEntry.clip`,
+   * which bounds `raw * scale + offset` per target.
+   */
+  clip_actions?: number;
   onnx?: {
     // Weights arrive as bytes via PolicyInput.onnx; policy.json holds only the io keys.
     meta?: {

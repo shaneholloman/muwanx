@@ -183,6 +183,40 @@ export function resolveActionClip(
   return { clipLo, clipHi };
 }
 
+/**
+ * The policy's raw-action bound (`clip_actions`), or `null` for unbounded.
+ *
+ * Not `resolveActionClip`'s per-target bound: that one is a property of an action term
+ * and lands on `raw * scale + offset`. This one comes from the *runner* config
+ * (rsl-rl's `RslRlVecEnvWrapper`) and bounds the policy's output itself, symmetrically,
+ * before any term sees it.
+ *
+ * `0` is a legal bound — it pins every action to zero — so this cannot fall back on
+ * truthiness. A negative bound would make the clamp invert, and is refused instead.
+ */
+export function readClipActions(clipActions: unknown): number | null {
+  if (typeof clipActions !== 'number' || !Number.isFinite(clipActions)) return null;
+  if (clipActions < 0) {
+    console.warn(`[applyAction] Ignoring negative clip_actions: ${clipActions}`);
+    return null;
+  }
+  return clipActions;
+}
+
+/**
+ * Clamp the raw action in place to `[-bound, +bound]`.
+ *
+ * In-place because the caller's copy is what goes on to be stored as the last action:
+ * rsl-rl clamps ahead of `env.step`, so mjlab's action manager — and any `last_action`
+ * observation reading it — sees the clamped vector, never the raw one.
+ */
+export function clampActions(action: Float32Array, bound: number | null): void {
+  if (bound === null) return;
+  for (let i = 0; i < action.length; i++) {
+    action[i] = Math.min(bound, Math.max(-bound, action[i]));
+  }
+}
+
 /** `decimation` substeps, re-applying the action each time: a motor's PD reads live state. */
 export function stepPhysics(
   mujoco: { mj_step(model: MjModel, data: MjData): void },

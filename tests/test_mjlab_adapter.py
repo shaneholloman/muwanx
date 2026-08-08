@@ -218,10 +218,63 @@ class TestAdaptObservations:
         g1 = FakeMjlabObsGroupCfg(terms={"ang": FakeMjlabObsTermCfg(func=f1)})
         g2 = FakeMjlabObsGroupCfg(terms={"grav": FakeMjlabObsTermCfg(func=f2)})
 
-        result = adapt_observations({"policy": g1, "critic": g2})
+        # Two keys a multi-input policy could actually consume; a group named for a
+        # training-only mjlab network is a different case, covered below.
+        result = adapt_observations({"policy": g1, "adapt_hx": g2})
         assert result is not None
         assert callable(result["policy"].terms["ang"].func)
-        assert callable(result["critic"].terms["grav"].func)
+        assert callable(result["adapt_hx"].terms["grav"].func)
+
+
+class TestObservationGroupKey:
+    """The dict key is the ONNX input name, so the adapter — not the caller — owns it.
+
+    `OnnxModule` defaults `in_keys` to `["policy"]` and warns-and-returns on an input it
+    cannot find, so a group under mjlab's own name (`"actor"`) yields a policy that never
+    acts, with no build-time error. Hence: hand in the group, not a key for it.
+    """
+
+    def test_single_mjlab_group_lands_under_policy_key(self):
+        func = _make_mjlab_obs_func("base_ang_vel")
+        group = FakeMjlabObsGroupCfg(terms={"ang": FakeMjlabObsTermCfg(func=func)})
+
+        result = adapt_observations(group)
+
+        assert result is not None
+        assert list(result) == ["policy"]
+        assert isinstance(result["policy"], ObservationGroupCfg)
+        assert callable(result["policy"].terms["ang"].func)
+
+    def test_single_mjswan_group_lands_under_policy_key(self):
+        group = ObservationGroupCfg(
+            terms={"ang": ObservationTermCfg(func=ObservationBinding(ts_name="X"))}
+        )
+
+        result = adapt_observations(group)
+
+        assert result is not None
+        # The same object: an mjswan group needs no conversion, only a key.
+        assert result == {"policy": group}
+        assert result["policy"] is group
+
+    def test_dict_form_still_passes_keys_through(self):
+        group = ObservationGroupCfg(terms={})
+        assert adapt_observations({"custom_input": group}) == {"custom_input": group}
+
+    def test_training_only_group_is_dropped_with_warning(self):
+        actor = ObservationGroupCfg(terms={})
+        critic = ObservationGroupCfg(terms={})
+
+        with pytest.warns(RuntimeWarning, match="critic"):
+            result = adapt_observations({"policy": actor, "critic": critic})
+
+        # mjlab exports only the actor, so a critic group has no input to feed — leaving
+        # it in would trace it, bundle it, and evaluate it every control step for nothing.
+        assert result == {"policy": actor}
+
+    def test_a_group_of_only_training_terms_leaves_nothing(self):
+        with pytest.warns(RuntimeWarning, match="critic"):
+            assert adapt_observations({"critic": ObservationGroupCfg(terms={})}) == {}
 
     def test_tracking_observation_functions_are_mapped(self):
         motion_anchor = _make_mjlab_obs_func("motion_anchor_pos_b")
