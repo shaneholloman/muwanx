@@ -16,7 +16,7 @@ scene.add_policy(
     policy=onnx.load("locomotion.onnx"),
     policy_joint_names=["FL_hip", "FL_thigh", "FL_calf", ...],
     default_joint_pos=[0.1, 0.8, -1.5, ...],
-    observations={"policy": ObservationGroupCfg(terms={...})},
+    observations=ObservationGroupCfg(terms={...}),
     actions={"joint_pos": JointPositionActionCfg(...)},
     commands={"velocity": mjswan.velocity_command()},
     terminations={"time_out": TerminationTermCfg(func=term_fns.time_out)},
@@ -34,7 +34,7 @@ The relevant kwargs (see the [API reference](../api/core.md#scenehandleadd_polic
 | `commands` | `dict[str, CommandTermConfig]` keyed by policy-visible command name. |
 | `terminations` | `dict[str, TerminationTermCfg]` keyed by termination name. |
 | `encoder_bias` | Optional per-joint bias; the browser writes `processed_action - encoder_bias` to the actuators (mirrors mjlab). |
-| `clip_actions` | Symmetric bound on the raw policy output, applied before any action term. mirrors rsl-rl's `RslRlVecEnvWrapper`; `add_policy_wandb` fills it in from the task's runner config. Not `ActionTermCfg.clip` — see [Actions](#actions). |
+| `clip_actions` | Symmetric bound on the raw policy output, applied before any action term, mirroring rsl-rl's `RslRlVecEnvWrapper`. `add_policy_wandb` fills it in from the task's runner config. Not `ActionTermCfg.clip` — see [Actions](#actions). |
 | `extras` | Arbitrary JSON payload merged verbatim into the generated policy config. |
 
 ## Observations
