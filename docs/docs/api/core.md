@@ -49,7 +49,7 @@ def from_mjlab(
 
 Convenience factory that creates a `Builder` pre-configured with a single mjlab task. Delegates to the instance method `Builder.add_project_mjlab`. The returned `Builder` already contains one project and one scene; call `build()` directly, or modify it further before building.
 
-When `run_path` is supplied, every `model_*.pt` checkpoint from each W&B run is fetched and converted to ONNX via mjlab + torch (both required). For finer control, build manually with `add_project` → `ProjectHandle.add_scene_mjlab` → `SceneHandle.add_policy_wandb`.
+When `run_path` is supplied, every `model_*.pt` checkpoint from each W&B run is fetched and converted to ONNX via mjlab + torch (both required). Each attached policy configures itself from the task — observations, commands, actions and terminations from its `env_cfg`, `clip_actions` from its runner config. For finer control, build manually with `add_project` → `ProjectHandle.add_scene_mjlab` → `SceneHandle.add_policy_wandb`.
 
 **Returns** — `Builder`
 
