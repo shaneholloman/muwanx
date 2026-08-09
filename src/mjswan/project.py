@@ -6,6 +6,7 @@ managing projects containing multiple scenes.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -63,6 +64,7 @@ class ProjectHandle:
         spec: mujoco.MjSpec | None = None,
         metadata: dict[str, Any] | None = None,
         control_dt: float | None = None,
+        events: Mapping[str, Any] | None = None,
     ) -> SceneHandle:
         """Add a MuJoCo scene to this project.
 
@@ -88,6 +90,12 @@ class ProjectHandle:
                 else can supply this, and a wrong control rate produces no error at
                 playback — only a policy running at a speed it was not trained for.
                 :meth:`add_scene_mjlab` fills it in from the task.
+            events: Optional dict of ``EventTermCfg`` instances (mjswan or mjlab).
+                Equivalent to calling :meth:`~mjswan.scene.SceneHandle.set_events`
+                afterwards. Events are scene-scoped rather than per-policy: the runtime
+                builds one ``EventManager`` per scene and keeps it across policy
+                switches, and ``mode="startup"`` fires once at scene load, before any
+                policy is chosen (ADR 0004 §10, ADR 0005 brief §4).
 
         Returns:
             SceneHandle for adding policies and further configuration.
@@ -123,7 +131,10 @@ class ProjectHandle:
             control_dt=None if control_dt is None else float(control_dt),
         )
         self._config.scenes.append(scene_config)
-        return SceneHandle(scene_config, self)
+        handle = SceneHandle(scene_config, self)
+        if events:
+            handle.set_events(events)
+        return handle
 
     def add_scene_mjlab(
         self,
@@ -131,6 +142,7 @@ class ProjectHandle:
         *,
         play: bool = False,
         env_cfg: Any | None = None,
+        events: Mapping[str, Any] | None = None,
     ) -> SceneHandle:
         """Add a MuJoCo scene from an mjlab task.
 
@@ -147,6 +159,13 @@ class ProjectHandle:
                 incomplete as registered — mjlab's tracking tasks ship
                 ``commands["motion"].motion_file = ""`` and expect the caller to
                 fill in the clip path before the env is constructed.
+
+                The scene keeps whichever config it used, and every policy added to it
+                falls back on that config for its observations / commands / actions /
+                terminations — so passing your own here is also how you get those
+                defaults to reflect your edits.
+            events: Scene events, overriding the task's own ``env_cfg.events``. Omit to
+                take the task's (the usual case); pass ``{}`` for a scene with none.
 
         Returns:
             SceneHandle for further configuration (add_policy, add_splat, etc.)
@@ -177,6 +196,10 @@ class ProjectHandle:
         scene.spec.assets.update(_collect_mjlab_scene_assets(env_cfg.scene))
         apply_mjlab_sim_options(scene.spec, getattr(env_cfg, "sim", None))
         handle = self.add_scene(spec=scene.spec, name=task_id)
+        # Kept so policies on this scene can default their term sets off the same config
+        # the scene (and its tracing env) was built from.
+        handle._config.mjlab_env_cfg = env_cfg
+        handle._config.mjlab_task_id = task_id
 
         # Tracing runs term functions against a live, reset() env, so it cannot be the `Scene`
         # above, which lacks the manager/torch machinery `Entity.data` needs.
@@ -191,9 +214,11 @@ class ProjectHandle:
         if terrain_data:
             # Core only surfaces the data; overriding the spawn event with it is task-side.
             handle._config.terrain_data = terrain_data
-        events = getattr(env_cfg, "events", None)
-        if events:
-            handle.set_events(events)
+        scene_events = (
+            events if events is not None else getattr(env_cfg, "events", None)
+        )
+        if scene_events:
+            handle.set_events(scene_events)
         return handle
 
 

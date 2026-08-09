@@ -37,6 +37,14 @@ The relevant kwargs (see the [API reference](../api/core.md#scenehandleadd_polic
 | `clip_actions` | Symmetric bound on the raw policy output, applied before any action term, mirroring rsl-rl's `RslRlVecEnvWrapper`. `add_policy_wandb` fills it in from the task's runner config. Not `ActionTermCfg.clip` — see [Actions](#actions). |
 | `extras` | Arbitrary JSON payload merged verbatim into the generated policy config. |
 
+## Defaults from an mjlab env config
+
+On a scene from [`add_scene_mjlab`](../getting-started/mjlab.md), `observations` / `commands` / `actions` / `terminations` each default to the matching field of the task's `env_cfg`, so a policy from an mjlab task needs none of them spelled out. Pass one to override that field only; pass `{}` to say the policy genuinely has none. `clip_actions` likewise defaults to the task's runner config.
+
+Per-policy `env_cfg=` takes a different config for one policy — in mjlab terms, several env configs sharing one `scene`, since an env has exactly one observation design. Its control rate must match the scene's `control_dt`: the runtime derives its physics substep count and every timer from one value per scene, so a mismatch raises rather than being silently reinterpreted.
+
+A scene from plain `add_scene` has no config to fall back on, so there every field means exactly what it says.
+
 ## Observations
 
 A group is an ordered dict of `ObservationTermCfg` — the runtime concatenates term outputs in declaration order. Pass the group directly:
@@ -75,11 +83,18 @@ obs = ObservationGroupCfg(
 
 The dict form is for the rare multi-input policy, where the config's `in_keys` names each input. Groups named for a training-only mjlab network (`"critic"`) are dropped with a warning: only the actor is exported to ONNX, so nothing would consume them, and leaving them in would trace, bundle, and evaluate them every control step for a value nothing reads.
 
-Coming from mjlab, that makes the call:
+### Coming from mjlab
+
+An mjlab `env_cfg.observations` is keyed by *network* name, not by ONNX input name — two namespaces that happen to look alike. Hand the whole thing over and mjswan picks the policy's group:
 
 ```python
-observations = env_cfg.observations["actor"]
+observations = env_cfg.observations  # {"actor": ..., "critic": ...}
+observations = env_cfg.observations["actor"]  # or just the group; same result
 ```
+
+Which group that is comes from the task's **runner** config (`rl_cfg.obs_groups["actor"]`), so a task free to name its groups something else still resolves correctly; the `"actor"` name is only the fallback when there is no registered task to ask. If a task's actor reads *several* groups concatenated, mjswan raises — it feeds one vector per ONNX input and cannot join them, and quietly taking the first would feed the policy a short observation.
+
+A dict whose keys are not mjlab network names is left exactly as written, which is what keeps a policy whose input really is called `"observation"` or `"obs_history"` working.
 
 `ObservationTermCfg` fields used at runtime: `func` (a built-in sentinel below or a custom one registered via `register_observation`), `params` (forwarded to the browser-side class), `scale`, `clip`, `history_length`. Other mjlab fields (`noise`, `delay_*`) are accepted for config compatibility but ignored — there's no training in the browser.
 

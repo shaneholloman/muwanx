@@ -49,14 +49,8 @@ def setup_builder() -> mjswan.Builder:
         height=512,
     )
 
-    scene.add_policy_wandb(
-        run_paths,
-        task_id=task_id,
-        observations=env_cfg.observations["actor"],
-        commands=env_cfg.commands,
-        actions=env_cfg.actions,
-        terminations=env_cfg.terminations,
-    )
+    # Every term set defaults to the scene's `env_cfg`, and `task_id` to the scene's task.
+    scene.add_policy_wandb(run_paths)
 
     return builder
 

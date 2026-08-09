@@ -27,7 +27,9 @@ app = mjswan.Builder.from_mjlab(
 app.launch()
 ```
 
-The W&B form requires both `mjlab` and `torch` (the `model_*.pt` → ONNX conversion runs locally). For finer control, drop down to the next two patterns.
+The W&B form requires both `mjlab` and `torch` (the `model_*.pt` → ONNX conversion runs locally).
+
+Each attached policy configures itself from the task: its observations, commands, actions and terminations all come from the task's `env_cfg`, and its raw-action bound from the task's runner config. For finer control, drop down to the next two patterns.
 
 ## 2. Scene helper: `ProjectHandle.add_scene_mjlab`
 
@@ -48,32 +50,51 @@ builder.build().launch()
 
 ### Attaching trained policies from W&B
 
-Use `scene.add_policy_wandb(run_path, task_id=..., ...)` to fetch checkpoints from one or more W&B runs and attach them all to the scene. Pass `observations` / `commands` / `actions` / `terminations` from the mjlab `env_cfg` — mjswan adapts mjlab config classes automatically.
+Use `scene.add_policy_wandb(run_path)` to fetch checkpoints from one or more W&B runs and attach them all to the scene:
 
 ```python
 import mjswan
-from mjlab.tasks.registry import load_env_cfg
 
 builder = mjswan.Builder()
 project = builder.add_project(name="ANYmal C")
 
-task_id = "Mjlab-Velocity-Flat-Anymal-C"
-env_cfg = load_env_cfg(task_id, play=True)
-
-scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
-scene.add_policy_wandb(
-    "<entity>/<project>/<run_id>",
-    task_id=task_id,
-    observations=env_cfg.observations["actor"],
-    commands=env_cfg.commands,
-    actions=env_cfg.actions,
-    terminations=env_cfg.terminations,
-)
+scene = project.add_scene_mjlab("Mjlab-Velocity-Flat-Anymal-C", play=True)
+scene.add_policy_wandb("<entity>/<project>/<run_id>")
 
 builder.build().launch()
 ```
 
-`observations` takes the task's actor group directly — `"critic"` is training-only, and mjlab exports only the actor to ONNX. All four are needed: a policy attached without `observations` has nothing to feed the network, and one without `actions` has no way to reach the actuators. See [Policy Config Format](../notes/policy-config.md) for the details.
+The scene keeps the `env_cfg` it was built from, and every policy added to it defaults its observations, commands, actions and terminations to that config — so the run path is all you need. `task_id` also defaults to the scene's task.
+
+### Editing the config first
+
+Some tasks are incomplete as registered: mjlab's tracking tasks ship `commands["motion"].motion_file = ""` for the caller to fill in. Load the config, edit it, and pass it to `add_scene_mjlab` — the policies then inherit your edited version, because the scene holds the same object:
+
+```python
+from mjlab.tasks.registry import load_env_cfg
+
+task_id = "Mjlab-Tracking-Flat-Unitree-G1"
+env_cfg = load_env_cfg(task_id, play=True)
+env_cfg.commands["motion"].motion_file = "artifacts/spinkick.npz"
+
+scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
+scene.add_policy_wandb("<entity>/<project>/<run_id>")
+```
+
+Load it **once**. `load_env_cfg` returns a deepcopy, so a second call gives you an equal but separate config, and edits to one are invisible to the other.
+
+### Overriding one field
+
+Pass any of the four to replace just that one; the rest still come from the config. Pass `{}` to say the policy genuinely has none:
+
+```python
+scene.add_policy_wandb(
+    "<entity>/<project>/<run_id>",
+    terminations={"time_out": TerminationTermCfg(func=term_fns.time_out)},
+)
+```
+
+mjswan adapts mjlab config classes automatically (mjlab is a soft dependency). `observations` also accepts the task's whole `env_cfg.observations` dict or a single group — see [Policy Config Format](../notes/policy-config.md), which explains why the key matters.
 
 `add_policy_wandb` accepts a `list[str]` for the run path if you want to bundle checkpoints from multiple runs together. The latest checkpoint (highest training step) is marked as the default.
 

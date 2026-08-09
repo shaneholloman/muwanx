@@ -110,14 +110,9 @@ def main():
         if isinstance(run_ids, str):
             run_ids = [run_ids]
         wandb_paths = [f"{ENTITY}/{PROJECT}/{rid}" for rid in run_ids]
-        scene.add_policy_wandb(
-            wandb_paths,
-            task_id=task_id,
-            observations=env_cfg.observations["actor"],
-            commands=env_cfg.commands,
-            actions=env_cfg.actions,
-            terminations=env_cfg.terminations,
-        )
+        # The scene holds the `env_cfg` above, registrations included, so every term set
+        # (and `task_id`) defaults off it.
+        scene.add_policy_wandb(wandb_paths)
 
     app = builder.build()
     app.launch()

@@ -15,6 +15,8 @@ import pytest
 import mjswan
 from mjswan.builder import Builder
 from mjswan.command import CommandTermConfig, SliderConfig, ui_command
+from mjswan.envs.mdp.actions import JointPositionActionCfg
+from mjswan.managers.termination_manager import TerminationTermCfg
 from mjswan.project import _collect_mjlab_scene_assets
 from mjswan.scene import SceneConfig
 
@@ -408,3 +410,129 @@ class TestPolicyHandle:
 
         assert len(handles) == 1
         assert handles[0]._config.extras == extras
+
+
+# ===========================================================================
+# SceneHandle — deriving a policy's term sets from the scene's mjlab env config
+# ===========================================================================
+class _MdpEnvCfg:
+    """An mjlab env config carrying the four term sets, plus its control rate.
+
+    mjlab keeps all four on the env config; mjswan keeps them on the policy, so one
+    scene can host several. These tests pin the bridge between those two shapes.
+    """
+
+    def __init__(self, *, timestep: float = 0.005, decimation: int = 4):
+        self.observations = {
+            "actor": mjswan.ObservationGroupCfg(terms={}),
+            "critic": mjswan.ObservationGroupCfg(terms={}),
+        }
+        self.commands = {"velocity": mjswan.velocity_command()}
+        self.actions = {"joint_pos": JointPositionActionCfg(actuator_names=(".*",))}
+        self.terminations = {"time_out": TerminationTermCfg(func=_never, time_out=True)}
+        self.sim = type(
+            "Sim", (), {"mujoco": type("Mj", (), {"timestep": timestep})()}
+        )()
+        self.decimation = decimation
+
+
+def _never(env):  # a stand-in term body; nothing traces it in these tests
+    raise AssertionError("not called")
+
+
+def _mjlab_scene(minimal_model, env_cfg, control_dt: float = 0.02):
+    """A scene as `add_scene_mjlab` leaves one, without needing mjlab installed."""
+    scene = (
+        Builder()
+        .add_project(name="P")
+        .add_scene(name="S", model=minimal_model, control_dt=control_dt)
+    )
+    scene._config.mjlab_env_cfg = env_cfg
+    return scene
+
+
+class TestPolicyTermsDerivedFromEnvCfg:
+    def test_all_four_default_from_the_scenes_env_cfg(
+        self, minimal_model, minimal_onnx
+    ):
+        env_cfg = _MdpEnvCfg()
+        scene = _mjlab_scene(minimal_model, env_cfg)
+
+        cfg = scene.add_policy(name="Policy", policy=minimal_onnx)._config
+
+        # The actor group, keyed for the ONNX input; critic dropped.
+        assert cfg.observations is not None
+        assert list(cfg.observations) == ["policy"]
+        assert cfg.observations["policy"] is env_cfg.observations["actor"]
+        assert list(cfg.commands) == ["velocity"]
+        assert cfg.actions is not None and list(cfg.actions) == ["joint_pos"]
+        assert cfg.terminations is not None and list(cfg.terminations) == ["time_out"]
+
+    def test_an_explicit_field_overrides_only_itself(self, minimal_model, minimal_onnx):
+        # "The task's observations but my own terminations" should not cost a restatement
+        # of the other three.
+        env_cfg = _MdpEnvCfg()
+        scene = _mjlab_scene(minimal_model, env_cfg)
+        mine = {"fallen": TerminationTermCfg(func=_never)}
+
+        cfg = scene.add_policy(
+            name="Policy", policy=minimal_onnx, terminations=mine
+        )._config
+
+        assert list(cfg.terminations or {}) == ["fallen"]
+        assert list(cfg.observations or {}) == ["policy"]
+        assert list(cfg.commands) == ["velocity"]
+
+    def test_an_empty_dict_means_none_not_derive(self, minimal_model, minimal_onnx):
+        # `{}` is the only way to say "this policy genuinely has no commands"; if it
+        # derived, there would be no way to express that at all.
+        scene = _mjlab_scene(minimal_model, _MdpEnvCfg())
+
+        cfg = scene.add_policy(
+            name="Policy", policy=minimal_onnx, commands={}, terminations={}
+        )._config
+
+        assert cfg.commands == {}
+        assert not cfg.terminations
+
+    def test_a_plain_scene_derives_nothing(self, minimal_model, minimal_onnx):
+        scene = (
+            Builder()
+            .add_project(name="P")
+            .add_scene(name="S", model=minimal_model, control_dt=0.02)
+        )
+        cfg = scene.add_policy(name="Policy", policy=minimal_onnx)._config
+        assert cfg.observations is None
+        assert cfg.commands == {}
+        assert cfg.actions is None
+        assert cfg.terminations is None
+
+    def test_a_per_policy_env_cfg_wins_over_the_scenes(
+        self, minimal_model, minimal_onnx
+    ):
+        scene = _mjlab_scene(minimal_model, _MdpEnvCfg())
+        other = _MdpEnvCfg()
+        other.commands = {"other": mjswan.velocity_command()}
+
+        cfg = scene.add_policy(
+            name="Policy", policy=minimal_onnx, env_cfg=other
+        )._config
+
+        assert list(cfg.commands) == ["other"]
+
+    def test_a_per_policy_env_cfg_at_a_different_rate_is_refused(
+        self, minimal_model, minimal_onnx
+    ):
+        # control_dt is per scene — the runtime derives its substep count and every timer
+        # from one value — so honouring this quietly would run the policy at a rate it was
+        # not trained for, which is exactly what raises no error at playback.
+        scene = _mjlab_scene(minimal_model, _MdpEnvCfg(), control_dt=0.02)
+        slower = _MdpEnvCfg(timestep=0.01, decimation=5)  # 0.05 s
+
+        with pytest.raises(ValueError, match="control rate is per scene"):
+            scene.add_policy(name="Policy", policy=minimal_onnx, env_cfg=slower)
+
+    def test_a_matching_rate_is_accepted(self, minimal_model, minimal_onnx):
+        scene = _mjlab_scene(minimal_model, _MdpEnvCfg(), control_dt=0.02)
+        same = _MdpEnvCfg(timestep=0.002, decimation=10)  # 0.02 s
+        assert scene.add_policy(name="Policy", policy=minimal_onnx, env_cfg=same)

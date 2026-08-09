@@ -55,14 +55,9 @@ def setup_builder() -> mjswan.Builder:
     # `add_policy_wandb` reuses this clip; it re-downloads only if the path is not a file.
     scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
 
-    scene.add_policy_wandb(
-        run_path,
-        task_id=task_id,
-        observations=env_cfg.observations["actor"],
-        commands=env_cfg.commands,
-        actions=env_cfg.actions,
-        terminations=env_cfg.terminations,
-    )
+    # Observations, commands, actions and terminations all come from the scene's own
+    # `env_cfg` — the one edited above — and `task_id` from the scene. Nothing to restate.
+    scene.add_policy_wandb(run_path)
 
     return builder
 

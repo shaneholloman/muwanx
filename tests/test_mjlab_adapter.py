@@ -9,6 +9,8 @@ with the same attributes that the adapter inspects, placed in a fake
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,6 +20,7 @@ from mjswan.adapters.mjlab_adapter import (
     adapt_commands,
     adapt_observations,
     adapt_terminations,
+    resolve_runner_defaults,
 )
 from mjswan.envs.mdp.observations import ObservationBinding
 from mjswan.envs.mdp.terminations import TerminationBinding
@@ -293,6 +296,100 @@ class TestObservationGroupKey:
         assert result is not None
         assert callable(result["policy"].terms["anchor"].func)
         assert callable(result["policy"].terms["body"].func)
+
+
+class TestMjlabGroupDictSelection:
+    """An mjlab `env_cfg.observations` is keyed by *network*; mjswan's by *ONNX input*.
+
+    Two namespaces that look alike, so the adapter remaps the one it can recognise and
+    keeps its hands off the one it cannot. Getting that boundary wrong in either
+    direction is silent at build time: an unrecognised key means no ONNX input to feed,
+    and a wrongly-remapped one means the wrong vector on the right input.
+    """
+
+    def test_whole_mjlab_dict_reduces_to_the_actor_group(self):
+        actor = ObservationGroupCfg(terms={})
+        critic = ObservationGroupCfg(terms={})
+
+        result = adapt_observations({"actor": actor, "critic": critic})
+
+        assert result == {"policy": actor}
+
+    def test_actor_only_dict_is_renamed(self):
+        actor = ObservationGroupCfg(terms={})
+        assert adapt_observations({"actor": actor}) == {"policy": actor}
+
+    def test_a_dict_without_an_actor_is_left_alone(self):
+        # `examples/demo` relies on this: `balance.json` declares `in_keys: ["observation"]`,
+        # `decap.json` `["obs_history"]`, ANYmal's `["obs"]`. Remapping any of them to
+        # "policy" would leave the runtime looking for an input nothing supplies.
+        for key in ("observation", "obs", "obs_history"):
+            group = ObservationGroupCfg(terms={})
+            assert adapt_observations({key: group}) == {key: group}
+
+    def test_a_multi_input_dict_is_left_alone(self):
+        # Facet: `in_keys: ["command", "policy", ...]` — two real inputs, both ours.
+        policy = ObservationGroupCfg(terms={})
+        command = ObservationGroupCfg(terms={})
+        result = adapt_observations({"policy": policy, "command": command})
+        assert result == {"policy": policy, "command": command}
+
+    def test_runner_obs_groups_win_over_the_actor_name(self):
+        # A task free to name its groups anything; `obs_groups["actor"]` is the only thing
+        # that actually knows which one the exported network reads.
+        proprio = ObservationGroupCfg(terms={})
+        privileged = ObservationGroupCfg(terms={})
+
+        result = adapt_observations(
+            {"proprio": proprio, "privileged": privileged},
+            policy_groups=("proprio",),
+        )
+
+        assert result == {"policy": proprio}
+
+    def test_runner_obs_groups_beat_a_literal_actor_key(self):
+        actor = ObservationGroupCfg(terms={})
+        other = ObservationGroupCfg(terms={})
+        result = adapt_observations(
+            {"actor": actor, "other": other}, policy_groups=("other",)
+        )
+        assert result == {"policy": other}
+
+    def test_concatenated_groups_are_refused_not_truncated(self):
+        # rsl-rl lets one network read several groups concatenated. mjswan feeds one vector
+        # per input, so silently taking the first would mean a short observation and a
+        # policy fed garbage — the one case that has to be loud.
+        with pytest.raises(ValueError, match="cannot concatenate"):
+            adapt_observations(
+                {
+                    "a": ObservationGroupCfg(terms={}),
+                    "b": ObservationGroupCfg(terms={}),
+                },
+                policy_groups=("a", "b"),
+            )
+
+    def test_a_named_group_that_is_absent_is_an_error(self):
+        with pytest.raises(ValueError, match="proprio"):
+            adapt_observations(
+                {"actor": ObservationGroupCfg(terms={})}, policy_groups=("proprio",)
+            )
+
+    def test_a_single_group_ignores_policy_groups(self):
+        # Already unambiguous: there is one group, and it is the policy's.
+        group = ObservationGroupCfg(terms={})
+        assert adapt_observations(group, policy_groups=("anything",)) == {
+            "policy": group
+        }
+
+    def test_mjlab_groups_in_the_dict_are_still_converted(self):
+        func = _make_mjlab_obs_func("base_ang_vel")
+        actor = FakeMjlabObsGroupCfg(terms={"ang": FakeMjlabObsTermCfg(func=func)})
+
+        result = adapt_observations({"actor": actor, "critic": actor})
+
+        assert result is not None
+        assert list(result) == ["policy"]
+        assert isinstance(result["policy"], ObservationGroupCfg)
 
 
 # ===================================================================
@@ -586,3 +683,82 @@ class TestMuscleActionAdaptation:
         result = adapt_actions({"muscles": mjlab_cfg})
         assert result is not None
         assert "muscles" in result
+
+
+# ===================================================================
+# Tests: mjlab runner config (rl_cfg) — the two fields playback needs
+# ===================================================================
+
+
+class TestResolveRunnerDefaults:
+    """`obs_groups` and `clip_actions` live on the *runner* config, not the env config.
+
+    Everything else on it is training-only or already inside the exported ONNX — rsl-rl
+    bakes the observation normalizer into the graph ahead of the MLP, so playback does
+    not have to reproduce it.
+    """
+
+    @staticmethod
+    def _install(monkeypatch, rl_cfg):
+        module = ModuleType("mjlab.tasks.registry")
+        setattr(module, "load_rl_cfg", lambda task_id: rl_cfg)
+        monkeypatch.setitem(sys.modules, "mjlab", ModuleType("mjlab"))
+        monkeypatch.setitem(sys.modules, "mjlab.tasks", ModuleType("mjlab.tasks"))
+        monkeypatch.setitem(sys.modules, "mjlab.tasks.registry", module)
+
+    def test_reads_obs_groups_and_clip_actions(self, monkeypatch):
+        rl_cfg = SimpleNamespace(
+            obs_groups={"actor": ("actor",), "critic": ("critic",)}, clip_actions=100.0
+        )
+        self._install(monkeypatch, rl_cfg)
+
+        result = resolve_runner_defaults("some-task")
+
+        assert result.policy_obs_groups == ("actor",)
+        assert result.clip_actions == 100.0
+
+    def test_clip_actions_zero_survives(self, monkeypatch):
+        # A real bound, and the one a truthiness check would eat.
+        self._install(
+            monkeypatch,
+            SimpleNamespace(obs_groups={"actor": ("actor",)}, clip_actions=0.0),
+        )
+        assert resolve_runner_defaults("t").clip_actions == 0.0
+
+    def test_a_task_may_name_its_actor_group_anything(self, monkeypatch):
+        self._install(
+            monkeypatch,
+            SimpleNamespace(obs_groups={"actor": ("proprio",)}, clip_actions=None),
+        )
+        assert resolve_runner_defaults("t").policy_obs_groups == ("proprio",)
+
+    def test_no_task_id_means_no_defaults(self):
+        result = resolve_runner_defaults(None)
+        assert result.policy_obs_groups is None
+        assert result.clip_actions is None
+
+    def test_an_unknown_task_is_not_fatal(self, monkeypatch):
+        module = ModuleType("mjlab.tasks.registry")
+
+        def _raise(task_id):
+            raise KeyError(task_id)
+
+        setattr(module, "load_rl_cfg", _raise)
+        monkeypatch.setitem(sys.modules, "mjlab", ModuleType("mjlab"))
+        monkeypatch.setitem(sys.modules, "mjlab.tasks", ModuleType("mjlab.tasks"))
+        monkeypatch.setitem(sys.modules, "mjlab.tasks.registry", module)
+
+        # A hand-built env_cfg has no registered task; that is a fallback, not an error.
+        assert resolve_runner_defaults("nope").policy_obs_groups is None
+
+    @pytest.mark.slow
+    @pytest.mark.mjlab
+    def test_against_a_real_mjlab_task(self):
+        """Pin the shape against mjlab itself, since this reads its config directly."""
+        pytest.importorskip("mjlab")
+        import mjlab.tasks  # noqa: F401 — populates the registry
+
+        result = resolve_runner_defaults("Mjlab-Velocity-Flat-Unitree-G1")
+        # mjlab's default is `{"actor": ("actor",), "critic": ("critic",)}`; if upstream
+        # renames or restructures it, this fails and says so.
+        assert result.policy_obs_groups == ("actor",)

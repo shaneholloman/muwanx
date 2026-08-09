@@ -31,7 +31,7 @@ import dataclasses
 import re
 import warnings
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 from ..command import CommandTermConfig as MjswanCommandTermConfig
 from ..command import PendingCommandTrace, PendingResetTrace
@@ -186,6 +186,11 @@ _TRAINING_ONLY_OBS_GROUPS = frozenset({"critic"})
 #: never acts. mjlab's own name for the same group is ``"actor"``.
 DEFAULT_OBS_GROUP_KEY = "policy"
 
+#: mjlab's own name for the group its actor network reads, and the fallback used when
+#: no runner config is available to say otherwise (a hand-built ``env_cfg`` has none).
+#: It is mjlab's default for ``RslRlBaseRunnerCfg.obs_groups``: ``{"actor": ("actor",)}``.
+_MJLAB_ACTOR_GROUP = "actor"
+
 
 def _is_obs_group(value: Any) -> bool:
     """Whether *value* is a single observation group rather than a dict of them."""
@@ -195,15 +200,64 @@ def _is_obs_group(value: Any) -> bool:
     return not isinstance(value, Mapping) and hasattr(value, "terms")
 
 
+def _select_policy_group(
+    observations: Mapping[str, Any],
+    policy_groups: tuple[str, ...] | None,
+) -> Mapping[str, Any]:
+    """Reduce an mjlab-shaped group dict to the one group the policy's ONNX input reads.
+
+    An mjlab ``env_cfg.observations`` is keyed by *network* name (``"actor"``,
+    ``"critic"``); mjswan's keys are *ONNX input* names. Those namespaces only look
+    alike, so a dict that is plainly the former gets remapped onto the latter, and a
+    dict that is not is returned untouched — a policy whose input really is named
+    ``"observation"`` or ``"obs_history"``, or a genuinely multi-input one, must keep
+    the keys its config declares.
+
+    *policy_groups* is the task's own answer, from ``rl_cfg.obs_groups["actor"]``, and
+    wins over the ``"actor"`` name. It is a tuple because rsl-rl lets a network read
+    several groups concatenated; mjswan feeds one vector per input and cannot express
+    that, so more than one entry is an error rather than a silent truncation.
+    """
+    if policy_groups is not None:
+        if len(policy_groups) != 1:
+            raise ValueError(
+                "The task's runner config feeds its actor network "
+                f"{len(policy_groups)} concatenated observation groups "
+                f"({', '.join(map(repr, policy_groups))}). mjswan feeds one group per "
+                "ONNX input and cannot concatenate them, so pass the single group the "
+                "exported policy actually takes: "
+                "`observations=env_cfg.observations[<name>]`."
+            )
+        name = policy_groups[0]
+        if name not in observations:
+            raise ValueError(
+                f"The task's runner config names {name!r} as its actor's observation "
+                f"group, but the observations passed have {sorted(observations)}."
+            )
+        return {DEFAULT_OBS_GROUP_KEY: observations[name]}
+
+    if _MJLAB_ACTOR_GROUP in observations:
+        return {DEFAULT_OBS_GROUP_KEY: observations[_MJLAB_ACTOR_GROUP]}
+    return observations
+
+
 def adapt_observations(
     observations: Mapping[str, Any] | Any | None,
+    *,
+    policy_groups: tuple[str, ...] | None = None,
 ) -> dict[str, MjswanObservationGroupCfg] | None:
     """Adapt observation groups, converting mjlab types if detected.
 
-    Accepts either a mapping of groups keyed by ONNX input name, or a **single**
-    group — mjlab's ``env_cfg.observations["actor"]`` — which lands under
-    :data:`DEFAULT_OBS_GROUP_KEY`. The single-group form exists because that key
-    is not a label the caller is free to choose (see the constant), so spelling
+    Accepts three shapes, because the caller should not have to know which key the
+    runtime will look for:
+
+    * a **single** group — mjlab's ``env_cfg.observations["actor"]`` — which lands
+      under :data:`DEFAULT_OBS_GROUP_KEY`;
+    * mjlab's whole ``env_cfg.observations`` dict, from which the policy's group is
+      selected (see :func:`_select_policy_group`) and the rest dropped;
+    * a dict already keyed by ONNX input name, passed through as-is.
+
+    That key is not a label the caller is free to choose, so spelling
     ``{"policy": env_cfg.observations["actor"]}`` at every call site put a
     silent-failure mode in the caller's hands for no gain.
 
@@ -211,11 +265,18 @@ def adapt_observations(
     are returned as-is.  mjlab ``ObservationGroupCfg`` instances are
     converted transparently. Groups named for a training-only mjlab network
     (:data:`_TRAINING_ONLY_OBS_GROUPS`) are dropped with a warning.
+
+    Args:
+        observations: One of the three shapes above.
+        policy_groups: The task's ``rl_cfg.obs_groups["actor"]``, when known. Only
+            consulted for the dict form.
     """
     if observations is None:
         return None
     if _is_obs_group(observations):
         observations = {DEFAULT_OBS_GROUP_KEY: observations}
+    else:
+        observations = _select_policy_group(observations, policy_groups)
 
     # `Any`-valued while filling: the final branch below passes a group through untouched,
     # duck-typed rather than either known class, and narrowing to the return type happens
@@ -238,6 +299,51 @@ def adapt_observations(
         else:
             adapted[key] = group
     return adapted
+
+
+class MjlabRunnerDefaults(NamedTuple):
+    """What an mjlab task's *runner* config contributes to browser playback.
+
+    Everything else on it is training-only, or already inside the exported ONNX — the
+    network shape and, when enabled, the observation normalizer, which rsl-rl bakes into
+    the graph ahead of the MLP.
+    """
+
+    policy_obs_groups: tuple[str, ...] | None
+    """``obs_groups["actor"]``: which observation group(s) the actor network reads."""
+
+    clip_actions: float | None
+    """The symmetric bound rsl-rl clamps the policy's raw output to."""
+
+
+_NO_RUNNER_DEFAULTS = MjlabRunnerDefaults(policy_obs_groups=None, clip_actions=None)
+
+
+def resolve_runner_defaults(task_id: str | None) -> MjlabRunnerDefaults:
+    """Read an mjlab task's runner config for the two fields playback needs.
+
+    All-``None`` when the task is unknown or mjlab is absent; the caller then falls back
+    on the ``"actor"`` group name and leaves the action unclamped. Cheap enough to call
+    per policy — ``load_rl_cfg`` is a registry lookup and a deepcopy.
+    """
+    if task_id is None:
+        return _NO_RUNNER_DEFAULTS
+    try:
+        from mjlab.tasks.registry import load_rl_cfg
+    except ImportError:
+        return _NO_RUNNER_DEFAULTS
+    try:
+        rl_cfg = load_rl_cfg(task_id)
+    except (KeyError, AttributeError):
+        return _NO_RUNNER_DEFAULTS
+
+    obs_groups = getattr(rl_cfg, "obs_groups", None)
+    groups = obs_groups.get("actor") if isinstance(obs_groups, Mapping) else None
+    clip = getattr(rl_cfg, "clip_actions", None)
+    return MjlabRunnerDefaults(
+        policy_obs_groups=tuple(groups) if groups else None,
+        clip_actions=float(clip) if clip is not None else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -628,4 +734,6 @@ __all__ = [
     "adapt_actions",
     "adapt_terminations",
     "resolve_action_scales",
+    "MjlabRunnerDefaults",
+    "resolve_runner_defaults",
 ]

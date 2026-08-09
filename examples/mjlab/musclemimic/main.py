@@ -94,6 +94,11 @@ def setup_builder() -> mjswan.Builder:
         }
 
     # mimic_lookahead is registered as unsupported and will be skipped by the builder.
+    #
+    # Passed explicitly rather than left to default off the scene's config: the scene was
+    # built before `env_cfg` was loaded here, so it holds a separate copy without the
+    # `mimic_deviation` params injected above. Load order, not preference — see
+    # g1_spinkick for the shape where one config feeds both.
     policy_handles = scene.add_policy_wandb(
         run_paths,
         task_id=task_id,

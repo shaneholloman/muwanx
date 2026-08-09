@@ -127,6 +127,8 @@ def add_scene(
     model: mujoco.MjModel | None = None,
     spec: mujoco.MjSpec | None = None,
     metadata: dict[str, Any] | None = None,
+    control_dt: float | None = None,
+    events: Mapping[str, Any] | None = None,
 ) -> SceneHandle
 ```
 
@@ -140,6 +142,8 @@ Add a MuJoCo scene. Provide exactly one of `model` or `spec`.
 | `model` | `mujoco.MjModel \| None` | `None` | Compiled MuJoCo model. Saved as `.mjb` (binary). Loads faster; larger files. |
 | `spec` | `mujoco.MjSpec \| None` | `None` | MuJoCo spec. Saved as `.mjz` (DEFLATE-compressed ZIP). Smaller files; slightly slower to load. |
 | `metadata` | `dict \| None` | `None` | Arbitrary key-value metadata stored in `config.json`. |
+| `control_dt` | `float \| None` | `None` | Seconds per control step — mjlab's `timestep * decimation`. Required once the scene carries a policy: the model holds only the physics timestep, and a wrong control rate raises nothing at playback. `add_scene_mjlab` fills it in from the task. |
+| `events` | `Mapping[str, Any] \| None` | `None` | Scene events (`EventTermCfg` instances, mjswan or mjlab). Same as calling `SceneHandle.set_events` afterwards. Events are scene-scoped, not per-policy: the runtime keeps one `EventManager` per scene across policy switches, and `mode="startup"` fires once at scene load, before any policy is chosen. |
 
 **Returns** — `SceneHandle`
 
@@ -149,7 +153,11 @@ Add a MuJoCo scene. Provide exactly one of `model` or `spec`.
 
 ```python
 def add_scene_mjlab(
-    task_id: str, *, play: bool = False, env_cfg: Any | None = None
+    task_id: str,
+    *,
+    play: bool = False,
+    env_cfg: Any | None = None,
+    events: Mapping[str, Any] | None = None,
 ) -> SceneHandle
 ```
 
@@ -161,7 +169,8 @@ Load an mjlab task's MuJoCo spec from the task registry and add it as a scene. R
 |---|---|---|---|
 | `task_id` | `str` | — | mjlab task identifier (e.g. `"go2_flat"`). |
 | `play` | `bool` | `False` | Load mjlab's play/evaluation config instead of the training config. |
-| `env_cfg` | `Any \| None` | `None` | Pre-loaded (and possibly edited) env config to use instead of loading `task_id` fresh. Needed for tracking tasks: mjlab registers them with `commands["motion"].motion_file = ""`, so the caller must fill in the clip path before the env is constructed. |
+| `env_cfg` | `Any \| None` | `None` | Pre-loaded (and possibly edited) env config to use instead of loading `task_id` fresh. Needed for tracking tasks: mjlab registers them with `commands["motion"].motion_file = ""`, so the caller must fill in the clip path before the env is constructed. The scene keeps whichever config it used, and policies added to it default their term sets to it. |
+| `events` | `Mapping[str, Any] \| None` | `None` | Scene events, overriding the task's own `env_cfg.events`. Omit to take the task's; pass `{}` for a scene with none. |
 
 **Returns** — `SceneHandle`
 
@@ -188,15 +197,19 @@ def add_policy(
     policy: onnx.ModelProto,
     *,
     metadata: dict[str, Any] | None = None,
-    source_path: str | None = None,
     config_path: str | None = None,
-    observations: dict[str, ObservationGroupCfg] | None = None,
+    source_path: str | None = None,
+    env_cfg: Any | None = None,
+    task_id: str | None = None,
+    observations: ObservationGroupCfg | Mapping[str, Any] | None = None,
     commands: Mapping[str, CommandTermConfig] | None = None,
     actions: Mapping[str, ActionTermCfg] | None = None,
     terminations: dict[str, TerminationTermCfg] | None = None,
     policy_joint_names: list[str] | None = None,
+    policy_num_actions: int | None = None,
     default_joint_pos: list[float] | None = None,
     encoder_bias: list[float] | None = None,
+    clip_actions: float | None = None,
     initial_qpos: list[float] | None = None,
     initial_qvel: list[float] | None = None,
     extras: dict[str, Any] | None = None,
@@ -204,7 +217,7 @@ def add_policy(
 ) -> PolicyHandle
 ```
 
-Attach an ONNX policy to the scene. `observations`, `commands`, `actions`, and `terminations` all accept mjlab-compatible config classes (mjswan converts them via the adapter layer; mjlab is a soft dependency).
+Attach an ONNX policy to the scene. `observations`, `commands`, `actions`, and `terminations` all accept mjlab-compatible config classes (mjswan converts them via the adapter layer; mjlab is a soft dependency), and each defaults to the matching field of the scene's mjlab env config when it has one — pass `{}` for a policy that genuinely has none.
 
 **Parameters**
 
@@ -215,14 +228,17 @@ Attach an ONNX policy to the scene. `observations`, `commands`, `actions`, and `
 | `metadata` | `dict \| None` | `None` | Arbitrary key-value metadata. |
 | `source_path` | `str \| None` | `None` | Path to the source `.onnx` file. Written to `config.json` for reference. |
 | `config_path` | `str \| None` | `None` | Path to a JSON file describing observations / actions / etc. mjswan merges any Python-side `commands`/`observations`/`actions`/`terminations` into this file. See [Policy Config Format](../notes/policy-config.md). |
+| `env_cfg` | `Any \| None` | `None` | mjlab env config to take this policy's unset term sets from, instead of the scene's. Its control rate must match the scene's `control_dt`. |
+| `task_id` | `str \| None` | `None` | mjlab task id used to read the task's runner config (which observation group the actor reads, and `clip_actions`). Defaults to the scene's task. |
 | `observations` | `ObservationGroupCfg \| dict[str, ObservationGroupCfg] \| None` | `None` | A single observation group — mjlab's `env_cfg.observations["actor"]` — or a dict of them keyed by **ONNX input tensor name**. Prefer the single group: the key is an input name the runtime feeds, not a label, and a wrong one fails silently at playback. A `"critic"` group is dropped with a warning (only the actor is exported to ONNX). Accepts both mjswan and mjlab `ObservationGroupCfg` instances. |
 | `commands` | `Mapping[str, CommandTermConfig] \| None` | `None` | Command terms keyed by policy-visible name (e.g. `"velocity"`). Use `mjswan.velocity_command()` or `mjswan.ui_command([...])` to construct values. Accepts mjlab `CommandTermCfg` instances too. |
 | `actions` | `Mapping[str, ActionTermCfg] \| None` | `None` | Action term configs keyed by name (e.g. `"joint_pos"`). |
 | `terminations` | `dict[str, TerminationTermCfg] \| None` | `None` | Termination term configs keyed by name. |
 | `policy_joint_names` | `list[str] \| None` | `None` | Ordered list of joint names the policy controls. Required by the browser runtime to map outputs to actuators. |
+| `policy_num_actions` | `int \| None` | `None` | Output width for policies whose action count cannot be inferred from `policy_joint_names` — e.g. muscle-driven ones, which drive actuators rather than joints. |
 | `default_joint_pos` | `list[float] \| None` | `None` | Default (resting) joint positions corresponding to `policy_joint_names`. |
 | `encoder_bias` | `list[float] \| None` | `None` | Per-joint encoder bias (mirrors mjlab's joint-position action path). |
-| `clip_actions` | `float \| None` | `None` | Symmetric bound on the raw policy output, applied before any action term sees it (rsl-rl's `RslRlVecEnvWrapper`). Distinct from `ActionTermCfg.clip`, which bounds `raw * scale + offset` per target. |
+| `clip_actions` | `float \| None` | `None` | Symmetric bound on the raw policy output, applied before any action term sees it (rsl-rl's `RslRlVecEnvWrapper`). Distinct from `ActionTermCfg.clip`, which bounds `raw * scale + offset` per target. Defaults to the task's runner config; `0.0` is a real bound. |
 | `initial_qpos` | `list[float] \| None` | `None` | Optional initial qpos serialized into the policy JSON for reset logic. |
 | `initial_qvel` | `list[float] \| None` | `None` | Optional initial qvel serialized into the policy JSON for reset logic. |
 | `extras` | `dict \| None` | `None` | Extra JSON payload merged verbatim into the generated policy config. |
@@ -240,6 +256,7 @@ def add_policy_wandb(
     task_id: str | None = None,
     config_path: str | None = None,
     metadata: dict[str, Any] | None = None,
+    env_cfg: Any | None = None,
     observations: ObservationGroupCfg | dict[str, ObservationGroupCfg] | None = None,
     commands: Mapping[str, Any] | None = None,
     actions: Mapping[str, ActionTermCfg] | None = None,
@@ -251,9 +268,9 @@ def add_policy_wandb(
 
 Fetch ONNX policies from one or more W&B runs and attach them all to the scene. Same `observations` / `commands` / `actions` / `terminations` are applied to every policy.
 
-When `only_latest=False` (the default), all `model_*.pt` checkpoints in each run are downloaded and converted to ONNX via mjlab + torch — `task_id` is required. When `only_latest=True`, only the exported `.onnx` artifact is fetched.
+When `only_latest=False` (the default), all `model_*.pt` checkpoints in each run are downloaded and converted to ONNX via mjlab + torch — `task_id` is required, and comes from the scene unless the scene is a plain one. When `only_latest=True`, only the exported `.onnx` artifact is fetched.
 
-`clip_actions` is read from the task's mjlab runner config automatically; pass it explicitly only with `only_latest=True`, which skips mjlab and so has no runner config to read.
+Every term set defaults to the scene's mjlab env config (or to `env_cfg=`, when given), and `task_id` to the scene's task — so for a scene from `add_scene_mjlab` the run path alone is enough. `clip_actions` is read from the task's runner config automatically.
 
 **Returns** — `list[PolicyHandle]` (flat across all runs). The latest checkpoint (highest `_<step>` suffix) is marked as the default.
 
