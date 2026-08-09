@@ -125,20 +125,18 @@ def setup_builder() -> mjswan.Builder:
         policy_num_actions=NUM_MUSCLES,
         initial_qpos=INITIAL_QPOS,
         initial_qvel=INITIAL_QVEL,
-        observations={
-            "policy": ObservationGroupCfg(
-                terms={
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel,
-                        params={"asset_cfg": finger_joints},
-                    ),
-                    "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel,
-                        params={"asset_cfg": finger_joints},
-                    ),
-                }
-            ),
-        },
+        observations=ObservationGroupCfg(
+            terms={
+                "joint_pos": ObservationTermCfg(
+                    func=obs_fns.joint_pos_rel,
+                    params={"asset_cfg": finger_joints},
+                ),
+                "joint_vel": ObservationTermCfg(
+                    func=obs_fns.joint_vel_rel,
+                    params={"asset_cfg": finger_joints},
+                ),
+            }
+        ),
         actions={
             "muscles": MuscleActivationActionCfg(
                 entity_name="",

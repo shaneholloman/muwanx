@@ -8,8 +8,12 @@ directly against the scene's live env — mjlab's ``pole_angle_cos_sin``
 (Cartpole), ``ee_to_object_distance``/``object_to_goal_distance``
 (Lift-Cube manipulation) all trace exactly like ``joint_pos_rel`` or any
 other mjlab-library function. There is nothing to reimplement or register
-here for those; ``get_policy_observations`` simply hands the task's own
-``ObservationGroupCfg`` straight through for every task.
+here for those, and nothing to reshape either: the task's own actor group goes
+straight to ``add_policy_wandb(observations=...)``, which is why the
+``get_policy_observations`` wrapper that used to live here is gone.
+
+Only ``height_scan`` needs a registration, and only because its parameters come
+off the task's sensor config rather than the function.
 """
 
 import os
@@ -18,12 +22,6 @@ from typing import Any
 from mjswan import ObservationBinding, register_observation
 
 _OBS_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def get_policy_observations(task_id: str, env_cfg: Any) -> dict[str, Any]:
-    """Return browser-safe policy observations for the given mjlab task."""
-    del task_id
-    return {"policy": env_cfg.observations["actor"]}
 
 
 def register_custom_observations(env_cfg: Any) -> None:

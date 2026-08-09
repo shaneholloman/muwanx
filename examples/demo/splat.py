@@ -91,24 +91,20 @@ def setup_builder() -> mjswan.Builder:
         policy=onnx.load("assets/unitree_g1/locomotion.onnx"),
         config_path="assets/unitree_g1/locomotion.json",
         terminations=g1_terminations,
-        observations={
-            "policy": ObservationGroupCfg(
-                terms={
-                    "base_lin_vel": ObservationTermCfg(func=obs_fns.base_lin_vel),
-                    "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
-                    "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity
-                    ),
-                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
-                    "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
-                    "last_action": ObservationTermCfg(func=obs_fns.last_action),
-                    "velocity_cmd": ObservationTermCfg(
-                        func=obs_fns.generated_commands,
-                        params={"command_name": "velocity"},
-                    ),
-                }
-            )
-        },
+        observations=ObservationGroupCfg(
+            terms={
+                "base_lin_vel": ObservationTermCfg(func=obs_fns.base_lin_vel),
+                "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
+                "projected_gravity": ObservationTermCfg(func=obs_fns.projected_gravity),
+                "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+                "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
+                "last_action": ObservationTermCfg(func=obs_fns.last_action),
+                "velocity_cmd": ObservationTermCfg(
+                    func=obs_fns.generated_commands,
+                    params={"command_name": "velocity"},
+                ),
+            }
+        ),
         commands={
             "velocity": mjswan.velocity_command(
                 lin_vel_x=(-1.5, 1.5),

@@ -19,7 +19,7 @@ if __name__ == "__main__" and __package__ is None:
 
 from . import commands  # noqa: F401 - for command registrations
 from .events import apply_terrain_spawn, register_custom_events
-from .observations import get_policy_observations, register_custom_observations
+from .observations import register_custom_observations
 from .terminations import register_custom_terminations
 
 ENTITY = "ttktjmt-org"
@@ -98,7 +98,9 @@ def main():
         register_custom_events(env_cfg)
         register_custom_observations(env_cfg)
         register_custom_terminations(env_cfg)
-        scene = project.add_scene_mjlab(task_id, play=True)
+        # The registrations above read this config, so the scene has to build from the same
+        # object — `load_env_cfg` returns a deepcopy, and a second call would diverge.
+        scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
         # Task-side browser enhancement: spawn the single env on a random flat
         # terrain patch (no-op for non-terrain tasks).  See events/__init__.py.
         apply_terrain_spawn(scene)
@@ -111,7 +113,7 @@ def main():
         scene.add_policy_wandb(
             wandb_paths,
             task_id=task_id,
-            observations=get_policy_observations(task_id, env_cfg),
+            observations=env_cfg.observations["actor"],
             commands=env_cfg.commands,
             actions=env_cfg.actions,
             terminations=env_cfg.terminations,

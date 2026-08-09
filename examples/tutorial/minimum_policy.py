@@ -125,18 +125,16 @@ def main():
         name="PD Hover",
         policy=build_policy(),
         policy_joint_names=["lift"],
-        observations={
-            "policy": ObservationGroupCfg(
-                terms={
-                    "height": ObservationTermCfg(func=joint_height),
-                    "velocity": ObservationTermCfg(func=obs_fns.joint_vel_rel),
-                    "target": ObservationTermCfg(
-                        func=obs_fns.generated_commands,
-                        params={"command_name": "target"},
-                    ),
-                }
-            ),
-        },
+        observations=ObservationGroupCfg(
+            terms={
+                "height": ObservationTermCfg(func=joint_height),
+                "velocity": ObservationTermCfg(func=obs_fns.joint_vel_rel),
+                "target": ObservationTermCfg(
+                    func=obs_fns.generated_commands,
+                    params={"command_name": "target"},
+                ),
+            }
+        ),
         actions={
             "thrust": JointEffortActionCfg(
                 entity_name="",

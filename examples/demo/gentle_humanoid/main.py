@@ -304,53 +304,51 @@ def setup_builder() -> mjswan.Builder:
                 ]
             ),
         },
-        observations={
-            # The offsets live on the `motion` command, so motion-coupled terms read their width off
-            # the reference tensors. Proprioceptive terms compute one frame; `history_steps` stacks.
-            "policy": ObservationGroupCfg(
-                terms={
-                    "boot": ObservationTermCfg(func=terms.boot),
-                    "tracking": ObservationTermCfg(func=terms.tracking),
-                    "compliance": ObservationTermCfg(
-                        func=terms.compliance,
-                        params={"command_name": "compliance"},
+        # The offsets live on the `motion` command, so motion-coupled terms read their width off
+        # the reference tensors. Proprioceptive terms compute one frame; `history_steps` stacks.
+        observations=ObservationGroupCfg(
+            terms={
+                "boot": ObservationTermCfg(func=terms.boot),
+                "tracking": ObservationTermCfg(func=terms.tracking),
+                "compliance": ObservationTermCfg(
+                    func=terms.compliance,
+                    params={"command_name": "compliance"},
+                ),
+                "target_joint_pos": ObservationTermCfg(
+                    func=terms.target_joint_pos,
+                    params={"asset_cfg": policy_joints},
+                ),
+                "target_root_z": ObservationTermCfg(func=terms.target_root_z),
+                "target_projected_gravity": ObservationTermCfg(
+                    func=terms.target_projected_gravity
+                ),
+                "root_ang_vel": ObservationTermCfg(
+                    func=terms.root_ang_vel,
+                    history_steps=tuple(tracking_cfg["root_angvel_history_steps"]),
+                ),
+                "projected_gravity": ObservationTermCfg(
+                    func=terms.projected_gravity,
+                    history_steps=tuple(
+                        tracking_cfg["projected_gravity_history_steps"]
                     ),
-                    "target_joint_pos": ObservationTermCfg(
-                        func=terms.target_joint_pos,
-                        params={"asset_cfg": policy_joints},
-                    ),
-                    "target_root_z": ObservationTermCfg(func=terms.target_root_z),
-                    "target_projected_gravity": ObservationTermCfg(
-                        func=terms.target_projected_gravity
-                    ),
-                    "root_ang_vel": ObservationTermCfg(
-                        func=terms.root_ang_vel,
-                        history_steps=tuple(tracking_cfg["root_angvel_history_steps"]),
-                    ),
-                    "projected_gravity": ObservationTermCfg(
-                        func=terms.projected_gravity,
-                        history_steps=tuple(
-                            tracking_cfg["projected_gravity_history_steps"]
-                        ),
-                    ),
-                    "joint_pos": ObservationTermCfg(
-                        func=terms.joint_pos,
-                        params={"asset_cfg": policy_joints},
-                        history_steps=tuple(tracking_cfg["joint_pos_history_steps"]),
-                    ),
-                    "joint_vel": ObservationTermCfg(
-                        func=terms.joint_vel,
-                        params={"asset_cfg": policy_joints},
-                        history_steps=tuple(tracking_cfg["joint_vel_history_steps"]),
-                    ),
-                    # The runtime already holds `last_action`, so only the stacking is ours.
-                    "prev_actions": ObservationTermCfg(
-                        func=obs_fns.last_action,
-                        history_length=int(tracking_cfg["prev_action_steps"]),
-                    ),
-                }
-            )
-        },
+                ),
+                "joint_pos": ObservationTermCfg(
+                    func=terms.joint_pos,
+                    params={"asset_cfg": policy_joints},
+                    history_steps=tuple(tracking_cfg["joint_pos_history_steps"]),
+                ),
+                "joint_vel": ObservationTermCfg(
+                    func=terms.joint_vel,
+                    params={"asset_cfg": policy_joints},
+                    history_steps=tuple(tracking_cfg["joint_vel_history_steps"]),
+                ),
+                # The runtime already holds `last_action`, so only the stacking is ours.
+                "prev_actions": ObservationTermCfg(
+                    func=obs_fns.last_action,
+                    history_length=int(tracking_cfg["prev_action_steps"]),
+                ),
+            }
+        ),
         actions={
             "joint_pos": JointPositionActionCfg(
                 actuator_names=(".*",),

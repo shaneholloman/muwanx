@@ -97,7 +97,7 @@ def setup_builder() -> mjswan.Builder:
     policy_handles = scene.add_policy_wandb(
         run_paths,
         task_id=task_id,
-        observations={"policy": env_cfg.observations["actor"]},
+        observations=env_cfg.observations["actor"],
         commands=env_cfg.commands,
         actions=env_cfg.actions,
         terminations=env_cfg.terminations,

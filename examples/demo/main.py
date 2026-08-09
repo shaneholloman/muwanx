@@ -172,24 +172,20 @@ def _add_g1_scene(project) -> None:
                 default_lin_vel_y=0.0,
             )
         },
-        observations={
-            "policy": ObservationGroupCfg(
-                terms={
-                    "base_lin_vel": ObservationTermCfg(func=obs_fns.base_lin_vel),
-                    "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
-                    "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity
-                    ),
-                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
-                    "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
-                    "last_action": ObservationTermCfg(func=obs_fns.last_action),
-                    "velocity_cmd": ObservationTermCfg(
-                        func=obs_fns.generated_commands,
-                        params={"command_name": "velocity"},
-                    ),
-                }
-            )
-        },
+        observations=ObservationGroupCfg(
+            terms={
+                "base_lin_vel": ObservationTermCfg(func=obs_fns.base_lin_vel),
+                "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
+                "projected_gravity": ObservationTermCfg(func=obs_fns.projected_gravity),
+                "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+                "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
+                "last_action": ObservationTermCfg(func=obs_fns.last_action),
+                "velocity_cmd": ObservationTermCfg(
+                    func=obs_fns.generated_commands,
+                    params={"command_name": "velocity"},
+                ),
+            }
+        ),
     )
 
     g1_scene.add_policy(
@@ -197,6 +193,9 @@ def _add_g1_scene(project) -> None:
         name="Balance",
         config_path="assets/unitree_g1/balance.json",
         terminations=g1_terminations,
+        # Dict form, not a bare group: `balance.json` declares `in_keys: ["observation"]`,
+        # and the key *is* the ONNX input name. A bare group would land under "policy" and
+        # the runtime would find no input by that name.
         observations={
             "observation": ObservationGroupCfg(
                 terms={
@@ -241,6 +240,10 @@ def _add_go2_scene(project) -> None:
             damping=0.5,
         )
     }
+    # Two groups, so this stays a dict: `vanilla.json`/`robust.json` declare
+    # `in_keys: ["policy", "is_init", "adapt_hx", "command_"]`. `is_init`/`adapt_hx` are the
+    # recurrent carry the runtime supplies itself; the two observation inputs are ours, and
+    # each key has to match its input name exactly.
     go2_velocity_obs = {
         "policy": ObservationGroupCfg(
             terms={
@@ -276,6 +279,8 @@ def _add_go2_scene(project) -> None:
         policy=onnx.load("assets/unitree_go2/facet.onnx"),
         config_path="assets/unitree_go2/facet.json",
         actions=go2_actions,
+        # Genuinely multi-input (`facet.json`: policy + command + the recurrent carry), which
+        # is what the dict form is for — one group per ONNX input, keyed by its name.
         observations={
             "policy": ObservationGroupCfg(
                 terms={
@@ -357,6 +362,7 @@ def _add_go1_scene(project) -> None:
                 damping=0.5,
             )
         },
+        # `decap.json` declares `in_keys: ["obs_history"]`; the key is that input's name.
         observations={
             "obs_history": ObservationGroupCfg(
                 terms={
@@ -411,6 +417,8 @@ def _add_anymal_c_scene(project) -> None:
                 damping=1.257,
             )
         },
+        # mjlab's own export names the input `obs`, and the config declares it — so the group
+        # is keyed to match rather than handed over bare.
         observations={
             "obs": ObservationGroupCfg(
                 terms={

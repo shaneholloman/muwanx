@@ -28,8 +28,13 @@ def setup_builder() -> mjswan.Builder:
 
     builder = mjswan.Builder()
 
+    # One config for both the scene and the policies. `load_env_cfg` hands back a deepcopy,
+    # so loading it twice would build the scene from one copy and configure the policies
+    # from another — equal here, but silently divergent the moment either gets edited.
+    env_cfg = load_env_cfg(task_id, play=True)
+
     project = builder.add_project(name="Unitree RL")
-    scene = project.add_scene_mjlab(task_id, play=True)
+    scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
 
     # Customize skybox
     mjspec = scene._config.spec
@@ -44,11 +49,10 @@ def setup_builder() -> mjswan.Builder:
         height=512,
     )
 
-    env_cfg = load_env_cfg(task_id, play=True)
     scene.add_policy_wandb(
         run_paths,
         task_id=task_id,
-        observations={"policy": env_cfg.observations["actor"]},
+        observations=env_cfg.observations["actor"],
         commands=env_cfg.commands,
         actions=env_cfg.actions,
         terminations=env_cfg.terminations,
