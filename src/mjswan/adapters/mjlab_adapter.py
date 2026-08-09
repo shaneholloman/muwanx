@@ -214,12 +214,20 @@ def _select_policy_group(
     the keys its config declares.
 
     *policy_groups* is the task's own answer, from ``rl_cfg.obs_groups["actor"]``, and
-    wins over the ``"actor"`` name. It is a tuple because rsl-rl lets a network read
-    several groups concatenated; mjswan feeds one vector per input and cannot express
-    that, so more than one entry is an error rather than a silent truncation.
+    wins over the ``"actor"`` name. It is consulted only when it actually names one of
+    the keys present: a dict that shares no key with the task's group names is not the
+    task's dict, whatever the task happens to call its groups, and remapping it on the
+    strength of a task id would break a policy whose input is named something else.
     """
-    if policy_groups is not None:
+    if not observations:
+        # `{}` says the policy has no observations. Nothing to select, and nothing wrong.
+        return observations
+
+    if policy_groups and not set(policy_groups).isdisjoint(observations):
         if len(policy_groups) != 1:
+            # rsl-rl lets one network read several groups concatenated. mjswan feeds one
+            # vector per ONNX input and cannot join them, so taking the first would hand
+            # the policy a short observation — the one case that has to be loud.
             raise ValueError(
                 "The task's runner config feeds its actor network "
                 f"{len(policy_groups)} concatenated observation groups "
@@ -228,13 +236,7 @@ def _select_policy_group(
                 "exported policy actually takes: "
                 "`observations=env_cfg.observations[<name>]`."
             )
-        name = policy_groups[0]
-        if name not in observations:
-            raise ValueError(
-                f"The task's runner config names {name!r} as its actor's observation "
-                f"group, but the observations passed have {sorted(observations)}."
-            )
-        return {DEFAULT_OBS_GROUP_KEY: observations[name]}
+        return {DEFAULT_OBS_GROUP_KEY: observations[policy_groups[0]]}
 
     if _MJLAB_ACTOR_GROUP in observations:
         return {DEFAULT_OBS_GROUP_KEY: observations[_MJLAB_ACTOR_GROUP]}

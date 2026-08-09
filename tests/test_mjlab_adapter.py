@@ -368,11 +368,33 @@ class TestMjlabGroupDictSelection:
                 policy_groups=("a", "b"),
             )
 
-    def test_a_named_group_that_is_absent_is_an_error(self):
-        with pytest.raises(ValueError, match="proprio"):
-            adapt_observations(
-                {"actor": ObservationGroupCfg(terms={})}, policy_groups=("proprio",)
-            )
+    def test_a_dict_sharing_no_key_with_the_task_is_left_alone(self):
+        # A task id is not evidence that *this* dict is the task's. On an mjlab scene a
+        # policy may still carry a config declaring `in_keys: ["observation"]`, and
+        # remapping it because the task calls its group "proprio" would break it.
+        group = ObservationGroupCfg(terms={})
+        assert adapt_observations(
+            {"observation": group}, policy_groups=("proprio",)
+        ) == {"observation": group}
+
+    def test_a_literal_actor_key_still_wins_when_the_task_names_another(self):
+        actor = ObservationGroupCfg(terms={})
+        assert adapt_observations({"actor": actor}, policy_groups=("proprio",)) == {
+            "policy": actor
+        }
+
+    def test_an_empty_dict_selects_nothing_rather_than_failing(self):
+        # `observations={}` is how a policy says it has none; a task id must not turn
+        # that into an error.
+        assert adapt_observations({}, policy_groups=("actor",)) == {}
+
+    def test_concatenated_groups_only_raise_for_the_tasks_own_dict(self):
+        # No overlap with the task's group names, so this is somebody else's dict and the
+        # concatenation the task does is none of its business.
+        group = ObservationGroupCfg(terms={})
+        assert adapt_observations({"policy": group}, policy_groups=("a", "b")) == {
+            "policy": group
+        }
 
     def test_a_single_group_ignores_policy_groups(self):
         # Already unambiguous: there is one group, and it is the policy's.
