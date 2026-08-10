@@ -77,6 +77,31 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder(debug=True)
 
     project = builder.add_project(name="MuscleMimic Fullbody")
+
+    # TODO: adopt the single-config shape the other mjlab examples now use.
+    #
+    # Every other example loads `env_cfg` once, edits it, and hands it to
+    # `add_scene_mjlab(env_cfg=...)`; the scene then keeps it and every policy defaults its
+    # observations / commands / actions / terminations off it, so `add_policy_wandb` takes
+    # the run paths alone. Here the scene is built first and `env_cfg` loaded after, so the
+    # two are separate deepcopies (`load_env_cfg` copies) and the `mimic_deviation` params
+    # injected below are on a config the scene never sees — which is why all four term sets
+    # are still passed explicitly further down.
+    #
+    # To convert:
+    #   1. Move the `load_env_cfg` + `mimic_deviation` injection above `add_scene_mjlab`.
+    #   2. Pass `env_cfg=env_cfg` to `add_scene_mjlab`.
+    #   3. Drop `task_id`, `observations`, `commands`, `actions` and `terminations` from the
+    #      `add_policy_wandb` call — all five then come from the scene.
+    #
+    # The one thing to check when you do: step 1 means the live `ManagerBasedRlEnv` that
+    # `add_scene_mjlab` constructs is built from the *injected* config, so mjlab's own
+    # `TerminationManager` sees `mimic_deviation` carrying `clip_url` / `site_names` / `fps`
+    # — params mjlab's closure does not take. mjlab validates term params at `compute()`
+    # rather than at construction, and the tracing env is never stepped, so this is expected
+    # to be fine (it is, for the terrain-param injection in `defaults/`), but it could not be
+    # verified here: `myoMimicFullbody-v0` comes from `mjlab_myochallenge`, which is not
+    # installed in CI. Run the example once after converting.
     scene = project.add_scene_mjlab(task_id, play=True)
 
     env_cfg = load_env_cfg(task_id, play=True)
@@ -95,10 +120,8 @@ def setup_builder() -> mjswan.Builder:
 
     # mimic_lookahead is registered as unsupported and will be skipped by the builder.
     #
-    # Passed explicitly rather than left to default off the scene's config: the scene was
-    # built before `env_cfg` was loaded here, so it holds a separate copy without the
-    # `mimic_deviation` params injected above. Load order, not preference — see
-    # g1_spinkick for the shape where one config feeds both.
+    # All four passed explicitly because of the load order above, not by preference; see the
+    # TODO at the top of this function.
     policy_handles = scene.add_policy_wandb(
         run_paths,
         task_id=task_id,
