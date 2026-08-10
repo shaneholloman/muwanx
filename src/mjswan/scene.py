@@ -632,11 +632,15 @@ class SceneHandle:
             )
 
             with tempfile.TemporaryDirectory() as staging_dir:
-                # The config mjlab's *export* env is built from. Kept separate from the
-                # caller's: the clip has to be on disk before that env is constructed, and
-                # the path it gets is a staging file that dies with this block — not
-                # something to leave behind on a config anything else reads.
-                export_env_cfg: Any = None
+                # The config mjlab's *export* env is built from. A copy of the scene's, so a
+                # scene built from the training config does not silently get a play-config
+                # export env — the observation widths that env reports are what the exported
+                # ONNX takes as input. Copied rather than shared because the tracking branch
+                # below writes a staging path into it that dies with this block.
+                source_cfg = self._resolve_env_cfg(env_cfg)
+                export_env_cfg: Any = (
+                    copy.deepcopy(source_cfg) if source_cfg is not None else None
+                )
                 if tracking_motion_term is not None:
                     existing_file = getattr(tracking_motion_term, "motion_file", None)
                     if existing_file and Path(existing_file).is_file():
@@ -655,8 +659,9 @@ class SceneHandle:
                             rp, (motion_name, motion_bytes)
                         )
 
-                    source_cfg = self._resolve_env_cfg(env_cfg)
-                    if source_cfg is None:
+                    if export_env_cfg is None:
+                        # A plain scene carries no config to follow, so fall back on the same
+                        # play config `add_scene_mjlab` would have chosen.
                         try:
                             from mjlab.tasks.registry import (
                                 load_env_cfg as _load_env_cfg,
@@ -666,8 +671,7 @@ class SceneHandle:
                                 "mjlab is required to resolve the tracking motion for "
                                 "export."
                             ) from exc
-                        source_cfg = _load_env_cfg(task_id, play=True)
-                    export_env_cfg = copy.deepcopy(source_cfg)
+                        export_env_cfg = _load_env_cfg(task_id, play=True)
                     export_env_cfg.commands["motion"].motion_file = motion_file_for_env  # type: ignore[attr-defined]
 
                 export_context = create_pt_onnx_export_context(

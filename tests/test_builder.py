@@ -309,13 +309,13 @@ class TestFromMjlab:
         scene_handle = MagicMock(name="SceneHandle")
         seen: dict[str, object] = {}
 
-        def _stub(self, task_id, *, play):
-            seen["task_id"], seen["play"] = task_id, play
+        def _stub(self, task_id, *, play, env_cfg):
+            seen["task_id"], seen["play"], seen["env_cfg"] = task_id, play, env_cfg
             return scene_handle
 
         monkeypatch.setattr(ProjectHandle, "add_scene_mjlab", _stub)
-        # `play` is positional-free and has no default here on purpose: the caller always
-        # passes it, so a stub default would hide a regression in what it passes.
+        # Neither keyword has a default here on purpose: the caller always passes both, so a
+        # stub default would hide a regression in what it passes.
         scene_handle.seen = seen
         return scene_handle
 
@@ -339,18 +339,30 @@ class TestFromMjlab:
             run_paths, task_id="go2_flat"
         )
 
-    def test_defaults_to_the_play_config(self, monkeypatch):
-        # The advertised one-liner is a viewer. mjlab's training config sets
-        # `episode_length_s` to 10-20 s, which becomes the browser's `time_out`
-        # termination — so defaulting to it resets the robot every few seconds.
+    def test_forwards_play_unresolved(self, monkeypatch):
+        """`play` must arrive as `None`, not as a materialised `True`.
+
+        `add_scene_mjlab` rejects `play` together with `env_cfg`, so a wrapper that
+        resolved the default here would make every `env_cfg=` call trip that guard.
+        Which config `None` ends up meaning is pinned in `test_project.py`, against the
+        real method.
+        """
         scene_handle = self._patch(monkeypatch)
         Builder.from_mjlab("go2_flat")
-        assert scene_handle.seen["play"] is True
+        assert scene_handle.seen["play"] is None
+        assert scene_handle.seen["env_cfg"] is None
 
     def test_play_false_still_reaches_the_scene(self, monkeypatch):
         scene_handle = self._patch(monkeypatch)
         Builder.from_mjlab("go2_flat", play=False)
         assert scene_handle.seen["play"] is False
+
+    def test_env_cfg_reaches_the_scene(self, monkeypatch):
+        scene_handle = self._patch(monkeypatch)
+        sentinel = object()
+        Builder.from_mjlab("go2_flat", env_cfg=sentinel)
+        assert scene_handle.seen["env_cfg"] is sentinel
+        assert scene_handle.seen["play"] is None
 
 
 # ===========================================================================

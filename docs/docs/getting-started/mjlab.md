@@ -35,7 +35,7 @@ Each attached policy configures itself from the task: its observations, commands
 
 When you need multiple scenes (one per task) or want to mix mjlab tasks with hand-written scenes, use `add_scene_mjlab(task_id)` on a `ProjectHandle`. It loads the task's MuJoCo spec, applies the task's `viewer` / `events` / terrain data, and returns a normal `SceneHandle`.
 
-It loads mjlab's **play** config by default — the opposite of mjlab's own `load_env_cfg`, because that default serves training scripts and this is a playback tool. The training config sets `episode_length_s` to 10–20 s, and mjswan turns that into the browser's `time_out` termination, so a viewer built from it resets the robot every few seconds. Pass `play=False` if you want training-time conditions.
+mjlab registers two configs per task — `env_cfg` (training) and `play_env_cfg` — and `play` selects between them, as its own `load_env_cfg` does. mjswan defaults to **play**, the opposite of mjlab, because that default serves training scripts and this is a playback tool: the training config sets `episode_length_s` to 10–20 s, which mjswan turns into the browser's `time_out` termination, so a viewer built from it resets the robot every few seconds. Pass `play=False` if you want training-time conditions.
 
 ```python
 import mjswan
@@ -76,8 +76,8 @@ Some tasks are incomplete as registered: mjlab's tracking tasks ship `commands["
 from mjlab.tasks.registry import load_env_cfg
 
 task_id = "Mjlab-Tracking-Flat-Unitree-G1"
-# `play=True` here, not on `add_scene_mjlab`: passing `env_cfg` means the scene uses it
-# as given, so the choice of config is already made by the time it gets there.
+# `play=True` here, not on `add_scene_mjlab`: `env_cfg` *is* one of the two configs, so
+# there is nothing left for `play` to select — passing both raises.
 env_cfg = load_env_cfg(task_id, play=True)
 env_cfg.commands["motion"].motion_file = "artifacts/spinkick.npz"
 

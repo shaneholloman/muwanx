@@ -140,7 +140,7 @@ class ProjectHandle:
         self,
         task_id: str,
         *,
-        play: bool = True,
+        play: bool | None = None,
         env_cfg: Any | None = None,
         events: Mapping[str, Any] | None = None,
     ) -> SceneHandle:
@@ -151,22 +151,30 @@ class ProjectHandle:
 
         Args:
             task_id: mjlab task identifier (e.g. ``"go2_flat"``).
-            play: Load mjlab's play/evaluation config rather than its training one.
-                Defaults to ``True`` — the opposite of mjlab's own
-                ``load_env_cfg``, deliberately: that default serves training
-                scripts, and this is a playback tool. The training config sets
-                ``episode_length_s`` to 10-20 s, which mjswan serializes into the
-                browser's ``time_out`` termination, so a viewer built from it resets
-                the robot every few seconds while someone is watching. The play
-                config also drops ``push_robot`` and the terrain-bounds termination
-                and adds ``randomize_terrain``. Pass ``False`` to reproduce
-                training-time conditions. Ignored when ``env_cfg`` is given — the
-                caller has already chosen by then.
+            play: Which of the task's two registered configs to load. mjlab keeps
+                them as ``env_cfg`` (training) and ``play_env_cfg``, and this
+                selects between them exactly as its
+                ``load_env_cfg(task_id, play=...)`` does.
+
+                Unset means **play** — the opposite of mjlab's own default,
+                deliberately: that one serves training scripts, and this is a
+                playback tool. The training config sets ``episode_length_s`` to
+                10-20 s, which mjswan serializes into the browser's ``time_out``
+                termination, so a viewer built from it resets the robot every few
+                seconds while someone is watching; it also keeps ``push_robot`` and
+                the terrain-bounds termination, and lacks ``randomize_terrain``.
+                Pass ``False`` to reproduce training-time conditions.
+
+                Mutually exclusive with ``env_cfg``: that is already one of the two
+                configs, so nothing is left to select, and passing both raises rather
+                than quietly ignoring one.
             env_cfg: Pre-loaded (and possibly edited) env config to use instead
                 of loading ``task_id`` fresh. Required for tasks whose config is
                 incomplete as registered — mjlab's tracking tasks ship
                 ``commands["motion"].motion_file = ""`` and expect the caller to
-                fill in the clip path before the env is constructed.
+                fill in the clip path before the env is constructed. Load it with the
+                ``play`` you want — ``load_env_cfg(task_id, play=True)`` — since
+                ``play`` on this method then has nothing left to do.
 
                 The scene keeps whichever config it used, and every policy added to it
                 falls back on that config for its observations / commands / actions /
@@ -182,7 +190,7 @@ class ProjectHandle:
             ```python
             builder = mjswan.Builder()
             project = builder.add_project(name="My App")
-            scene = project.add_scene_mjlab("go2_flat", play=True)
+            scene = project.add_scene_mjlab("go2_flat")
             app = builder.build()
             ```
         """
@@ -196,9 +204,20 @@ class ProjectHandle:
                 "Install it with: pip install mjlab"
             ) from e
 
+        if env_cfg is not None and play is not None:
+            raise ValueError(
+                "Provide either 'play' or 'env_cfg', not both. `env_cfg` is already one "
+                "of the task's two registered configs, so `play` has nothing left to "
+                "select — load it as `load_env_cfg(task_id, play=...)` instead."
+            )
+
         ensure_mjlab_extensions()
         if env_cfg is None:
-            env_cfg = load_env_cfg(task_id, play=play)
+            env_cfg = load_env_cfg(task_id, play=True if play is None else play)
+        # Always 1: the browser renders a single env, and mjlab's `num_envs` only sets the
+        # batch dimension of the env's tensors — `Scene.spec` is the same either way, and
+        # traced graphs carry a dynamic batch axis. A larger value would buy nothing and
+        # cost the build one `ManagerBasedRlEnv` that size.
         env_cfg.scene.num_envs = 1
         scene = Scene(env_cfg.scene, device="cpu")
         scene.spec.assets.update(_collect_mjlab_scene_assets(env_cfg.scene))

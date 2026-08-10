@@ -234,6 +234,47 @@ class TestProjectHandle:
 
         assert calls[0] == ("load_env_cfg", "Mjlab-Cartpole-Balance", False)
 
+    def test_add_scene_mjlab_rejects_play_together_with_env_cfg(
+        self, monkeypatch, minimal_spec
+    ):
+        """`env_cfg` is already one of the task's two configs, so `play` selects nothing.
+
+        Before the guard the contradiction resolved silently in `env_cfg`'s favour, which
+        is how `play=False` next to an `env_cfg=` could read as honoured and not be.
+        """
+        _install_fake_mjlab(monkeypatch, minimal_spec)
+        project = Builder().add_project(name="P")
+
+        with pytest.raises(ValueError, match="not both"):
+            project.add_scene_mjlab("t", play=False, env_cfg=_FakeEnvCfg())
+        # Redundant-but-agreeing is refused too: there is still nothing for it to select.
+        with pytest.raises(ValueError, match="not both"):
+            project.add_scene_mjlab("t", play=True, env_cfg=_FakeEnvCfg())
+
+    def test_from_mjlab_reaches_the_play_config(self, monkeypatch, minimal_spec):
+        """End-to-end through the wrapper, since its own test only sees `play=None`."""
+        calls, _ = _install_fake_mjlab(monkeypatch, minimal_spec)
+
+        Builder.from_mjlab("Mjlab-Cartpole-Balance")
+
+        assert calls[0] == ("load_env_cfg", "Mjlab-Cartpole-Balance", True)
+
+    def test_from_mjlab_env_cfg_skips_the_registry(self, monkeypatch, minimal_spec):
+        calls, _ = _install_fake_mjlab(monkeypatch, minimal_spec)
+        caller_env_cfg = _FakeEnvCfg()
+
+        Builder.from_mjlab("Mjlab-Cartpole-Balance", env_cfg=caller_env_cfg)
+
+        assert [c[0] for c in calls] == ["scene", "env", "env_reset"]
+        assert calls[1] == ("env", caller_env_cfg, "cpu")
+
+    def test_from_mjlab_rejects_play_together_with_env_cfg(
+        self, monkeypatch, minimal_spec
+    ):
+        _install_fake_mjlab(monkeypatch, minimal_spec)
+        with pytest.raises(ValueError, match="not both"):
+            Builder.from_mjlab("t", play=True, env_cfg=_FakeEnvCfg())
+
     def test_add_scene_mjlab_uses_supplied_env_cfg(self, monkeypatch, minimal_spec):
         """Tracking tasks register with `commands["motion"].motion_file = ""`, so the
         caller has to hand in a cfg with the clip path already filled in — loading the

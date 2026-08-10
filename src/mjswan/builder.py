@@ -12,6 +12,7 @@ import json
 import shutil
 import warnings
 from pathlib import Path
+from typing import Any
 
 import mujoco
 import onnx
@@ -125,7 +126,8 @@ class Builder:
         *,
         run_path: str | list[str] | None = None,
         project_name: str = "mjlab",
-        play: bool = True,
+        play: bool | None = None,
+        env_cfg: Any | None = None,
         base_path: str = "/",
         gtm_id: str | None = None,
         mt: bool = False,
@@ -149,8 +151,12 @@ class Builder:
                 :meth:`add_project` → :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`
                 → :meth:`~mjswan.scene.SceneHandle.add_policy_wandb`.
             project_name: Name for the auto-created project. Defaults to ``"mjlab"``.
-            play: Load mjlab's play/evaluation config rather than its training one.
-                Defaults to ``True``; see
+            play: Which of the task's two registered configs to load; unset means play.
+                Mutually exclusive with ``env_cfg``. See
+                :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`.
+            env_cfg: Pre-loaded (and possibly edited) env config, for a task whose
+                registered one is incomplete — mjlab's tracking tasks ship
+                ``commands["motion"].motion_file = ""``. See
                 :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`.
             base_path: Base path for the application (e.g., ``"/mjswan/"``).
             gtm_id: Optional Google Tag Manager container ID.
@@ -178,7 +184,11 @@ class Builder:
         """
         builder = cls(base_path=base_path, gtm_id=gtm_id, mt=mt, debug=debug)
         builder.add_project_mjlab(
-            task_id, run_path=run_path, project_name=project_name, play=play
+            task_id,
+            run_path=run_path,
+            project_name=project_name,
+            play=play,
+            env_cfg=env_cfg,
         )
         return builder
 
@@ -188,7 +198,8 @@ class Builder:
         *,
         run_path: str | list[str] | None = None,
         project_name: str = "mjlab",
-        play: bool = True,
+        play: bool | None = None,
+        env_cfg: Any | None = None,
     ) -> ProjectHandle:
         """Add a project pre-configured with a single mjlab task.
 
@@ -203,15 +214,20 @@ class Builder:
                 and converted to ONNX via mjlab+torch (both required) using
                 ``task_id``. Defaults to ``None`` (no policy attached).
             project_name: Name for the created project. Defaults to ``"mjlab"``.
-            play: Load mjlab's play/evaluation config rather than its training one.
-                Defaults to ``True``; see
+            play: Which of the task's two registered configs to load; unset means play.
+                Mutually exclusive with ``env_cfg``. See
+                :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`.
+            env_cfg: Pre-loaded (and possibly edited) env config. See
                 :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`.
 
         Returns:
             ProjectHandle for the created project.
         """
         project = self.add_project(name=project_name)
-        scene = project.add_scene_mjlab(task_id, play=play)
+        # `play` is forwarded unresolved: materialising the default here would make it
+        # indistinguishable from an explicit one, and `add_scene_mjlab` rejects `play`
+        # together with `env_cfg` — so every caller of this would trip that guard.
+        scene = project.add_scene_mjlab(task_id, play=play, env_cfg=env_cfg)
         if run_path is not None:
             scene.add_policy_wandb(run_path, task_id=task_id)
         return project

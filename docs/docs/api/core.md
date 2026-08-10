@@ -39,7 +39,8 @@ def from_mjlab(
     *,
     run_path: str | list[str] | None = None,
     project_name: str = "mjlab",
-    play: bool = True,
+    play: bool | None = None,
+    env_cfg: Any | None = None,
     base_path: str = "/",
     gtm_id: str | None = None,
     mt: bool = False,
@@ -48,6 +49,8 @@ def from_mjlab(
 ```
 
 Convenience factory that creates a `Builder` pre-configured with a single mjlab task. Delegates to the instance method `Builder.add_project_mjlab`. The returned `Builder` already contains one project and one scene; call `build()` directly, or modify it further before building.
+
+`play` and `env_cfg` behave exactly as on `ProjectHandle.add_scene_mjlab`, including being mutually exclusive; both are forwarded unresolved. Passing `env_cfg` is what makes this one-liner usable for a tracking task, whose registered config ships an empty `motion_file`.
 
 When `run_path` is supplied, every `model_*.pt` checkpoint from each W&B run is fetched and converted to ONNX via mjlab + torch (both required). Each attached policy configures itself from the task — observations, commands, actions and terminations from its `env_cfg`, `clip_actions` from its runner config. For finer control, build manually with `add_project` → `ProjectHandle.add_scene_mjlab` → `SceneHandle.add_policy_wandb`.
 
@@ -61,7 +64,8 @@ def add_project_mjlab(
     *,
     run_path: str | list[str] | None = None,
     project_name: str = "mjlab",
-    play: bool = True,
+    play: bool | None = None,
+    env_cfg: Any | None = None,
 ) -> ProjectHandle
 ```
 
@@ -155,7 +159,7 @@ Add a MuJoCo scene. Provide exactly one of `model` or `spec`.
 def add_scene_mjlab(
     task_id: str,
     *,
-    play: bool = True,
+    play: bool | None = None,
     env_cfg: Any | None = None,
     events: Mapping[str, Any] | None = None,
 ) -> SceneHandle
@@ -168,8 +172,8 @@ Load an mjlab task's MuJoCo spec from the task registry and add it as a scene. R
 | Name | Type | Default | Description |
 |---|---|---|---|
 | `task_id` | `str` | — | mjlab task identifier (e.g. `"go2_flat"`). |
-| `play` | `bool` | `True` | Load mjlab's play/evaluation config rather than its training one. **The opposite of mjlab's own `load_env_cfg` default, deliberately** — that one serves training scripts, and this is a playback tool. mjlab's training config sets `episode_length_s` to 10–20 s, which mjswan serializes into the browser's `time_out` termination, so a viewer built from it resets the robot every few seconds; play also drops `push_robot` and the terrain-bounds termination and adds `randomize_terrain`. Pass `False` to reproduce training-time conditions. Ignored when `env_cfg` is given — load that config with the `play` you want. |
-| `env_cfg` | `Any \| None` | `None` | Pre-loaded (and possibly edited) env config to use instead of loading `task_id` fresh. Needed for tracking tasks: mjlab registers them with `commands["motion"].motion_file = ""`, so the caller must fill in the clip path before the env is constructed. The scene keeps whichever config it used, and policies added to it default their term sets to it. |
+| `play` | `bool \| None` | `None` | Which of the task's two registered configs to load. mjlab keeps them as `env_cfg` (training) and `play_env_cfg`; this selects between them exactly as its `load_env_cfg(task_id, play=...)` does. **Unset means play — the opposite of mjlab's own default, deliberately**: that one serves training scripts, and this is a playback tool. mjlab's training config sets `episode_length_s` to 10–20 s, which mjswan serializes into the browser's `time_out` termination, so a viewer built from it resets the robot every few seconds; it also keeps `push_robot` and the terrain-bounds termination, and lacks `randomize_terrain`. Pass `False` to reproduce training-time conditions. **Mutually exclusive with `env_cfg`** — passing both raises. |
+| `env_cfg` | `Any \| None` | `None` | Pre-loaded (and possibly edited) env config to use instead of loading `task_id` fresh. Needed for tracking tasks: mjlab registers them with `commands["motion"].motion_file = ""`, so the caller must fill in the clip path before the env is constructed. Load it with the `play` you want — `load_env_cfg(task_id, play=True)` — since `play` here then has nothing left to select. The scene keeps whichever config it used, and policies added to it default their term sets to it. |
 | `events` | `Mapping[str, Any] \| None` | `None` | Scene events, overriding the task's own `env_cfg.events`. Omit to take the task's; pass `{}` for a scene with none. |
 
 **Returns** — `SceneHandle`
