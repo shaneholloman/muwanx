@@ -34,7 +34,7 @@ def setup_builder() -> mjswan.Builder:
     env_cfg = load_env_cfg(task_id, play=True)
 
     project = builder.add_project(name="Unitree RL")
-    scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
+    scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
 
     # Customize skybox
     mjspec = scene._config.spec

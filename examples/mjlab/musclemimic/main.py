@@ -102,7 +102,7 @@ def setup_builder() -> mjswan.Builder:
     # to be fine (it is, for the terrain-param injection in `defaults/`), but it could not be
     # verified here: `myoMimicFullbody-v0` comes from `mjlab_myochallenge`, which is not
     # installed in CI. Run the example once after converting.
-    scene = project.add_scene_mjlab(task_id, play=True)
+    scene = project.add_scene_mjlab(task_id)
 
     env_cfg = load_env_cfg(task_id, play=True)
 

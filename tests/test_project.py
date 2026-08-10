@@ -209,6 +209,31 @@ class TestProjectHandle:
         # And the control rate comes from it, not the timestep — they differ by `decimation`.
         assert scene._config.control_dt == 0.05
 
+    def test_add_scene_mjlab_defaults_to_the_play_config(
+        self, monkeypatch, minimal_spec
+    ):
+        """mjswan is a playback tool, so its default is the opposite of mjlab's.
+
+        The training config sets `episode_length_s` to 10-20 s and mjswan serializes that
+        into the browser's `time_out` termination, so a viewer built from it resets the
+        robot every few seconds. Play also drops `push_robot` and the terrain-bounds
+        termination.
+        """
+        calls, _ = _install_fake_mjlab(monkeypatch, minimal_spec)
+
+        Builder().add_project(name="P").add_scene_mjlab("Mjlab-Cartpole-Balance")
+
+        assert calls[0] == ("load_env_cfg", "Mjlab-Cartpole-Balance", True)
+
+    def test_add_scene_mjlab_play_false_is_honoured(self, monkeypatch, minimal_spec):
+        calls, _ = _install_fake_mjlab(monkeypatch, minimal_spec)
+
+        Builder().add_project(name="P").add_scene_mjlab(
+            "Mjlab-Cartpole-Balance", play=False
+        )
+
+        assert calls[0] == ("load_env_cfg", "Mjlab-Cartpole-Balance", False)
+
     def test_add_scene_mjlab_uses_supplied_env_cfg(self, monkeypatch, minimal_spec):
         """Tracking tasks register with `commands["motion"].motion_file = ""`, so the
         caller has to hand in a cfg with the clip path already filled in — loading the

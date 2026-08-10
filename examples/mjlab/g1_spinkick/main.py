@@ -53,7 +53,7 @@ def setup_builder() -> mjswan.Builder:
 
     project = builder.add_project(name="mjlab Spinkick")
     # `add_policy_wandb` reuses this clip; it re-downloads only if the path is not a file.
-    scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
+    scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
 
     # Observations, commands, actions and terminations all come from the scene's own
     # `env_cfg` — the one edited above — and `task_id` from the scene. Nothing to restate.

@@ -100,7 +100,7 @@ def main():
         register_custom_terminations(env_cfg)
         # The registrations above read this config, so the scene has to build from the same
         # object — `load_env_cfg` returns a deepcopy, and a second call would diverge.
-        scene = project.add_scene_mjlab(task_id, play=True, env_cfg=env_cfg)
+        scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
         # Task-side browser enhancement: spawn the single env on a random flat
         # terrain patch (no-op for non-terrain tasks).  See events/__init__.py.
         apply_terrain_spawn(scene)

@@ -125,7 +125,7 @@ class Builder:
         *,
         run_path: str | list[str] | None = None,
         project_name: str = "mjlab",
-        play: bool = False,
+        play: bool = True,
         base_path: str = "/",
         gtm_id: str | None = None,
         mt: bool = False,
@@ -149,8 +149,9 @@ class Builder:
                 :meth:`add_project` → :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`
                 → :meth:`~mjswan.scene.SceneHandle.add_policy_wandb`.
             project_name: Name for the auto-created project. Defaults to ``"mjlab"``.
-            play: Whether to load mjlab's play/evaluation config instead of the
-                training config for the auto-created scene.
+            play: Load mjlab's play/evaluation config rather than its training one.
+                Defaults to ``True``; see
+                :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`.
             base_path: Base path for the application (e.g., ``"/mjswan/"``).
             gtm_id: Optional Google Tag Manager container ID.
 
@@ -187,7 +188,7 @@ class Builder:
         *,
         run_path: str | list[str] | None = None,
         project_name: str = "mjlab",
-        play: bool = False,
+        play: bool = True,
     ) -> ProjectHandle:
         """Add a project pre-configured with a single mjlab task.
 
@@ -202,8 +203,9 @@ class Builder:
                 and converted to ONNX via mjlab+torch (both required) using
                 ``task_id``. Defaults to ``None`` (no policy attached).
             project_name: Name for the created project. Defaults to ``"mjlab"``.
-            play: Load mjlab's play/evaluation config instead of the training
-                config for the created scene.
+            play: Load mjlab's play/evaluation config rather than its training one.
+                Defaults to ``True``; see
+                :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`.
 
         Returns:
             ProjectHandle for the created project.

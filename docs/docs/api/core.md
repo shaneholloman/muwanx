@@ -39,7 +39,7 @@ def from_mjlab(
     *,
     run_path: str | list[str] | None = None,
     project_name: str = "mjlab",
-    play: bool = False,
+    play: bool = True,
     base_path: str = "/",
     gtm_id: str | None = None,
     mt: bool = False,
@@ -61,7 +61,7 @@ def add_project_mjlab(
     *,
     run_path: str | list[str] | None = None,
     project_name: str = "mjlab",
-    play: bool = False,
+    play: bool = True,
 ) -> ProjectHandle
 ```
 
@@ -155,7 +155,7 @@ Add a MuJoCo scene. Provide exactly one of `model` or `spec`.
 def add_scene_mjlab(
     task_id: str,
     *,
-    play: bool = False,
+    play: bool = True,
     env_cfg: Any | None = None,
     events: Mapping[str, Any] | None = None,
 ) -> SceneHandle
@@ -168,7 +168,7 @@ Load an mjlab task's MuJoCo spec from the task registry and add it as a scene. R
 | Name | Type | Default | Description |
 |---|---|---|---|
 | `task_id` | `str` | — | mjlab task identifier (e.g. `"go2_flat"`). |
-| `play` | `bool` | `False` | Load mjlab's play/evaluation config instead of the training config. |
+| `play` | `bool` | `True` | Load mjlab's play/evaluation config rather than its training one. **The opposite of mjlab's own `load_env_cfg` default, deliberately** — that one serves training scripts, and this is a playback tool. mjlab's training config sets `episode_length_s` to 10–20 s, which mjswan serializes into the browser's `time_out` termination, so a viewer built from it resets the robot every few seconds; play also drops `push_robot` and the terrain-bounds termination and adds `randomize_terrain`. Pass `False` to reproduce training-time conditions. Ignored when `env_cfg` is given — load that config with the `play` you want. |
 | `env_cfg` | `Any \| None` | `None` | Pre-loaded (and possibly edited) env config to use instead of loading `task_id` fresh. Needed for tracking tasks: mjlab registers them with `commands["motion"].motion_file = ""`, so the caller must fill in the clip path before the env is constructed. The scene keeps whichever config it used, and policies added to it default their term sets to it. |
 | `events` | `Mapping[str, Any] \| None` | `None` | Scene events, overriding the task's own `env_cfg.events`. Omit to take the task's; pass `{}` for a scene with none. |
 

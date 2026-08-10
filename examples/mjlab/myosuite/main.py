@@ -20,7 +20,7 @@ def main():
     for task_id in list_tasks():
         if not task_id.startswith("Myosuite"):
             continue
-        project.add_scene_mjlab(task_id, play=True)
+        project.add_scene_mjlab(task_id)
 
     app = builder.build()
     app.launch()

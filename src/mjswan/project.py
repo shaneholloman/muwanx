@@ -140,7 +140,7 @@ class ProjectHandle:
         self,
         task_id: str,
         *,
-        play: bool = False,
+        play: bool = True,
         env_cfg: Any | None = None,
         events: Mapping[str, Any] | None = None,
     ) -> SceneHandle:
@@ -151,9 +151,17 @@ class ProjectHandle:
 
         Args:
             task_id: mjlab task identifier (e.g. ``"go2_flat"``).
-            play: Whether to load mjlab's play/evaluation config instead of the
-                training config. This is useful for demos that should match
-                mjlab's randomized play terrain layout.
+            play: Load mjlab's play/evaluation config rather than its training one.
+                Defaults to ``True`` — the opposite of mjlab's own
+                ``load_env_cfg``, deliberately: that default serves training
+                scripts, and this is a playback tool. The training config sets
+                ``episode_length_s`` to 10-20 s, which mjswan serializes into the
+                browser's ``time_out`` termination, so a viewer built from it resets
+                the robot every few seconds while someone is watching. The play
+                config also drops ``push_robot`` and the terrain-bounds termination
+                and adds ``randomize_terrain``. Pass ``False`` to reproduce
+                training-time conditions. Ignored when ``env_cfg`` is given — the
+                caller has already chosen by then.
             env_cfg: Pre-loaded (and possibly edited) env config to use instead
                 of loading ``task_id`` fresh. Required for tasks whose config is
                 incomplete as registered — mjlab's tracking tasks ship

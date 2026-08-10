@@ -307,11 +307,16 @@ class TestFromMjlab:
         from mjswan.project import ProjectHandle
 
         scene_handle = MagicMock(name="SceneHandle")
-        monkeypatch.setattr(
-            ProjectHandle,
-            "add_scene_mjlab",
-            lambda self, task_id, *, play=False: scene_handle,
-        )
+        seen: dict[str, object] = {}
+
+        def _stub(self, task_id, *, play):
+            seen["task_id"], seen["play"] = task_id, play
+            return scene_handle
+
+        monkeypatch.setattr(ProjectHandle, "add_scene_mjlab", _stub)
+        # `play` is positional-free and has no default here on purpose: the caller always
+        # passes it, so a stub default would hide a regression in what it passes.
+        scene_handle.seen = seen
         return scene_handle
 
     def test_no_run_path_does_not_call_add_policy_wandb(self, monkeypatch):
@@ -333,6 +338,19 @@ class TestFromMjlab:
         scene_handle.add_policy_wandb.assert_called_once_with(
             run_paths, task_id="go2_flat"
         )
+
+    def test_defaults_to_the_play_config(self, monkeypatch):
+        # The advertised one-liner is a viewer. mjlab's training config sets
+        # `episode_length_s` to 10-20 s, which becomes the browser's `time_out`
+        # termination — so defaulting to it resets the robot every few seconds.
+        scene_handle = self._patch(monkeypatch)
+        Builder.from_mjlab("go2_flat")
+        assert scene_handle.seen["play"] is True
+
+    def test_play_false_still_reaches_the_scene(self, monkeypatch):
+        scene_handle = self._patch(monkeypatch)
+        Builder.from_mjlab("go2_flat", play=False)
+        assert scene_handle.seen["play"] is False
 
 
 # ===========================================================================
