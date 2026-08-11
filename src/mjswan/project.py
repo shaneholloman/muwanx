@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import mujoco
 
 from .adapters import apply_mjlab_sim_options, ensure_mjlab_extensions
-from .scene import SceneConfig, SceneHandle
+from .scene import SceneConfig, SceneHandle, _env_cfg_control_dt
 from .utils import collect_spec_assets
 from .viewer import ViewerConfig
 
@@ -169,12 +169,11 @@ class ProjectHandle:
                 configs, so nothing is left to select, and passing both raises rather
                 than quietly ignoring one.
             env_cfg: Pre-loaded (and possibly edited) env config to use instead
-                of loading ``task_id`` fresh. Required for tasks whose config is
-                incomplete as registered — mjlab's tracking tasks ship
-                ``commands["motion"].motion_file = ""`` and expect the caller to
-                fill in the clip path before the env is constructed. Load it with the
-                ``play`` you want — ``load_env_cfg(task_id, play=True)`` — since
-                ``play`` on this method then has nothing left to do.
+                of loading ``task_id`` fresh. Load it with the ``play`` you want —
+                ``load_env_cfg(task_id, play=True)`` — since ``play`` on this method
+                then has nothing left to do. A tracking task does not need this:
+                mjlab ships ``commands["motion"].motion_file = ""``, and the builder
+                aims it at the clip it bundles.
 
                 The scene keeps whichever config it used, and every policy added to it
                 falls back on that config for its observations / commands / actions /
@@ -195,7 +194,6 @@ class ProjectHandle:
             ```
         """
         try:
-            from mjlab.envs import ManagerBasedRlEnv
             from mjlab.scene import Scene
             from mjlab.tasks.registry import load_env_cfg
         except ImportError as e:
@@ -228,12 +226,18 @@ class ProjectHandle:
         handle._config.mjlab_env_cfg = env_cfg
         handle._config.mjlab_task_id = task_id
 
-        # Tracing runs term functions against a live, reset() env, so it cannot be the `Scene`
-        # above, which lacks the manager/torch machinery `Entity.data` needs.
-        handle._config.mjlab_env = ManagerBasedRlEnv(env_cfg, device="cpu")
-        handle._config.mjlab_env.reset()
+        # The tracing env is built at build time instead (`builder._scene_trace_env`): a
+        # tracking task cannot construct one until its clip is on disk, and that only
+        # happens once the clip has been fetched and written into the bundle.
         # The task's own rate: tasks disagree (Cartpole 0.05, locomotion 0.02).
-        handle._config.control_dt = float(handle._config.mjlab_env.step_dt)
+        control_dt = _env_cfg_control_dt(env_cfg)
+        if control_dt is None:
+            raise ValueError(
+                f"Could not read a control rate off task {task_id!r}'s env config "
+                "(sim.mujoco.timestep * decimation). Pass `control_dt` to add_scene "
+                "and build the scene manually."
+            )
+        handle._config.control_dt = control_dt
         viewer_cfg = _adapt_mjlab_viewer_config(getattr(env_cfg, "viewer", None))
         if viewer_cfg is not None:
             handle.set_viewer(viewer_cfg)

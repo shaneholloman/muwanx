@@ -233,8 +233,10 @@ class SceneConfig:
 
     mjlab_env: Any = field(default=None, repr=False, compare=False)
     """Live env ONNX tracing (ADR 0005) runs authored observation/termination/
-    event/command term bodies against. Set automatically by
-    :meth:`ProjectHandle.add_scene_mjlab`; a scene built via plain
+    event/command term bodies against. Built at build time from
+    :attr:`mjlab_env_cfg` when the scene came from a task (see
+    ``builder._scene_trace_env``), so a tracking task's env is constructed only once
+    its clip is in the bundle; a scene built via plain
     :meth:`ProjectHandle.add_scene` (no mjlab task) has none by default — set
     one explicitly with :meth:`SceneHandle.set_trace_env` if it uses
     plain-callable (non-``Binding``) term functions. Only needs
@@ -927,8 +929,8 @@ class SceneHandle:
         :func:`mjswan.trace_env.build_single_entity_trace_env` for a minimal
         one built from just a single entity's spec.
 
-        Scenes built via :meth:`ProjectHandle.add_scene_mjlab` already have
-        this set automatically; calling it there overrides that env.
+        A scene built via :meth:`ProjectHandle.add_scene_mjlab` builds its own at
+        build time; setting one here pre-empts that.
 
         Args:
             env: A live env satisfying the tracer's ``env.scene[name].data.<field>``

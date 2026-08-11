@@ -7,6 +7,7 @@ for programmatically creating interactive MuJoCo simulations.
 from __future__ import annotations
 
 import gc
+import hashlib
 import inspect
 import json
 import shutil
@@ -56,6 +57,102 @@ def _build_uses_custom_js() -> bool:
             if getattr(sentinel, "ts_src", None) is not None:
                 return True
     return False
+
+
+def _scene_trace_env(scene: SceneConfig) -> Any | None:
+    """The env ONNX tracing runs term bodies against, built on first use.
+
+    Deferred to build time so a tracking task's env is constructed only once its clip is
+    on disk, and so a scene that traces nothing never pays for one at all.
+    """
+    if scene.mjlab_env is not None:
+        return scene.mjlab_env
+    if scene.mjlab_env_cfg is None:
+        return None
+    from mjlab.envs import ManagerBasedRlEnv
+
+    scene.mjlab_env = ManagerBasedRlEnv(scene.mjlab_env_cfg, device="cpu")
+    scene.mjlab_env.reset()
+    return scene.mjlab_env
+
+
+def _motion_key(motion: Any) -> str:
+    """Identity of a clip's content, so two policies sharing one share its file."""
+    if motion.data is not None:
+        return hashlib.sha256(motion.data).hexdigest()
+    if motion.source is not None:
+        src = _resolve_motion_source(motion.source)
+        try:
+            return hashlib.sha256(src.read_bytes()).hexdigest()
+        except OSError:
+            return f"src:{src}"  # missing; the copy below warns about it
+    return f"empty:{motion.name}"
+
+
+def _resolve_motion_source(source: str) -> Path:
+    src = Path(source).expanduser()
+    return src if src.is_absolute() else (Path.cwd() / src).resolve()
+
+
+def _write_scene_motions(scene: SceneConfig, scene_dir: Path) -> dict[str, str]:
+    """Write each distinct clip in the scene once; return content key -> filename.
+
+    Scene-scoped rather than per-policy: the checkpoints of one run share a clip, and a
+    copy per policy meant N copies of the same megabytes. Same name and same content
+    collapse to one file; same name and different content get a ``_1``/``_2`` suffix.
+    """
+    files: dict[str, str] = {}
+    used: set[str] = set()
+    for policy in scene.policies:
+        for motion in policy.motions:
+            key = _motion_key(motion)
+            if key in files:
+                continue
+            stem = name2id(motion.name)
+            filename = f"{stem}.npz"
+            suffix = 0
+            while filename in used:
+                suffix += 1
+                filename = f"{stem}_{suffix}.npz"
+            used.add(filename)
+            files[key] = filename
+
+            target = scene_dir / filename
+            if motion.data is not None:
+                target.write_bytes(motion.data)
+            elif motion.source is not None:
+                src = _resolve_motion_source(motion.source)
+                if src.exists():
+                    shutil.copy2(str(src), str(target))
+                else:
+                    warnings.warn(
+                        f"Motion source file not found: {src}",
+                        category=RuntimeWarning,
+                        stacklevel=2,
+                    )
+    return files
+
+
+def _point_env_cfg_at_bundled_motion(
+    scene: SceneConfig, scene_dir: Path, motion_files: dict[str, str]
+) -> None:
+    """Aim a tracking task's ``motion_file`` at the clip just written to the bundle.
+
+    mjlab registers tracking tasks with ``motion_file=""`` and ``MotionLoader`` reads the
+    path when the env is constructed, so the bundled copy is what the trace env loads —
+    no second copy anywhere.
+    """
+    env_cfg = scene.mjlab_env_cfg
+    if env_cfg is None or scene.mjlab_env is not None or not motion_files:
+        return
+    for term in (getattr(env_cfg, "commands", None) or {}).values():
+        if not hasattr(term, "motion_file"):
+            continue
+        existing = getattr(term, "motion_file", "") or ""
+        if existing and Path(existing).expanduser().is_file():
+            continue
+        term.motion_file = str(scene_dir / next(iter(motion_files.values())))
+        return
 
 
 def _require_control_dt(scene: Any) -> float:
@@ -450,13 +547,13 @@ class Builder:
             )
         return name
 
-    def _motion_filename(self, policy_name: str, motion_name: str) -> str:
-        if not motion_name or motion_name.strip() == "":
-            raise ValueError("Motion name must be a non-empty string.")
-        return f"{name2id(policy_name)}_{name2id(motion_name)}.npz"
-
     def _serialize_policy_config(
-        self, policy, env, scene_dir: Path, policy_path: Path
+        self,
+        policy,
+        env,
+        scene_dir: Path,
+        policy_path: Path,
+        motion_files: dict[str, str] | None = None,
     ) -> dict | None:
         """Assemble one policy's JSON config, tracing ONNX terms via the scene's env.
 
@@ -580,9 +677,9 @@ class Builder:
             if terminations:
                 data["terminations"] = terminations
         if policy.motions:
+            files = motion_files or {}
             data["motions"] = [
-                motion.to_dict(self._motion_filename(policy.name, motion.name))
-                for motion in policy.motions
+                motion.to_dict(files[_motion_key(motion)]) for motion in policy.motions
             ]
         return data
 
@@ -757,13 +854,18 @@ class Builder:
                         scene.model = None
                     gc.collect()
 
+                    # Before anything that needs the trace env: a tracking task's env cannot
+                    # be built until its clip is on disk, and the bundled copy is that file.
+                    motion_files = _write_scene_motions(scene, scene_dir)
+                    _point_env_cfg_at_bundled_motion(scene, scene_dir, motion_files)
+
                     # Needs scene_dir and the live env, so it happens here; overwrites `scene.events`
                     # in place with the JSON list `_save_config_json` reads after this loop.
                     if scene.events:
                         from ._onnx_build import serialize_events
 
                         scene.events = serialize_events(
-                            scene.events, scene.mjlab_env, scene_dir
+                            scene.events, _scene_trace_env(scene), scene_dir
                         )
 
                     # Save policies
@@ -773,38 +875,16 @@ class Builder:
                         onnx.save(policy.model, str(policy_path))
 
                         data = self._serialize_policy_config(
-                            policy, scene.mjlab_env, scene_dir, policy_path
+                            policy,
+                            _scene_trace_env(scene),
+                            scene_dir,
+                            policy_path,
+                            motion_files,
                         )
                         if data is not None:
                             target = policy_path.with_suffix(".json")
                             with open(target, "w") as f:
                                 json.dump(data, f, indent=2)
-
-                        seen_motion_files: set[str] = set()
-                        for motion in policy.motions:
-                            filename = self._motion_filename(policy.name, motion.name)
-                            if filename in seen_motion_files:
-                                raise ValueError(
-                                    f"Motion filename collision for policy '{policy.name}': "
-                                    f"'{motion.name}' sanitizes to '{filename}' which is already used. "
-                                    "Rename one of the motions to avoid this conflict."
-                                )
-                            seen_motion_files.add(filename)
-                            target = scene_dir / filename
-                            if motion.data is not None:
-                                target.write_bytes(motion.data)
-                            elif motion.source is not None:
-                                src = Path(motion.source).expanduser()
-                                if not src.is_absolute():
-                                    src = (Path.cwd() / src).resolve()
-                                if src.exists():
-                                    shutil.copy2(str(src), str(target))
-                                else:
-                                    warnings.warn(
-                                        f"Motion source file not found: {src}",
-                                        category=RuntimeWarning,
-                                        stacklevel=2,
-                                    )
 
                     # Copy bundled .spz files for each splat with source set
                     for splat in scene.splats:

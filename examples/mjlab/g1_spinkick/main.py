@@ -18,7 +18,6 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "examples.mjlab.g1_spinkick"
 
 import mjlab.tasks  # noqa: F401 - populates the mjlab task registry
-from mjlab.tasks.registry import load_env_cfg
 
 # `examples.mjlab.defaults.commands` registers the traced reset graph for
 # `MotionCommandCfg` — the reference-state-initialization jitter (ADR 0005 §3).
@@ -27,7 +26,6 @@ from mjlab.tasks.registry import load_env_cfg
 # frame where mjlab's play config asks for `joint_position_range=(-0.1, 0.1)`.
 import examples.mjlab.defaults.commands  # noqa: F401
 import mjswan
-from mjswan.wandb_io import fetch_motion_npz_from_wandb_run
 
 # The terminations need no registration: they trace straight from mjlab's own functions.
 
@@ -40,23 +38,14 @@ def setup_builder() -> mjswan.Builder:
     run_path = "ttktjmt-org/mjlab/mayq0rtd"
     task_id = "Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation"
 
-    # mjlab's tracking config ships `motion_file=""` for the caller to fill, so the clip has
-    # to land on disk before `add_scene_mjlab` constructs the tracing env.
-    env_cfg = load_env_cfg(task_id, play=True)
-    motion_name, motion_bytes = fetch_motion_npz_from_wandb_run(run_path)
-    motion_path = example_dir / "artifacts" / f"{motion_name}.npz"
-    motion_path.parent.mkdir(exist_ok=True)
-    motion_path.write_bytes(motion_bytes)
-    env_cfg.commands["motion"].motion_file = str(motion_path)
-
     builder = mjswan.Builder()
 
     project = builder.add_project(name="mjlab Spinkick")
-    # `add_policy_wandb` reuses this clip; it re-downloads only if the path is not a file.
-    scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
+    scene = project.add_scene_mjlab(task_id)
 
-    # Observations, commands, actions and terminations all come from the scene's own
-    # `env_cfg` — the one edited above — and `task_id` from the scene. Nothing to restate.
+    # The run supplies everything: the clip (mjlab registers `motion_file=""`, and the
+    # tracing env is built from the bundled copy at build time), and every term set via
+    # the scene's env config.
     scene.add_policy_wandb(run_path)
 
     return builder

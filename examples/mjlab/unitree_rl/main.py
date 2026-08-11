@@ -9,7 +9,6 @@ import sys
 import mjlab.tasks  # noqa: F401 - populates the mjlab task registry
 import mujoco
 import src.tasks  # noqa: F401
-from mjlab.tasks.registry import load_env_cfg
 
 import mjswan
 
@@ -28,13 +27,8 @@ def setup_builder() -> mjswan.Builder:
 
     builder = mjswan.Builder()
 
-    # One config for both the scene and the policies. `load_env_cfg` hands back a deepcopy,
-    # so loading it twice would build the scene from one copy and configure the policies
-    # from another — equal here, but silently divergent the moment either gets edited.
-    env_cfg = load_env_cfg(task_id, play=True)
-
     project = builder.add_project(name="Unitree RL")
-    scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
+    scene = project.add_scene_mjlab(task_id)
 
     # Customize skybox
     mjspec = scene._config.spec

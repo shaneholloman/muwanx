@@ -228,7 +228,7 @@ dist/
             ├── scene.mjz    ← or scene.mjb
             ├── <policy>.onnx
             ├── <policy>.json  ← present when config_path / commands / observations / actions / terminations are set
-            ├── <policy>_<motion>.npz   ← per motion attached to the policy
+            ├── <motion>.npz    ← one per distinct clip in the scene, shared by its policies
             └── <splat>.spz    ← only when source= is used
 ```
 

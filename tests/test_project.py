@@ -34,6 +34,10 @@ class _FakeEnvCfg:
         self.scene = _FakeSceneCfg()
         self.viewer = None
         self.events = None
+        # `add_scene_mjlab` reads the control rate off the config now rather than off a
+        # constructed env, so a fake without these would look like an unusable task.
+        self.sim = type("Sim", (), {"mujoco": type("Mj", (), {"timestep": 0.01})()})()
+        self.decimation = 5
 
 
 def _install_fake_mjlab(monkeypatch, minimal_spec) -> tuple[list[tuple], _FakeEnvCfg]:
@@ -49,24 +53,14 @@ def _install_fake_mjlab(monkeypatch, minimal_spec) -> tuple[list[tuple], _FakeEn
             self.terrain = None
 
     class FakeManagerBasedRlEnv:
-        """Stands in for mjlab's real env — ADR 0005 needs a live env (held
-        on SceneConfig.mjlab_env) to trace term bodies at build time."""
+        """Stands in for mjlab's real env — ADR 0005 needs a live env to trace term
+        bodies, built lazily at build time by `builder._scene_trace_env`."""
 
         def __init__(self, env_cfg, device: str):
             calls.append(("env", env_cfg, device))
 
         def reset(self):
             calls.append(("env_reset",))
-
-        @property
-        def step_dt(self) -> float:
-            """The task's control rate, which `add_scene_mjlab` reads off the env.
-
-            Modelled here because guessing it is what this replaced: a wrong
-            control rate raises nothing at playback, so a fake that omitted it
-            would let a regression through as a `None` control_dt.
-            """
-            return 0.05
 
     def fake_load_env_cfg(task_id: str, play: bool = False):
         calls.append(("load_env_cfg", task_id, play))
@@ -200,14 +194,15 @@ class TestProjectHandle:
         scene = project.add_scene_mjlab("Mjlab-Velocity-Rough-Unitree-G1", play=True)
 
         assert isinstance(scene, mjswan.SceneHandle)
-        assert [c[0] for c in calls] == ["load_env_cfg", "scene", "env", "env_reset"]
+        assert [c[0] for c in calls] == ["load_env_cfg", "scene"]
         assert calls[0] == ("load_env_cfg", "Mjlab-Velocity-Rough-Unitree-G1", True)
         assert calls[1] == ("scene", registry_env_cfg.scene, "cpu")
-        assert calls[2] == ("env", registry_env_cfg, "cpu")
         assert registry_env_cfg.scene.num_envs == 1
-        # The live env (ADR 0005 tracing) is retained on SceneConfig.
-        assert scene._config.mjlab_env is not None
-        # And the control rate comes from it, not the timestep — they differ by `decimation`.
+        # The tracing env is deferred to build time; the config it will be built from is
+        # what the scene keeps.
+        assert scene._config.mjlab_env is None
+        assert scene._config.mjlab_env_cfg is registry_env_cfg
+        # The control rate is `timestep * decimation`, not the timestep.
         assert scene._config.control_dt == 0.05
 
     def test_add_scene_mjlab_defaults_to_the_play_config(
@@ -266,8 +261,7 @@ class TestProjectHandle:
 
         Builder.from_mjlab("Mjlab-Cartpole-Balance", env_cfg=caller_env_cfg)
 
-        assert [c[0] for c in calls] == ["scene", "env", "env_reset"]
-        assert calls[1] == ("env", caller_env_cfg, "cpu")
+        assert [c[0] for c in calls] == ["scene"]
 
     def test_from_mjlab_rejects_play_together_with_env_cfg(
         self, monkeypatch, minimal_spec
@@ -288,8 +282,7 @@ class TestProjectHandle:
             "Mjlab-Tracking-Flat-Unitree-G1", env_cfg=caller_env_cfg
         )
 
-        assert [c[0] for c in calls] == ["scene", "env", "env_reset"]
-        assert calls[1] == ("env", caller_env_cfg, "cpu")
+        assert [c[0] for c in calls] == ["scene"]
         assert caller_env_cfg.scene.num_envs == 1
 
 

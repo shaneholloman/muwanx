@@ -153,8 +153,9 @@ def setup_builder() -> mjswan.Builder:
         if num_actions > 0:
             handle._config.policy_num_actions = num_actions
 
-        # Rewrite the filesystem path to the bundled relative URL "{policy_id}_mimic_clip.npz".
-        clip_motion_url = f"{name2id(handle._config.name)}_mimic_clip.npz"
+        # Rewrite the filesystem path to the bundled relative URL. Scene-scoped and
+        # name-derived, so every checkpoint points at the one copy.
+        clip_motion_url = f"{name2id(mimic_clip.name)}.npz"
         if (
             handle._config.terminations
             and "mimic_deviation" in handle._config.terminations

@@ -936,7 +936,9 @@ class TestSaveWebPolicyJson:
         assert data["motions"] == [
             {
                 "name": "Spin Kick",
-                "path": "policy_spin_kick.npz",
+                # Scene-scoped and name-derived: no policy prefix, so the checkpoints of
+                # one run reference a single bundled copy.
+                "path": "spin_kick.npz",
                 "fps": 50.0,
                 "anchor_body_name": "torso_link",
                 "body_names": ["pelvis", "torso_link"],
@@ -944,8 +946,70 @@ class TestSaveWebPolicyJson:
                 "default": True,
             }
         ]
-        motion_out = out / "main" / "assets" / "s" / "policy_spin_kick.npz"
+        motion_out = out / "main" / "assets" / "s" / "spin_kick.npz"
         assert motion_out.read_bytes() == b"motion-bytes"
+
+    def test_one_clip_shared_by_several_policies_is_written_once(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """The checkpoints of one run share a clip; a copy each meant N copies of it."""
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        clip = tmp_path / "spin_kick.npz"
+        clip.write_bytes(b"motion-bytes")
+        for name in ("model_0", "model_50"):
+            scene.add_policy(name=name, policy=minimal_onnx).add_motion(
+                name="Spin Kick",
+                source=str(clip),
+                anchor_body_name="torso_link",
+                body_names=("pelvis",),
+            )
+
+        out = self._run(builder, tmp_path)
+        scene_dir = out / "main" / "assets" / "s"
+
+        assert sorted(p.name for p in scene_dir.glob("*.npz")) == ["spin_kick.npz"]
+        for name in ("model_0", "model_50"):
+            assert self._policy_json(out, name)["motions"][0]["path"] == "spin_kick.npz"
+
+    def test_same_name_different_content_gets_a_numbered_suffix(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        for payload in (b"clip-one", b"clip-two"):
+            clip = tmp_path / f"{payload.decode()}.npz"
+            clip.write_bytes(payload)
+            scene.add_policy(
+                name=f"policy_{payload.decode()}", policy=minimal_onnx
+            ).add_motion(
+                name="Motion",
+                source=str(clip),
+                anchor_body_name="b",
+                body_names=("b",),
+            )
+
+        out = self._run(builder, tmp_path)
+        scene_dir = out / "main" / "assets" / "s"
+
+        assert sorted(p.name for p in scene_dir.glob("*.npz")) == [
+            "motion.npz",
+            "motion_1.npz",
+        ]
+        assert (scene_dir / "motion.npz").read_bytes() == b"clip-one"
+        assert (scene_dir / "motion_1.npz").read_bytes() == b"clip-two"
+        paths = {
+            name: self._policy_json(out, name)["motions"][0]["path"]
+            for name in ("policy_clip-one", "policy_clip-two")
+        }
+        assert paths == {
+            "policy_clip-one": "motion.npz",
+            "policy_clip-two": "motion_1.npz",
+        }
 
     def test_no_config_path_commands_emitted_as_command_terms(
         self, tmp_path, minimal_model, minimal_onnx

@@ -68,9 +68,22 @@ builder.build().launch()
 
 The scene keeps the `env_cfg` it was built from, and every policy added to it defaults its observations, commands, actions and terminations to that config — so the run path is all you need. `task_id` also defaults to the scene's task.
 
+### Tracking tasks
+
+mjlab registers its tracking tasks with `commands["motion"].motion_file = ""` for the caller to fill in, but you do not have to: `add_policy_wandb` fetches the run's clip, the builder writes it into the bundle, and the tracing env — constructed at build time, not when the scene is added — reads it from there. So a tracking task is the same two lines as any other:
+
+```python
+scene = project.add_scene_mjlab("Mjlab-Tracking-Flat-Unitree-G1")
+scene.add_policy_wandb("<entity>/<project>/<run_id>")
+```
+
+A `motion_file` you set yourself is left alone, as long as it points at a file that exists.
+
+Each distinct clip is written once per scene and shared by every policy that uses it, so the checkpoints of one run do not each get a copy. The filename is the motion's `name`; two clips with the same name but different content get a `_1` / `_2` suffix.
+
 ### Editing the config first
 
-Some tasks are incomplete as registered: mjlab's tracking tasks ship `commands["motion"].motion_file = ""` for the caller to fill in. Load the config, edit it, and pass it to `add_scene_mjlab` — the policies then inherit your edited version, because the scene holds the same object:
+To change anything else about the task, load the config, edit it, and pass it to `add_scene_mjlab` — the policies then inherit your edited version, because the scene holds the same object:
 
 ```python
 from mjlab.tasks.registry import load_env_cfg
@@ -79,7 +92,7 @@ task_id = "Mjlab-Tracking-Flat-Unitree-G1"
 # `play=True` here, not on `add_scene_mjlab`: `env_cfg` *is* one of the two configs, so
 # there is nothing left for `play` to select — passing both raises.
 env_cfg = load_env_cfg(task_id, play=True)
-env_cfg.commands["motion"].motion_file = "artifacts/spinkick.npz"
+env_cfg.terminations.pop("bad_anchor_ori")
 
 scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
 scene.add_policy_wandb("<entity>/<project>/<run_id>")
