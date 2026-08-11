@@ -8,6 +8,7 @@ Tests the "contract" of the builder's hierarchical configuration API:
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import mujoco
 import pytest
@@ -448,6 +449,97 @@ class TestPolicyHandle:
         assert motion.anchor_body_name == "torso_link"
         assert motion.body_names == ("pelvis", "torso_link")
 
+    def test_tracking_motion_is_imported_when_commands_come_from_the_scene(
+        self, monkeypatch, minimal_model, minimal_onnx
+    ):
+        """The clip has to be found from the *derived* commands, not just explicit ones.
+
+        `add_policy_wandb` scans `commands` for the tracking term to know which clip to
+        fetch. It used to scan the parameter, which is `None` once the scene's env config
+        supplies the commands — so a tracking scene silently got no motion, and the
+        browser's `TrackingCommand` then had nothing to answer `anchor_pos_w` /
+        `anchor_quat_w` with. That surfaces only at playback, as a policy that never moves.
+        """
+
+        class MotionCommandCfg:
+            __module__ = "mjlab.fake"
+
+            def __init__(self):
+                self.anchor_body_name = "torso_link"
+                self.body_names = ("pelvis", "torso_link")
+
+        scene = (
+            Builder()
+            .add_project(name="P")
+            .add_scene(name="S", model=minimal_model, control_dt=0.02)
+        )
+        env_cfg = _MdpEnvCfg()
+        env_cfg.commands = {"motion": MotionCommandCfg()}
+        scene._config.mjlab_env_cfg = env_cfg
+
+        monkeypatch.setattr(
+            "mjswan.wandb_io.fetch_onnx_from_wandb_run",
+            lambda run_path: ("policy", minimal_onnx),
+        )
+        monkeypatch.setattr(
+            "mjswan.wandb_io.fetch_motion_npz_from_wandb_run",
+            lambda run_path: ("motion_asset", b"npz-data"),
+        )
+
+        # No `commands=`: exactly what the g1_spinkick example does now.
+        handles = scene.add_policy_wandb("demo-org/tracking/run1", only_latest=True)
+
+        assert len(handles) == 1
+        assert handles[0]._config.motions, "no motion attached"
+        motion = handles[0]._config.motions[0]
+        assert motion.name == "motion_asset"
+        assert motion.anchor_body_name == "torso_link"
+
+    @pytest.mark.slow
+    @pytest.mark.mjlab
+    def test_tracking_motion_found_on_a_real_mjlab_command(
+        self, monkeypatch, minimal_spec, minimal_onnx
+    ):
+        """Pinned against mjlab's own `MotionCommandCfg`, not a stand-in for it.
+
+        `_extract_tracking_motion_term` recognises the term by class name, else by
+        `anchor_body_name` + `body_names`. Both are upstream's spelling, so a rename there
+        would silently stop the clip being found — the same playback-only failure as
+        scanning the wrong `commands`.
+        """
+        pytest.importorskip("mjlab")
+        import mjlab.tasks  # noqa: F401 — populates the registry
+        from mjlab.tasks.registry import load_env_cfg
+
+        from mjswan import wandb_io
+
+        env_cfg = load_env_cfg(
+            "Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation", play=True
+        )
+        monkeypatch.setattr(
+            wandb_io, "fetch_onnx_from_wandb_run", lambda p: ("model_100", minimal_onnx)
+        )
+        monkeypatch.setattr(
+            wandb_io, "fetch_motion_npz_from_wandb_run", lambda p: ("spinkick", b"npz")
+        )
+
+        scene = (
+            Builder()
+            .add_project(name="P")
+            .add_scene(name="S", spec=minimal_spec, control_dt=0.02)
+        )
+        # As `add_scene_mjlab` would leave it, without paying for the live tracing env
+        # (which needs a genuine clip on disk).
+        scene._config.mjlab_env_cfg = env_cfg
+
+        handles = scene.add_policy_wandb("org/proj/run", only_latest=True)
+
+        motion_cfg: Any = env_cfg.commands["motion"]
+        motion = handles[0]._config.motions[0]
+        assert motion.name == "spinkick"
+        assert motion.anchor_body_name == motion_cfg.anchor_body_name
+        assert motion.body_names == tuple(motion_cfg.body_names)
+
     def test_set_metadata_stores_value(self, minimal_model, minimal_onnx):
         builder, policy = self._make_policy(minimal_model, minimal_onnx)
         policy.set_metadata("version", "1.0")
@@ -493,7 +585,7 @@ class _MdpEnvCfg:
             "actor": mjswan.ObservationGroupCfg(terms={}),
             "critic": mjswan.ObservationGroupCfg(terms={}),
         }
-        self.commands = {"velocity": mjswan.velocity_command()}
+        self.commands: dict[str, Any] = {"velocity": mjswan.velocity_command()}
         self.actions = {"joint_pos": JointPositionActionCfg(actuator_names=(".*",))}
         self.terminations = {"time_out": TerminationTermCfg(func=_never, time_out=True)}
         self.sim = type(

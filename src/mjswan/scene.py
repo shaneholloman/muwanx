@@ -315,6 +315,40 @@ class SceneHandle:
             )
         return env_cfg
 
+    def _derive_term_sets(
+        self,
+        env_cfg: Any | None,
+        observations: Any,
+        commands: Any,
+        actions: Any,
+        terminations: Any,
+    ) -> tuple[Any, Any, Any, Any]:
+        """Fill each unset term set from an mjlab env config, and return all four.
+
+        Per field, so "the task's observations but my own terminations" needs only the one
+        override rather than a restatement of all four. ``{}`` is not ``None``, so an
+        explicitly empty term set still reads as "this policy has none".
+
+        Shared with :meth:`add_policy_wandb` rather than left inside :meth:`add_policy`,
+        because that method has to read the resolved ``commands`` itself — it scans them
+        for the tracking term to know which motion clip to fetch. Reading the unresolved
+        parameter there meant a tracking scene whose commands came from its env config got
+        no clip at all, and nothing said so until playback, where the browser's
+        ``TrackingCommand`` had no frames to answer ``anchor_pos_w`` with.
+        """
+        source_cfg = self._resolve_env_cfg(env_cfg)
+        if source_cfg is None:
+            return observations, commands, actions, terminations
+        if observations is None:
+            observations = getattr(source_cfg, "observations", None)
+        if commands is None:
+            commands = getattr(source_cfg, "commands", None)
+        if actions is None:
+            actions = getattr(source_cfg, "actions", None)
+        if terminations is None:
+            terminations = getattr(source_cfg, "terminations", None)
+        return observations, commands, actions, terminations
+
     def add_policy(
         self,
         name: str,
@@ -426,19 +460,9 @@ class SceneHandle:
         if metadata is None:
             metadata = {}
 
-        source_cfg = self._resolve_env_cfg(env_cfg)
-        if source_cfg is not None:
-            # Per field, so "the task's observations but my own terminations" needs only the
-            # one override rather than a restatement of all four. `{}` is not `None`, so an
-            # explicitly empty term set still reads as "this policy has none".
-            if observations is None:
-                observations = getattr(source_cfg, "observations", None)
-            if commands is None:
-                commands = getattr(source_cfg, "commands", None)
-            if actions is None:
-                actions = getattr(source_cfg, "actions", None)
-            if terminations is None:
-                terminations = getattr(source_cfg, "terminations", None)
+        observations, commands, actions, terminations = self._derive_term_sets(
+            env_cfg, observations, commands, actions, terminations
+        )
 
         runner = resolve_runner_defaults(
             task_id if task_id is not None else self._config.mjlab_task_id
@@ -590,6 +614,13 @@ class SceneHandle:
             )
 
         run_paths = [run_path] if isinstance(run_path, str) else run_path
+
+        # Resolved here, not left to `add_policy`: the tracking term is found by scanning
+        # `commands`, so scanning the unresolved parameter would miss a clip whenever the
+        # commands come from the scene's env config rather than this call.
+        observations, commands, actions, terminations = self._derive_term_sets(
+            env_cfg, observations, commands, actions, terminations
+        )
         tracking_motion_term = _extract_tracking_motion_term(commands)
         tracking_motion_cache: dict[str, tuple[str, bytes]] = {}
 
