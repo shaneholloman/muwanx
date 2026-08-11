@@ -37,6 +37,25 @@ def _onnx_ref(kind: str, name: str) -> str:
     return f"{kind}/{name}.onnx"
 
 
+def _require_ts_src(kind: str, name: str, binding: Any) -> None:
+    """A ``*Binding`` without ``ts_src`` names a class the browser does not have.
+
+    mjswan ships no built-in TS observation/termination/event classes — every
+    built-in term is a traced graph or a native marker — so a binding is only ever
+    the custom-TS escape hatch. Without the file there is nothing to run, and the
+    term would go missing from a bundle that reports itself as complete.
+    """
+    if binding.ts_src:
+        return
+    raise ValueError(
+        f"{kind} term {name!r} is bound to TS class {binding.ts_name or '(unnamed)'!r} "
+        "but no `ts_src` was given, so the browser has no implementation to run: "
+        "mjswan ships no built-in TS term classes. Either let the build trace the "
+        f"term's own function, or point `ts_src` at a `.ts` file exporting "
+        f"{binding.ts_name or 'the class'!r}."
+    )
+
+
 def _write_onnx(out_dir: Path, ref: str, onnx_bytes: bytes) -> None:
     path = out_dir / ref
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,13 +213,7 @@ def serialize_observation_term(
 
     func = term_cfg.func
     if isinstance(func, ObservationBinding):
-        if func.unsupported_reason is not None:
-            raise ValueError(
-                f"Observation term {name!r} cannot be exported: "
-                f"{func.unsupported_reason} Dropping it would hand the policy a "
-                "shorter observation vector than it was trained on, so the build "
-                "stops here rather than emitting one."
-            )
+        _require_ts_src("Observation", name, func)
         return term_cfg.to_dict()
 
     params = _resolved_params(term_cfg.params, env)
@@ -465,14 +478,13 @@ def serialize_observation_group(
 def serialize_termination(
     name: str, term_cfg: TerminationTermCfg, env: Any, out_dir: Path
 ) -> dict[str, Any] | None:
-    """Serialize one termination term. Returns ``None`` for an unsupported legacy term."""
+    """Serialize one termination term."""
     from .compile import trace_term
     from .compile.tracer import slots_json
 
     func = term_cfg.func
     if isinstance(func, TerminationBinding):
-        if func.unsupported_reason is not None:
-            return None
+        _require_ts_src("Termination", name, func)
         return term_cfg.to_dict()
 
     try:
@@ -562,15 +574,7 @@ def serialize_terminations(
     for name, term_cfg in terminations.items():
         func = term_cfg.func
         if isinstance(func, TerminationBinding):
-            if func.unsupported_reason is not None:
-                # Raises rather than dropping, as an unexportable observation does: a dropped termination
-                # never reaches the runtime, so nothing warns and the episode stops checking it.
-                raise ValueError(
-                    f"Termination term {name!r} cannot be exported: "
-                    f"{func.unsupported_reason} Dropping it would leave the episode "
-                    "without a reset condition it is configured to have, with nothing "
-                    "logged at build time or in the browser, so the build stops here."
-                )
+            _require_ts_src("Termination", name, func)
             result[name] = term_cfg.to_dict()
             continue
         if _is_native_termination(term_cfg, env):
@@ -801,10 +805,51 @@ _DR_FIELD_BY_FUNC: dict[str, tuple[str, str, list[int]]] = {
     # mjlab's DR helpers wrap `_randomize_model_field` with an entity type and axes that are
     # not introspectable, hence this table. An author's own wrapper can set `_mjswan_dr_field`.
     "geom_friction": ("geom_friction", "geom", [0]),
+    "geom_rgba": ("geom_rgba", "geom", [0, 1, 2, 3]),
     "body_com_offset": ("body_ipos", "body", [0, 1, 2]),
     "body_ipos": ("body_ipos", "body", [0, 1, 2]),
     "body_mass": ("body_mass", "body", [0]),
 }
+
+
+_EVENTS_WITH_NOTHING_TO_WRITE: dict[str, str] = {
+    # Trace failure is the *expected* outcome for these, for a stated reason. Everything
+    # else raises: a silently dropped reset randomization is invisible in both the build
+    # output and the browser.
+    "randomize_terrain": (
+        "it re-draws each env's sub-terrain origin, and the browser has one baked terrain "
+        "with one origin"
+    ),
+    "encoder_bias": (
+        "it writes `Entity.data.encoder_bias`, which the runtime applies from the policy "
+        "config's `encoder_bias` rather than from an event graph"
+    ),
+}
+
+
+def _event_writes_nothing_reason(
+    term_cfg: EventTermCfg, env: Any, params: dict[str, Any]
+) -> str | None:
+    """Why this term's trace legitimately captured no write, or ``None``."""
+    func_name = getattr(term_cfg.func, "__name__", "")
+    reason = _EVENTS_WITH_NOTHING_TO_WRITE.get(func_name)
+    if reason is not None:
+        return reason
+    if not func_name.startswith("reset_root_state"):
+        return None
+    # A root-state write cannot move a fixed-base entity — not here, and not in mjlab
+    # either. mjlab's manipulation tasks still configure `reset_base` on their arms,
+    # leaving `asset_cfg` to the signature default, hence `_dr_arg` and not `params`.
+    entity_name = getattr(_dr_arg(term_cfg.func, params, "asset_cfg"), "name", None)
+    if entity_name is None:
+        return None
+    try:
+        entity = env.scene[entity_name]
+    except (KeyError, TypeError):
+        return None
+    if getattr(entity, "is_fixed_base", False):
+        return f"entity {entity_name!r} is fixed-base, so a root write cannot move it"
+    return None
 
 
 def serialize_event(
@@ -816,6 +861,7 @@ def serialize_event(
 
     func = term_cfg.func
     if isinstance(func, EventBinding):
+        _require_ts_src("Event", name, func)
         return term_cfg.to_dict()
 
     resolved = _resolved_params(term_cfg.params, env)
@@ -833,8 +879,21 @@ def serialize_event(
         descriptor = model_field_dr_descriptor(term_cfg, env, resolved)
         if descriptor is not None:
             return {"name": name, "mode": term_cfg.mode, **descriptor}
-        # Anything else stays a native marker carrying why it was skipped.
-        return {"name": name, "mode": term_cfg.mode, "native": True, "reason": str(exc)}
+        nothing_to_write = _event_writes_nothing_reason(term_cfg, env, resolved)
+        if nothing_to_write is not None:
+            return {
+                "name": name,
+                "mode": term_cfg.mode,
+                "native": True,
+                "reason": nothing_to_write,
+            }
+        raise ValueError(
+            f"Event term {name!r} could not be traced: {exc} Emitting it as a no-op "
+            "would drop a randomization the task is configured to apply, with nothing "
+            "said about it in the browser. Either supply a trace-friendly replacement "
+            "via mjswan.register_event(), or write the term as a TS class and point an "
+            "EventBinding's `ts_src` at it."
+        ) from exc
 
     ref = _onnx_ref("event", name)
     _write_onnx(out_dir, ref, export.onnx_bytes)

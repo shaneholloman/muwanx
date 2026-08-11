@@ -249,7 +249,8 @@ class CommandBinding:
       ``viz`` names one ``state_fields`` entry to render as a debug-vis sphere
       (e.g. ``LiftingCommand``'s target position) — see
       :func:`mjswan.compile.serialize.command_config`.
-    - **``ts_src`` escape hatch / unsupported marker**: same as before ADR 0005.
+    - **``ts_src`` escape hatch**: a hand-written TS command term, for one neither
+      of the above two shapes fits.
     """
 
     ts_name: str = ""

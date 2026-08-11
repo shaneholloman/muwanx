@@ -72,8 +72,9 @@ export class TerminationManager {
       }
       const TermClass = registry[entry.name];
       if (!TermClass) {
-        console.warn(`[TerminationManager] Unknown termination type: ${entry.name}`);
-        continue;
+        // Throws like the observation and command registries: continuing would run the
+        // episode without a reset condition it is configured to have.
+        throw new Error(`Unknown termination type: ${entry.name}`);
       }
       const termConfig: TerminationConfig = {
         name: entry.name,

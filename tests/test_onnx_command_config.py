@@ -428,22 +428,26 @@ def test_serializer_bakes_a_constant_but_refuses_an_untraceable_term(tmp_path):
         )
 
 
-def test_unsupported_observation_binding_fails_rather_than_dropping():
+def test_observation_binding_without_ts_src_fails_rather_than_dropping():
+    """A binding names a TS class; without `ts_src` there is no class.
+
+    mjswan ships no built-in TS observation classes, so such a binding resolves to
+    nothing in the browser and the term goes missing from a bundle that reports
+    itself complete — shortening the vector the policy was trained on.
+    """
     from mjswan._onnx_build import serialize_observation_term
     from mjswan.envs.mdp.observations import ObservationBinding
     from mjswan.managers.observation_manager import ObservationTermCfg
 
-    term = ObservationTermCfg(
-        func=ObservationBinding(ts_name="", unsupported_reason="no RayCastSensor.")
-    )
-    with pytest.raises(ValueError, match="shorter observation vector"):
+    term = ObservationTermCfg(func=ObservationBinding(ts_name="HeightScan"))
+    with pytest.raises(ValueError, match="no built-in TS term classes"):
         serialize_observation_term("height_scan", term, object(), None, None)
 
 
-def test_unsupported_termination_binding_fails_rather_than_dropping():
+def test_termination_binding_without_ts_src_fails_rather_than_dropping():
     """Same treatment as the observation above, for the same reason.
 
-    An unexportable termination used to be dropped from the config with nothing
+    An unresolvable termination used to be dropped from the config with nothing
     logged — and dropped *at build time*, so the runtime never saw the term either
     and could not warn the way it does for a term whose graph failed to load. The
     episode then silently never checks a reset condition it is configured to have.
@@ -454,11 +458,24 @@ def test_unsupported_termination_binding_fails_rather_than_dropping():
 
     terms = {
         "illegal_contact": TerminationTermCfg(
-            func=TerminationBinding(ts_name="", unsupported_reason="no contact sensor.")
+            func=TerminationBinding(ts_name="IllegalContact")
         )
     }
-    with pytest.raises(ValueError, match="without a reset condition"):
+    with pytest.raises(ValueError, match="no built-in TS term classes"):
         serialize_terminations(terms, object(), None)
+
+
+def test_a_binding_with_ts_src_serializes(tmp_path):
+    """The supported shape: a class the builder will inject."""
+    from mjswan._onnx_build import serialize_observation_term
+    from mjswan.envs.mdp.observations import ObservationBinding
+    from mjswan.managers.observation_manager import ObservationTermCfg
+
+    term = ObservationTermCfg(
+        func=ObservationBinding(ts_name="MyObs", ts_src=str(tmp_path / "MyObs.ts"))
+    )
+    entry = serialize_observation_term("my_obs", term, object(), tmp_path, None)
+    assert entry is not None and entry["name"] == "MyObs"
 
 
 def test_structured_sensor_fields_become_one_slot_each():

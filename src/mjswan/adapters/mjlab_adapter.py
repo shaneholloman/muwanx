@@ -15,8 +15,8 @@ Mapping strategy
   time — there is no mjswan-side reimplementation to look up by name. An
   author can still override what gets traced for a given mjlab function or
   term name via ``register_observation`` / ``register_termination`` /
-  ``register_event`` (e.g. to supply a trace-friendly rewrite, or an
-  ``unsupported_reason`` marker for a term that cannot run in the browser).
+  ``register_event`` (e.g. to supply a trace-friendly rewrite, or a
+  hand-written TS class for a term tracing cannot express).
 * **Commands**: ``type(cfg).__name__`` is looked up in the command registry;
   a registered entry either builds+traces the term via ``cfg.build(env)``
   (ADR 0005 §3) or maps to a permanently-native TS class (``TrackingCommand``).
@@ -73,13 +73,13 @@ def _adapt_obs_func(
 ) -> ObservationBinding | Callable[..., Any]:
     """Resolve the function an observation term's ONNX graph is traced from.
 
-    If *func* is already an mjswan ``ObservationBinding`` (an ``unsupported_reason``
-    marker, or a ``ts_src`` custom-JS class reference) it is returned as-is.
+    If *func* is already an mjswan ``ObservationBinding`` (a hand-written TS class)
+    it is returned as-is.
 
     An author can register an override for a given mjlab function or term name
-    via ``register_observation`` — either an ``ObservationBinding`` (to mark a
-    term unsupported) or a trace-friendly replacement callable (ADR 0005 §3a's
-    "examples-side trace-friendly override" pattern, generalized beyond commands).
+    via ``register_observation`` — either an ``ObservationBinding`` or a
+    trace-friendly replacement callable (ADR 0005 §3a's "examples-side
+    trace-friendly override" pattern, generalized beyond commands).
 
     Otherwise, *func* — mjlab's own function object — is returned unchanged; the
     build traces it directly against the scene's live env (ADR 0005). There is

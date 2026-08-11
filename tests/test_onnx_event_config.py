@@ -486,3 +486,89 @@ def test_serialize_event_emits_the_descriptor_with_its_name_and_mode(tmp_path):
     # No graph: the browser draws these itself from the seeded stream.
     assert "onnx" not in entry
     assert not list(tmp_path.rglob("*.onnx"))
+
+
+class TestAnUntraceableEventFailsTheBuild:
+    """What happens when a term traces to nothing and is not a model-field DR.
+
+    This used to be emitted as ``{"native": True, "reason": ...}``, which the runtime
+    skips silently — so a reset randomization the task is configured to apply just did
+    not happen, and nothing said so. Only the cases below, where there is provably
+    nothing to write, stay native; anything else fails the build.
+    """
+
+    @staticmethod
+    def _serialize(term_cfg, tmp_path, env=None):
+        pytest.importorskip("mjlab")
+        from mjswan._onnx_build import serialize_event
+
+        return serialize_event("ev", term_cfg, env or _Env(), tmp_path)
+
+    def test_an_unexplained_no_write_raises_and_names_both_escape_hatches(
+        self, tmp_path
+    ):
+        def push_robot(env, env_ids, velocity_range=None):
+            return None
+
+        with pytest.raises(ValueError, match="register_event") as excinfo:
+            self._serialize(_TermCfg(push_robot, {}, mode="interval"), tmp_path)
+        assert "ts_src" in str(excinfo.value)
+
+    def test_randomize_terrain_stays_native_with_its_reason(self, tmp_path):
+        def randomize_terrain(env, env_ids):
+            return None
+
+        entry = self._serialize(_TermCfg(randomize_terrain, {}, mode="reset"), tmp_path)
+        assert entry["native"] is True
+        assert "one baked terrain" in entry["reason"]
+
+    def test_encoder_bias_stays_native_with_its_reason(self, tmp_path):
+        def encoder_bias(env, env_ids, bias_range=(0.0, 0.0), asset_cfg=None):
+            return None
+
+        entry = self._serialize(
+            _TermCfg(encoder_bias, {"bias_range": (-0.01, 0.01)}, mode="reset"),
+            tmp_path,
+        )
+        assert entry["native"] is True
+        assert "policy config" in entry["reason"]
+
+    def test_a_root_write_onto_a_fixed_base_entity_stays_native(self, tmp_path):
+        """mjlab's manipulation tasks configure `reset_base` on their fixed arms."""
+
+        def reset_root_state_uniform(
+            env, env_ids, pose_range=None, velocity_range=None, asset_cfg=None
+        ):
+            return None
+
+        env = _Env()
+        env.scene["robot"].is_fixed_base = True
+        entry = self._serialize(
+            _TermCfg(
+                reset_root_state_uniform,
+                {"asset_cfg": _fingertips(), "pose_range": {}, "velocity_range": {}},
+                mode="reset",
+            ),
+            tmp_path,
+            env,
+        )
+        assert entry["native"] is True
+        assert "fixed-base" in entry["reason"]
+
+    def test_the_same_root_write_onto_a_floating_base_entity_raises(self, tmp_path):
+        """The check is the entity, not the term name: a mobile base must trace."""
+
+        def reset_root_state_uniform(
+            env, env_ids, pose_range=None, velocity_range=None, asset_cfg=None
+        ):
+            return None
+
+        with pytest.raises(ValueError, match="could not be traced"):
+            self._serialize(
+                _TermCfg(
+                    reset_root_state_uniform,
+                    {"asset_cfg": _fingertips(), "pose_range": {}},
+                    mode="reset",
+                ),
+                tmp_path,
+            )

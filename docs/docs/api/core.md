@@ -634,15 +634,20 @@ Register an adapter from a custom mjlab `*CommandCfg` class to a browser-side co
 
 ## MDP extension registries
 
-For configs that go beyond mjlab's built-in observations / events / terminations, register custom functions with these decorators / helpers. The custom function name becomes the value of the `name` field in the serialized policy JSON.
+Every observation / termination / event term is normally traced to ONNX from its own Python function — mjswan ships no built-in TypeScript term classes, so nothing needs registering to work. These three override what one mjlab name resolves to when tracing it as-authored will not do:
 
 ```python
-mjswan.register_observation(name: str, func: ObservationBinding) -> None
-mjswan.register_event(name: str, func: EventBinding) -> None
+mjswan.register_observation(name: str, func: ObservationBinding | Callable) -> None
 mjswan.register_termination(name: str, func: TerminationBinding) -> None
+mjswan.register_event(name: str, func: EventBinding) -> None
 ```
 
-`ObservationBinding`, `EventBinding`, and `TerminationBinding` are exported as type aliases for use in custom MDP modules.
+Two things to register:
+
+- **A trace-friendly replacement callable** (observations only) — same signature as the original, written so `torch.onnx.export` can follow it. What to reach for when the task's own function is correct but not exportable as written (tensor-method RNG, data-dependent control flow).
+- **A `*Binding`** — the escape hatch for a term ONNX tracing cannot express at all. `ts_src` is the absolute path of a `.ts` file exporting the class named by `ts_name`; the builder injects it into the browser bundle. A binding without `ts_src` fails the build: mjswan has no built-in class to fall back on.
+
+A term that fails to trace and has neither of these fails the build, with a message naming both options. It is never silently dropped — a missing observation shortens the vector the policy was trained on, and a missing termination or event leaves the browser without a reset condition the task is configured to have.
 
 ---
 

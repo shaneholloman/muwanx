@@ -78,9 +78,6 @@ class TerminationTermCfg:
 
     def _to_dict_legacy(self) -> dict[str, Any]:
         func: TerminationBinding = self.func  # type: ignore[assignment]
-        if func.unsupported_reason is not None:
-            raise NotImplementedError(func.unsupported_reason)
-
         entry: dict[str, Any] = {"name": func.ts_name}
         merged: dict[str, Any] = {**func.defaults, **self.params}
         if merged:

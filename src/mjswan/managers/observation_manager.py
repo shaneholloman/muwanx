@@ -110,11 +110,10 @@ class ObservationTermCfg:
     delay_per_env_phase: bool = True
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize a **legacy** ``ObservationBinding`` term.
+        """Serialize an ``ObservationBinding`` term.
 
-        Produces ``{"name": "BaseLinearVelocity", ...}`` for a term whose
-        ``func`` is an ``ObservationBinding`` (an ``unsupported_reason`` marker
-        or a ``ts_src`` custom-JS class reference).
+        Produces ``{"name": "MyCustomObs", ...}`` for a term whose ``func`` is an
+        ``ObservationBinding`` — a reference to a hand-written TS class.
 
         A term whose ``func`` is a plain callable is traced to ONNX against a
         live env at build time (ADR 0005) — that requires the scene's env and
@@ -133,9 +132,6 @@ class ObservationTermCfg:
 
     def _to_dict_legacy(self) -> dict[str, Any]:
         func: ObservationBinding = self.func  # type: ignore[assignment]
-        if func.unsupported_reason is not None:
-            raise NotImplementedError(func.unsupported_reason)
-
         entry: dict[str, Any] = {"name": func.ts_name}
         merged: dict[str, Any] = {**func.defaults, **self.params}
         if self.scale is not None:
@@ -183,11 +179,6 @@ class ObservationGroupCfg:
         """
         result = []
         for term_cfg in self.terms.values():
-            if (
-                isinstance(term_cfg.func, ObservationBinding)
-                and term_cfg.func.unsupported_reason is not None
-            ):
-                continue
             d = term_cfg.to_dict()
             # Group-level history overrides term-level
             if self.history_length is not None and self.history_length > 0:

@@ -418,10 +418,11 @@ class UntraceableTerm(ValueError):
             f"Observation term {term!r} reads state the tracer cannot turn into a "
             f"graph input: {', '.join(touched) or '(nothing usable)'}. Baking its "
             "current value would freeze a time-varying input and silently feed the "
-            "policy stale numbers. Either supply a trace-friendly replacement via "
-            "register_observation(), or drop the term from the exported group and "
-            "retrain — a shorter observation vector is not interchangeable with the "
-            "one the policy was trained on."
+            "policy stale numbers. Three ways out: supply a trace-friendly "
+            "replacement via mjswan.register_observation(); write the term as a TS "
+            "class and register an ObservationBinding whose `ts_src` points at it; or "
+            "drop the term from the exported group and retrain — a shorter observation "
+            "vector is not interchangeable with the one the policy was trained on."
         )
 
 

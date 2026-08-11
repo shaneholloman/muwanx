@@ -123,8 +123,6 @@ Defined in `mjswan.envs.mdp.observations`:
 | `robot_body_ori_b` | `RobotBodyOriB` | Tracking: robot body orientations in the robot anchor frame. |
 | `builtin_sensor` | `BuiltinSensor` | Raw data from a named MuJoCo sensor. |
 
-`height_scan` is exported for mjlab compatibility but raises `NotImplementedError` at build time (the browser has no ray-cast sensor).
-
 For a custom observation backed by your own TypeScript class, see `register_observation` in the API reference.
 
 ## Actions
