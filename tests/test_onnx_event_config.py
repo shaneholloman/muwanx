@@ -572,3 +572,106 @@ class TestAnUntraceableEventFailsTheBuild:
                 ),
                 tmp_path,
             )
+
+
+class TestFlatPatchSpawnTraces:
+    """`examples/mjlab/defaults` spawns on a flat terrain patch as a traced term.
+
+    It was a `ts_src` class drawing from `Math.random()`, so it could neither replay
+    from the seeded stream nor be checked numerically. As a traced body the patch table
+    bakes in and the two draws become the graph's `rand` input — which is only worth
+    anything if the draw actually reaches the Gather, hence the runtime assertions.
+    """
+
+    PATCHES = [[-4.0, -4.0, 0.1], [0.0, 0.0, 0.0], [4.0, 4.0, -0.2]]
+
+    @staticmethod
+    def _trace(patches, yaw_range=(-3.14, 3.14)):
+        pytest.importorskip("mjlab")
+        torch = pytest.importorskip("torch")
+        from mjlab.managers.scene_entity_config import SceneEntityCfg
+
+        from examples.mjlab.defaults.events import reset_root_state_on_flat_patch
+        from mjswan.compile import trace_event_term
+
+        class _Data:
+            def __init__(self):
+                self.root_link_pos_w = torch.tensor([[1.0, 2.0, 0.8]])
+                self.root_link_quat_w = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+
+        class _Entity:
+            def __init__(self):
+                self.data = _Data()
+
+            def write_root_link_pose_to_sim(self, pose, env_ids=None):
+                self.written = pose
+
+        class _Scene(dict):
+            def __getitem__(self, name):
+                return self.setdefault(name, _Entity())
+
+        class _Env:
+            def __init__(self):
+                self.scene = _Scene()
+                self.num_envs = 1
+                self.device = "cpu"
+
+        return trace_event_term(
+            reset_root_state_on_flat_patch,
+            {
+                "asset_cfg": SceneEntityCfg("robot"),
+                "patches": patches,
+                "yaw_range": yaw_range,
+            },
+            _Env(),
+            name="reset_base",
+            mode="reset",
+        )
+
+    def test_it_traces_to_one_root_pose_write_with_two_draws(self):
+        export = self._trace(self.PATCHES)
+        assert [w["kind"] for w in export.write_targets] == ["root_pose"]
+        # One draw picks the patch (scaled to an index), one picks the yaw.
+        assert export.rand_dim == 2
+        flat = [bound for pair in export.rand_ranges for bound in pair]
+        assert flat == pytest.approx([0.0, 1.0, -3.14, 3.14])
+
+    def _run(self, export, rand0, rand1=0.0):
+        import numpy as np
+
+        ort = pytest.importorskip("onnxruntime")
+        sess = ort.InferenceSession(export.onnx_bytes)
+        feeds = {}
+        for spec in sess.get_inputs():
+            if spec.name == "rand":
+                feeds[spec.name] = np.array([rand0, rand1], dtype=np.float32)
+                continue
+            shape = [1 if not isinstance(d, int) else d for d in spec.shape]
+            arr = np.zeros(shape, dtype=np.float32)
+            if "quat" in spec.name:
+                arr[..., 0] = 1.0  # identity: quat_mul by zero erases the yaw
+            feeds[spec.name] = arr
+        return sess.run(None, feeds)[0].reshape(-1)
+
+    def test_the_draw_reaches_the_gather(self):
+        """A baked index would spawn on the same patch forever — the silent failure."""
+        export = self._trace(self.PATCHES)
+        picked = [tuple(self._run(export, r)[:2].round(4)) for r in (0.0, 0.5, 0.99)]
+        assert len(set(picked)) == 3
+        assert picked == [(-4.0, -4.0), (0.0, 0.0), (4.0, 4.0)]
+
+    def test_a_draw_of_one_clamps_to_the_last_patch(self):
+        export = self._trace(self.PATCHES)
+        assert tuple(self._run(export, 1.0)[:2].round(4)) == (4.0, 4.0)
+
+    def test_patch_height_adds_to_the_roots_standing_height(self):
+        export = self._trace(self.PATCHES)
+        # Fixture root z is 0.8, and the graph input is fed 0 here, so only the
+        # patch's own z survives — the sum, not a replacement.
+        assert self._run(export, 0.0)[2] == pytest.approx(0.1)
+
+    def test_the_yaw_draw_rotates_the_root(self):
+        export = self._trace(self.PATCHES)
+        assert self._run(export, 0.0, -3.0)[3:].tolist() != pytest.approx(
+            self._run(export, 0.0, 3.0)[3:].tolist()
+        )

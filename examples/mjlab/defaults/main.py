@@ -18,8 +18,7 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "examples.mjlab.defaults"
 
 from . import commands  # noqa: F401 - for command registrations
-from .events import apply_terrain_spawn, register_custom_events
-from .observations import register_custom_observations
+from .events import apply_terrain_spawn
 from .terminations import register_custom_terminations
 
 ENTITY = "ttktjmt-org"
@@ -95,14 +94,12 @@ def main():
 
     for task_id, wandb_run_id in TASK_RUN_ID_MAP.items():
         env_cfg = load_env_cfg(task_id, play=True)
-        register_custom_events(env_cfg)
-        register_custom_observations(env_cfg)
         register_custom_terminations(env_cfg)
-        # The registrations above read this config, so the scene has to build from the same
+        # The injection above edits this config, so the scene has to build from the same
         # object — `load_env_cfg` returns a deepcopy, and a second call would diverge.
         scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
-        # Task-side browser enhancement: spawn the single env on a random flat
-        # terrain patch (no-op for non-terrain tasks).  See events/__init__.py.
+        # Spawn the single env on a random flat terrain patch (no-op for non-terrain
+        # tasks). A traced term like any other; see events/__init__.py.
         apply_terrain_spawn(scene)
         if viewer_cfg := TASK_VIEWER_CONFIG_MAP.get(task_id):
             scene.set_viewer(viewer_cfg)

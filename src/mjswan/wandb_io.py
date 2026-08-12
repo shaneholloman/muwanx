@@ -2,15 +2,53 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import re
 import tempfile
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import onnx
+
+
+@contextlib.contextmanager
+def _quiet_mjlab_manager_tables() -> Iterator[None]:
+    """Silence mjlab's per-manager MDP tables while this env is constructed.
+
+    This env exists only to convert ``.pt`` checkpoints, and its tables describe the
+    same config the build's own env prints — so without this the tables appear twice
+    per scene and the second set looks like a second, different environment. Only
+    ``print_info`` is stubbed, so warp's compile output and anything on stderr still
+    come through; anything mjlab does print is re-emitted if construction raises.
+    """
+    try:
+        from mjlab.envs import manager_based_rl_env as mod
+    except ImportError:  # pragma: no cover — mjlab absent
+        yield
+        return
+    original = getattr(mod, "print_info", None)
+    if original is None:  # upstream moved it; leave the log alone
+        yield
+        return
+    captured: list[str] = []
+
+    def capture(message: str, color: str = "green") -> None:
+        del color
+        captured.append(str(message))
+
+    setattr(mod, "print_info", capture)  # noqa: B010 — deliberate monkeypatch
+    try:
+        yield
+    except BaseException:
+        for line in captured:
+            original(line)
+        raise
+    finally:
+        setattr(mod, "print_info", original)  # noqa: B010
 
 
 @dataclass
@@ -122,20 +160,21 @@ def create_pt_onnx_export_context(
     env_cfg.scene.num_envs = 1
     agent_cfg = load_rl_cfg(task_id)
 
-    while True:
-        try:
-            env = ManagerBasedRlEnv(cfg=env_cfg, device="cpu")
-            break
-        except ValueError as exc:
-            message = str(exc)
-            required_nconmax = _extract_required_capacity(message, "nconmax")
-            required_njmax = _extract_required_capacity(message, "njmax")
-            if required_nconmax is None and required_njmax is None:
-                raise
-            if required_nconmax is not None:
-                env_cfg.sim.nconmax = _next_capacity(required_nconmax)
-            if required_njmax is not None:
-                env_cfg.sim.njmax = _next_capacity(required_njmax)
+    with _quiet_mjlab_manager_tables():
+        while True:
+            try:
+                env = ManagerBasedRlEnv(cfg=env_cfg, device="cpu")
+                break
+            except ValueError as exc:
+                message = str(exc)
+                required_nconmax = _extract_required_capacity(message, "nconmax")
+                required_njmax = _extract_required_capacity(message, "njmax")
+                if required_nconmax is None and required_njmax is None:
+                    raise
+                if required_nconmax is not None:
+                    env_cfg.sim.nconmax = _next_capacity(required_nconmax)
+                if required_njmax is not None:
+                    env_cfg.sim.njmax = _next_capacity(required_njmax)
 
     wrapped_env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 

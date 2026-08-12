@@ -334,9 +334,21 @@ class _ReplayEnv:
         slots: dict[SlotKey, torch.Tensor],
         sensors: dict[str, Any] | None = None,
         commands: dict[str, Any] | None = None,
+        *,
+        real_env: Any,
     ):
         self.scene = _ReplayScene(slots, sensors)
         self.command_manager = _ReplayCommandManager(slots, commands or {})
+        self._real_env = real_env
+
+    def __getattr__(self, name: str) -> Any:
+        # Forwarded, not copied: no default to drift from the real env, and a term
+        # that reads something else still raises here rather than reading a stand-in.
+        # `view(env.num_envs, -1)` bakes the batch dim past `dynamic_axes`; fine while
+        # both the trace env and the runtime are single-env.
+        if name in ("num_envs", "device"):
+            return getattr(self._real_env, name)
+        raise AttributeError(name)
 
 
 class _TermModule(nn.Module):
@@ -356,6 +368,7 @@ class _TermModule(nn.Module):
         *,
         sensors: dict[str, Any] | None = None,
         commands: dict[str, Any] | None = None,
+        real_env: Any,
     ):
         super().__init__()
         self._func = func
@@ -363,6 +376,7 @@ class _TermModule(nn.Module):
         self._dynamic_keys = dynamic_keys
         self._sensors = sensors or {}
         self._commands = commands or {}
+        self._real_env = real_env
         self._const_buffers: dict[SlotKey, str] = {}
         for i, (key, value) in enumerate(constants.items()):
             buffer_name = f"_const_{i}"
@@ -373,7 +387,7 @@ class _TermModule(nn.Module):
         slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
         for key, buffer_name in self._const_buffers.items():
             slots[key] = getattr(self, buffer_name)
-        env = _ReplayEnv(slots, self._sensors, self._commands)
+        env = _ReplayEnv(slots, self._sensors, self._commands, real_env=self._real_env)
         return self._func(env, **self._params)
 
 
@@ -629,7 +643,13 @@ def trace_term(
     sensors = dict(recorder._sensors)  # noqa: SLF001 — internal proxy
     commands = dict(recorder._commands)  # noqa: SLF001 — internal proxy
     module = _TermModule(
-        func, params, dynamic_keys, constants, sensors=sensors, commands=commands
+        func,
+        params,
+        dynamic_keys,
+        constants,
+        sensors=sensors,
+        commands=commands,
+        real_env=env,
     ).eval()
     output_name = "value"
     buffer = io.BytesIO()
@@ -852,10 +872,16 @@ class _EvReplayScene:
 
 
 class _EventReplayEnv:
-    def __init__(self, served, captures, num_envs: int = 1, device: str = "cpu"):
+    def __init__(self, served, captures, *, real_env: Any):
         self.scene = _EvReplayScene(served, captures)
-        self.num_envs = num_envs
-        self.device = device
+        self._real_env = real_env
+
+    def __getattr__(self, name: str) -> Any:
+        # Was `num_envs=1`/`device="cpu"` defaults, so discovery ran against the real
+        # env's N while replay silently saw 1.
+        if name in ("num_envs", "device"):
+            return getattr(self._real_env, name)
+        raise AttributeError(name)
 
 
 class _EventModule(nn.Module):
@@ -874,12 +900,14 @@ class _EventModule(nn.Module):
         dynamic_keys: list[SlotKey],
         tensor_consts: dict[TaggedKey, torch.Tensor],
         scalar_consts: dict[TaggedKey, Any],
+        real_env: Any,
     ):
         super().__init__()
         self._func = func
         self._params = params
         self._dynamic_keys = dynamic_keys
         self._scalar_consts = scalar_consts
+        self._real_env = real_env
         self._const_buffers: dict[TaggedKey, str] = {}
         for i, (key, value) in enumerate(tensor_consts.items()):
             buffer_name = f"_const_{i}"
@@ -894,7 +922,7 @@ class _EventModule(nn.Module):
         for (entity, field_name), tensor in zip(self._dynamic_keys, dynamic):
             served[("data", entity, field_name)] = tensor
         captures: dict[str, tuple[torch.Tensor, ...]] = {}
-        env = _EventReplayEnv(served, captures)
+        env = _EventReplayEnv(served, captures, real_env=self._real_env)
         with ReplayRng(self._func, rand):
             self._func(env, None, **self._params)
         _, tensors = _flatten_captures(captures)
@@ -985,7 +1013,7 @@ def trace_event_term(
 
     # 3. Trace: rand replayed as an explicit input; written values captured.
     module = _EventModule(
-        func, params, dynamic_keys, tensor_consts, scalar_consts
+        func, params, dynamic_keys, tensor_consts, scalar_consts, real_env=env
     ).eval()
     dyn_axes = {n: {0: "batch"} for n in [*dyn_input_names, *output_names]}
     buffer = io.BytesIO()
@@ -1186,7 +1214,10 @@ class _CommandModule(nn.Module):
         for a in self._entity_attr_names:
             setattr(self._term, a, _EvReplayEntity(self._entity_name, served, captures))
         if orig_env is not None:
-            self._term._env = _EventReplayEnv(served, captures)
+            # The env being swapped out, not `self._term`: `ManagerTermBase.num_envs`
+            # forwards to `self._env`, so pointing back at the term would make the
+            # replay env forward to itself.
+            self._term._env = _EventReplayEnv(served, captures, real_env=orig_env)
         try:
             prev = {}
             for field_name, value in zip(self._state_fields, state_inputs):
@@ -1466,6 +1497,7 @@ class _GroupModule(nn.Module):
         commands: dict[str, Any],
         native_names: list[str],
         baked: dict[str, torch.Tensor],
+        real_env: Any,
     ):
         super().__init__()
         self._terms = terms
@@ -1473,6 +1505,7 @@ class _GroupModule(nn.Module):
         self._sensors = sensors
         self._commands = commands
         self._native_names = native_names
+        self._real_env = real_env
         self._const_buffers: dict[SlotKey, str] = {}
         for i, (key, value) in enumerate(constants.items()):
             buffer_name = f"_const_{i}"
@@ -1492,7 +1525,7 @@ class _GroupModule(nn.Module):
         for key, buffer_name in self._const_buffers.items():
             slots[key] = getattr(self, buffer_name)
         native = dict(zip(self._native_names, args[split:]))
-        env = _ReplayEnv(slots, self._sensors, self._commands)
+        env = _ReplayEnv(slots, self._sensors, self._commands, real_env=self._real_env)
 
         pieces: list[torch.Tensor] = []
         for term in self._terms:
@@ -1660,6 +1693,7 @@ def trace_observation_group(
         commands=commands,
         native_names=native_names,
         baked=baked,
+        real_env=env,
     ).eval()
     output_name = "obs"
     buffer = io.BytesIO()
@@ -1727,12 +1761,14 @@ class _TerminationGroupModule(nn.Module):
         *,
         sensors: dict[str, Any],
         commands: dict[str, Any],
+        real_env: Any,
     ):
         super().__init__()
         self._terms = terms
         self._dynamic_keys = dynamic_keys
         self._sensors = sensors
         self._commands = commands
+        self._real_env = real_env
         self._const_buffers: dict[SlotKey, str] = {}
         for i, (key, value) in enumerate(constants.items()):
             buffer_name = f"_const_{i}"
@@ -1743,7 +1779,7 @@ class _TerminationGroupModule(nn.Module):
         slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
         for key, buffer_name in self._const_buffers.items():
             slots[key] = getattr(self, buffer_name)
-        env = _ReplayEnv(slots, self._sensors, self._commands)
+        env = _ReplayEnv(slots, self._sensors, self._commands, real_env=self._real_env)
         lanes = [term.func(env, **term.params).reshape(-1, 1) for term in self._terms]
         return torch.cat(lanes, dim=-1)
 
@@ -1812,7 +1848,7 @@ def trace_termination_group(
     example_inputs = tuple(dynamic[k] for k in dynamic_keys)
 
     module = _TerminationGroupModule(
-        terms, dynamic_keys, constants, sensors=sensors, commands=commands
+        terms, dynamic_keys, constants, sensors=sensors, commands=commands, real_env=env
     ).eval()
     output_name = "done"
     buffer = io.BytesIO()

@@ -732,3 +732,93 @@ def test_state_field_init_is_restored_not_post_trace(tmp_path):
     assert specs["command"]["init"] == [0.0, 0.0, 0.0]
     # And the term itself is back where it started, so a second trace agrees.
     assert term.command.reshape(-1).tolist() == [0.0, 0.0, 0.0]
+
+
+class TestATermThatReadsNumEnvs:
+    """`env.num_envs` is forwarded to the real env, not stood in for.
+
+    mjlab's tracking observations end in `pos.view(env.num_envs, -1)`. The replay env
+    served the recorded slots but had no `num_envs` at all, so tracing such a term died
+    with `AttributeError`; the *event* replay env meanwhile defaulted it to 1, so
+    discovery saw the real N and replay silently saw 1.
+    """
+
+    @staticmethod
+    def _env(num_envs):
+        class _Data:
+            def __init__(self):
+                self.root_pos_w = torch.zeros(num_envs, 3)
+
+        class _Entity:
+            def __init__(self):
+                self.data = _Data()
+
+        class _Scene:
+            def __getitem__(self, name):
+                return _Entity()
+
+        class _Env:
+            def __init__(self):
+                self.scene = _Scene()
+                self.num_envs = num_envs
+                self.device = "cpu"
+
+        return _Env()
+
+    @staticmethod
+    def _term(env, asset_name="robot"):
+        return env.scene[asset_name].data.root_pos_w.view(env.num_envs, -1)
+
+    def test_a_term_reading_num_envs_traces(self):
+        from mjswan.compile import trace_term
+
+        export = trace_term(self._term, {}, self._env(1), name="root_pos")
+        assert export.onnx_bytes
+
+    def test_the_forwarded_value_is_the_real_envs(self):
+        """Not a hardcoded 1: an env with N reaches the term as N."""
+        from mjswan.compile import trace_term
+
+        export = trace_term(self._term, {}, self._env(4), name="root_pos")
+        # 4 rows in, 4 rows out — a baked `view(1, -1)` would collapse them to 1.
+        assert export.reference_output.shape[0] == 4
+
+    def test_an_undeclared_env_attr_still_raises(self):
+        """Only num_envs/device forward; everything else must stay an error."""
+        from mjswan.compile import trace_term
+
+        def reads_episode_length(env, asset_name="robot"):
+            return env.scene[asset_name].data.root_pos_w * env.max_episode_length
+
+        with pytest.raises(AttributeError, match="max_episode_length"):
+            trace_term(reads_episode_length, {}, self._env(1), name="bad")
+
+
+def test_a_command_terms_replay_env_does_not_forward_back_into_the_term():
+    """`_EventReplayEnv` must forward to the env it replaced, not to the term.
+
+    `ManagerTermBase.num_envs` is a property returning `self._env.num_envs`, and the
+    command tracer swaps `term._env` for the replay env — so pointing the replay env's
+    forwarding at the term makes `num_envs` recurse until the stack dies. Only the
+    slow command-parity suite caught this, which is too late to be useful.
+    """
+    from mjswan.compile.tracer import _EventReplayEnv
+
+    class _RealEnv:
+        num_envs = 4
+        device = "cpu"
+
+    class _Term:
+        """Shaped like mjlab's `ManagerTermBase`: num_envs reads through `_env`."""
+
+        def __init__(self):
+            self._env = _RealEnv()
+
+        @property
+        def num_envs(self):
+            return self._env.num_envs
+
+    term = _Term()
+    original = term._env
+    term._env = _EventReplayEnv({}, {}, real_env=original)
+    assert term.num_envs == 4
