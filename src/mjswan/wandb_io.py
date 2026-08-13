@@ -274,6 +274,35 @@ def fetch_motion_npz_from_wandb_artifact(
         return motion_name, motion_path.read_bytes()
 
 
+def align_obs_normalizer(runner: Any, checkpoint: dict) -> None:
+    """Match the runner's policy normalizer to the checkpoint about to be loaded.
+
+    The runner is built from the task's *current* rl config, but a checkpoint carries
+    whichever normalizer its run trained with. A mismatch either fails the strict load
+    (config normalizes, checkpoint does not) or silently drops the trained statistics,
+    and an untrained ``EmpiricalNormalization`` is not the identity — it still divides
+    by ``std + eps``.
+    """
+    import torch
+    from rsl_rl.modules import EmpiricalNormalization
+
+    keys = list(checkpoint.get("actor_state_dict", {})) + [
+        key.removeprefix("actor_") for key in checkpoint.get("model_state_dict", {})
+    ]
+    normalized = any(key.startswith("obs_normalizer.") for key in keys)
+
+    policy = runner.alg.get_policy()
+    if normalized == policy.obs_normalization:
+        return
+    policy.obs_normalization = normalized
+    device = next(policy.parameters()).device
+    policy.obs_normalizer = (
+        EmpiricalNormalization(policy.obs_dim).to(device)
+        if normalized
+        else torch.nn.Identity()
+    )
+
+
 def fetch_pt_onnx_from_wandb_run(
     run_path: str,
     task_id: str,
@@ -297,6 +326,7 @@ def fetch_pt_onnx_from_wandb_run(
         ImportError: If ``mjlab`` or ``torch`` are not installed.
         ValueError: If no ``model_*.pt`` files are found in the run.
     """
+    import torch
     import wandb
 
     api = wandb.Api()
@@ -319,6 +349,10 @@ def fetch_pt_onnx_from_wandb_run(
             name = pt_path.stem  # e.g. "model_0", "model_50"
             onnx_filename = f"{name}.onnx"
 
+            align_obs_normalizer(
+                export_context.runner,
+                torch.load(str(pt_path), map_location="cpu", weights_only=False),
+            )
             export_context.runner.load(
                 str(pt_path),
                 load_cfg={"actor": True},
@@ -334,6 +368,7 @@ def fetch_pt_onnx_from_wandb_run(
 
 
 __all__ = [
+    "align_obs_normalizer",
     "fetch_motion_npz_from_wandb_artifact",
     "fetch_motion_npz_from_wandb_run",
     "fetch_onnx_from_wandb_run",
