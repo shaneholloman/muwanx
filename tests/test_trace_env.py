@@ -18,7 +18,11 @@ pytest.importorskip("mjlab")
 
 import mujoco  # noqa: E402
 
-from mjswan.trace_env import build_single_entity_trace_env  # noqa: E402
+from mjswan.trace_env import (  # noqa: E402
+    _quiet_warp_module_loads,
+    build_mjlab_env,
+    build_single_entity_trace_env,
+)
 
 STAND = {"hinge_a": 0.25, "hinge_b": -0.4}
 
@@ -66,3 +70,43 @@ def test_a_model_without_a_keyframe_keeps_mjlabs_zero_default():
     env = build_single_entity_trace_env(_spec_fn(""))
     defaults = env.scene["robot"].data.default_joint_pos.reshape(-1).tolist()
     assert defaults == [0.0, 0.0]
+
+
+def test_the_envs_manager_tables_stay_out_of_the_build_log(capsys):
+    """mjlab prints ~120 lines of tables per env, with no flag to turn them off."""
+    build_single_entity_trace_env(_spec_fn(KEYFRAME))
+    out = capsys.readouterr().out
+    assert "Base Environment" not in out
+    assert "ObservationManager" not in out
+
+
+def test_a_failed_env_build_replays_the_tables(monkeypatch, capsys):
+    """Held, not dropped: the widths they list are what one debugs a failure with."""
+    import mjlab.envs
+
+    def _explode(*_args, **_kwargs):
+        print("| Active Observation Terms |")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(mjlab.envs, "ManagerBasedRlEnv", _explode)
+    with pytest.raises(RuntimeError, match="boom"):
+        build_mjlab_env(object())
+    assert "| Active Observation Terms |" in capsys.readouterr().out
+
+
+def test_warp_module_load_lines_are_quieted_without_burying_warnings():
+    """INFO is what prints them; WARNING still lets warnings through."""
+    import warp
+
+    original = warp.config.log_level
+    try:
+        warp.config.log_level = warp.LOG_INFO
+        _quiet_warp_module_loads()
+        assert warp.config.log_level == warp.LOG_WARNING
+
+        # The escape hatch for a verbose build must survive.
+        warp.config.log_level = warp.LOG_DEBUG
+        _quiet_warp_module_loads()
+        assert warp.config.log_level == warp.LOG_DEBUG
+    finally:
+        warp.config.log_level = original

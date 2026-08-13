@@ -13,7 +13,67 @@ tax ADR 0005 exists to eliminate).
 
 from __future__ import annotations
 
+import contextlib
+import io
+import re
 from typing import Any, Callable
+
+
+def _required_capacity(message: str, name: str) -> int | None:
+    match = re.search(rf"{name} overflow \({name} must be >= (\d+)\)", message)
+    return None if match is None else int(match.group(1))
+
+
+def _next_capacity(required: int) -> int:
+    return required + max(32, required // 8)
+
+
+def _quiet_warp_module_loads() -> None:
+    """Drop warp's per-kernel ``Module … load on device`` lines (88 of a 7-task build).
+
+    ``log_level`` is the supported switch (``config.quiet`` is deprecated) and leaves
+    warnings through. Only the default level is nudged, so
+    ``warp.config.log_level = warp.LOG_DEBUG`` before the build brings them back.
+    """
+    import warp
+
+    if warp.config.log_level == warp.LOG_INFO:
+        warp.config.log_level = warp.LOG_WARNING
+
+
+def build_mjlab_env(env_cfg: Any, *, device: str = "cpu") -> Any:
+    """Build a ``ManagerBasedRlEnv``, growing ``nconmax``/``njmax`` until it fits.
+
+    mjlab sizes those buffers from the task config, which is tuned for the training
+    scene; a config re-used here (a single env, a different terrain patch) can need
+    more, and mujoco_warp only reports how much once the build fails.
+
+    mjlab's manager tables (~120 lines per env, printed unconditionally) are held back so
+    they do not bury the build's progress, and replayed if the build fails.
+    """
+    from mjlab.envs import ManagerBasedRlEnv
+
+    _quiet_warp_module_loads()
+    tables = io.StringIO()
+    while True:
+        try:
+            with contextlib.redirect_stdout(tables):
+                return ManagerBasedRlEnv(cfg=env_cfg, device=device)
+        except ValueError as exc:
+            nconmax = _required_capacity(str(exc), "nconmax")
+            njmax = _required_capacity(str(exc), "njmax")
+            if nconmax is None and njmax is None:
+                print(tables.getvalue(), end="")
+                raise
+            if nconmax is not None:
+                env_cfg.sim.nconmax = _next_capacity(nconmax)
+            if njmax is not None:
+                env_cfg.sim.njmax = _next_capacity(njmax)
+            tables.seek(0)
+            tables.truncate(0)
+        except Exception:
+            print(tables.getvalue(), end="")
+            raise
 
 
 class TraceCommandManager:
@@ -86,12 +146,8 @@ def build_single_entity_trace_env(
     Returns:
         A live ``mjlab.envs.ManagerBasedRlEnv``, already ``reset()``.
     """
-    import warp
-
-    warp.config.quiet = True
-
     from mjlab.entity import EntityCfg
-    from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
+    from mjlab.envs import ManagerBasedRlEnvCfg
     from mjlab.scene import SceneCfg
 
     def _spec_fn():
@@ -110,7 +166,9 @@ def build_single_entity_trace_env(
     entity_cfg = EntityCfg(spec_fn=_spec_fn, init_state=init_state)
     scene_cfg = SceneCfg(num_envs=1, entities={entity_name: entity_cfg})
     env_cfg = ManagerBasedRlEnvCfg(decimation=1, scene=scene_cfg)
-    env = ManagerBasedRlEnv(env_cfg, device=device)
+    # Through `build_mjlab_env` for its quieting; warp's kernel loads and mjlab's tables
+    # are noise here too.
+    env = build_mjlab_env(env_cfg, device=device)
     env.reset()
     if commands:
         # After reset(), since mjlab builds its own empty manager during construction.
