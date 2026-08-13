@@ -149,6 +149,13 @@ function cssInjectedByJsPlugin(): Plugin {
   };
 }
 
+/**
+ * Console stripping, as `Builder(debug=...)` promises. A minifier option, not
+ * `esbuild: { drop: [...] }`: Vite 8 is rolldown-based and ignores the deprecated
+ * `esbuild` option, which shipped every `console.*` while looking handled.
+ */
+const minify = isDebug ? true : { compress: { dropConsole: true, dropDebugger: true } };
+
 export default defineConfig({
   plugins: [
     react(),
@@ -188,9 +195,6 @@ export default defineConfig({
       },
     },
   },
-  esbuild: {
-    drop: isDebug ? [] : ['console', 'debugger'],
-  },
   build: {
     outDir: 'dist',
     // The SPA build (vite build) runs first and empties dist/; the lib build
@@ -220,6 +224,7 @@ export default defineConfig({
         entryFileNames: 'mjswan.js',
         chunkFileNames: '[name]-[hash].js',
         assetFileNames: '[name]-[hash][extname]',
+        minify,
       },
       onwarn(warning, warn) {
         if (

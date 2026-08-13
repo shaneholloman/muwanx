@@ -88,11 +88,15 @@ function gtmPlugin(gtmId: string | undefined) {
   };
 }
 
+/**
+ * Console stripping, as `Builder(debug=...)` promises. A minifier option, not
+ * `esbuild: { drop: [...] }`: Vite 8 is rolldown-based and ignores the deprecated
+ * `esbuild` option, which shipped every `console.*` while looking handled.
+ */
+const minify = isDebug ? true : { compress: { dropConsole: true, dropDebugger: true } };
+
 export default defineConfig({
   plugins: [react(), vanillaExtractPlugin(), mtPlugin(isMt), gtmPlugin(process.env.MJSWAN_GTM_ID)],
-  esbuild: {
-    drop: isDebug ? [] : ['console', 'debugger'],
-  },
   base: process.env.MJSWAN_BASE_PATH || '/',
   define: {
     __APP_VERSION__: JSON.stringify(getVersionFromPython()),
@@ -122,6 +126,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 11000,
     rollupOptions: {
       input: path.resolve(__dirname, 'index.html'),
+      output: { minify },
       onwarn(warning, warn) {
         // mujoco.js is an Emscripten-generated file that imports Node.js built-ins
         // (module, worker_threads) behind runtime environment checks that are never
