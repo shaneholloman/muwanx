@@ -128,10 +128,6 @@ def apply_terrain_spawn(scene: Any) -> None:
     :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`; a no-op unless the scene has
     both a flat-patch table and that mjlab term.
     """
-    from mjlab.managers.scene_entity_config import SceneEntityCfg
-
-    from mjswan.managers.event_manager import EventTermCfg
-
     flat_patches = (scene.terrain_data or {}).get("flat_patches", {})
     events = scene.events
     if not flat_patches or not events:
@@ -140,6 +136,12 @@ def apply_terrain_spawn(scene: Any) -> None:
     patches = flat_patches[patch_name]
     if not patches:
         return
+
+    # After the early returns: a terrain-free scene must not need mjlab importable.
+    from mjlab.managers.scene_entity_config import SceneEntityCfg
+
+    from mjswan.managers.event_manager import EventTermCfg
+
     for key, event in events.items():
         if getattr(event.func, "__name__", None) != "reset_root_state_uniform":
             continue
