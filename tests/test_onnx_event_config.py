@@ -575,7 +575,7 @@ class TestAnUntraceableEventFailsTheBuild:
 
 
 class TestFlatPatchSpawnTraces:
-    """`examples/mjlab/defaults` spawns on a flat terrain patch as a traced term.
+    """A terrain scene spawns on a flat patch as a traced term.
 
     It was a `ts_src` class drawing from `Math.random()`, so it could neither replay
     from the seeded stream nor be checked numerically. As a traced body the patch table
@@ -591,13 +591,15 @@ class TestFlatPatchSpawnTraces:
         torch = pytest.importorskip("torch")
         from mjlab.managers.scene_entity_config import SceneEntityCfg
 
-        from examples.mjlab.defaults.events import reset_root_state_on_flat_patch
         from mjswan.compile import trace_event_term
+        from mjswan.envs.mdp.events import reset_root_state_on_flat_patch
 
         class _Data:
             def __init__(self):
-                self.root_link_pos_w = torch.tensor([[1.0, 2.0, 0.8]])
-                self.root_link_quat_w = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+                # (N, 13): pos, quat, lin/ang vel — standing height 0.8, identity yaw.
+                self.default_root_state = torch.tensor(
+                    [[0.0, 0.0, 0.8, 1.0, 0.0, 0.0, 0.0] + [0.0] * 6]
+                )
 
         class _Entity:
             def __init__(self):
@@ -647,10 +649,7 @@ class TestFlatPatchSpawnTraces:
                 feeds[spec.name] = np.array([rand0, rand1], dtype=np.float32)
                 continue
             shape = [1 if not isinstance(d, int) else d for d in spec.shape]
-            arr = np.zeros(shape, dtype=np.float32)
-            if "quat" in spec.name:
-                arr[..., 0] = 1.0  # identity: quat_mul by zero erases the yaw
-            feeds[spec.name] = arr
+            feeds[spec.name] = np.zeros(shape, dtype=np.float32)
         return sess.run(None, feeds)[0].reshape(-1)
 
     def test_the_draw_reaches_the_gather(self):
@@ -664,14 +663,90 @@ class TestFlatPatchSpawnTraces:
         export = self._trace(self.PATCHES)
         assert tuple(self._run(export, 1.0)[:2].round(4)) == (4.0, 4.0)
 
-    def test_patch_height_adds_to_the_roots_standing_height(self):
+    def test_the_standing_height_is_baked_from_the_default_root_state(self):
+        """Read live instead and the browser spawns the robot inside the terrain: its
+        keyframe restore zeroes `mjData.xpos` before the reset events run."""
         export = self._trace(self.PATCHES)
-        # Fixture root z is 0.8, and the graph input is fed 0 here, so only the
-        # patch's own z survives — the sum, not a replacement.
-        assert self._run(export, 0.0)[2] == pytest.approx(0.1)
+        assert export.input_slots == []
+        assert self._run(export, 0.0)[2] == pytest.approx(0.1 + 0.8)
 
     def test_the_yaw_draw_rotates_the_root(self):
         export = self._trace(self.PATCHES)
         assert self._run(export, 0.0, -3.0)[3:].tolist() != pytest.approx(
             self._run(export, 0.0, 3.0)[3:].tolist()
         )
+
+
+class TestApplyTerrainSpawn:
+    """`add_scene_mjlab` swaps mjlab's root-spawn reset once the terrain has patches."""
+
+    @staticmethod
+    def _scene(terrain_data, events):
+        from mjswan.scene import SceneConfig
+
+        scene = SceneConfig(name="s")
+        scene.terrain_data = terrain_data
+        scene.events = events
+        return scene
+
+    @staticmethod
+    def _uniform_event():
+        pytest.importorskip("mjlab")
+        from mjlab.managers.scene_entity_config import SceneEntityCfg
+
+        from mjswan.managers.event_manager import EventTermCfg
+
+        def reset_root_state_uniform(env, env_ids, **kwargs) -> None: ...
+
+        return EventTermCfg(
+            func=reset_root_state_uniform,
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("go1"),
+                "pose_range": {"yaw": (-1.0, 1.0)},
+            },
+        )
+
+    def test_it_replaces_the_uniform_reset_and_keeps_entity_and_yaw(self):
+        from mjswan.envs.mdp.events import (
+            apply_terrain_spawn,
+            reset_root_state_on_flat_patch,
+        )
+
+        patches = [[0.0, 0.0, 0.0], [1.0, 1.0, 0.5]]
+        scene = self._scene(
+            {"flat_patches": {"spawn": patches}}, {"reset_base": self._uniform_event()}
+        )
+        apply_terrain_spawn(scene)
+
+        term = scene.events["reset_base"]
+        assert term.func is reset_root_state_on_flat_patch
+        assert term.mode == "reset"
+        assert term.params["patches"] == patches
+        assert term.params["asset_cfg"].name == "go1"
+        assert term.params["yaw_range"] == (-1.0, 1.0)
+
+    def test_it_leaves_a_scene_without_terrain_alone(self):
+        from mjswan.envs.mdp.events import apply_terrain_spawn
+
+        event = self._uniform_event()
+        scene = self._scene(None, {"reset_base": event})
+        apply_terrain_spawn(scene)
+        assert scene.events["reset_base"] is event
+
+
+def test_serialize_events_reports_each_term_it_traces(monkeypatch):
+    """The build's progress line names the event it is on; keep the hook wired."""
+    from mjswan import _onnx_build
+
+    monkeypatch.setattr(
+        _onnx_build, "serialize_event", lambda name, cfg, env, out: {"name": name}
+    )
+    seen: list[str] = []
+    _onnx_build.serialize_events(
+        {"reset_slider": object(), "reset_hinge": object()},
+        env=None,
+        out_dir=None,
+        on_term=seen.append,
+    )
+    assert seen == ["reset_slider", "reset_hinge"]

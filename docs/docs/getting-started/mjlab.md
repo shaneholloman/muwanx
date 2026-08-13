@@ -33,7 +33,7 @@ Each attached policy configures itself from the task: its observations, commands
 
 ## 2. Scene helper: `ProjectHandle.add_scene_mjlab`
 
-When you need multiple scenes (one per task) or want to mix mjlab tasks with hand-written scenes, use `add_scene_mjlab(task_id)` on a `ProjectHandle`. It loads the task's MuJoCo spec, applies the task's `viewer` / `events` / terrain data, and returns a normal `SceneHandle`.
+When you need multiple scenes (one per task) or want to mix mjlab tasks with hand-written scenes, use `add_scene_mjlab(task_id)` on a `ProjectHandle`. It loads the task's MuJoCo spec, applies the task's `viewer` / `events` / terrain data (spawning the single env on a random flat patch when the terrain has one), and returns a normal `SceneHandle`.
 
 mjlab registers two configs per task — `env_cfg` (training) and `play_env_cfg` — and `play` selects between them, as its own `load_env_cfg` does. mjswan defaults to **play**, the opposite of mjlab, because that default serves training scripts and this is a playback tool: the training config sets `episode_length_s` to 10–20 s, which mjswan turns into the browser's `time_out` termination, so a viewer built from it resets the robot every few seconds. Pass `play=False` if you want training-time conditions.
 

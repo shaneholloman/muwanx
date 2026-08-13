@@ -165,7 +165,7 @@ def add_scene_mjlab(
 ) -> SceneHandle
 ```
 
-Load an mjlab task's MuJoCo spec from the task registry and add it as a scene. Requires `mjlab` to be installed. Automatically applies the task's `viewer`, `events`, and any terrain data.
+Load an mjlab task's MuJoCo spec from the task registry and add it as a scene. Requires `mjlab` to be installed. Automatically applies the task's `viewer`, `events`, and any terrain data — including swapping mjlab's `reset_root_state_uniform` for a spawn on a random flat terrain patch, since the browser runs a single env where mjlab trains many spread across the terrain.
 
 **Parameters**
 

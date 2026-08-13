@@ -18,7 +18,6 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "examples.mjlab.defaults"
 
 from . import commands  # noqa: F401 - for command registrations
-from .events import apply_terrain_spawn
 from .terminations import register_custom_terminations
 
 ENTITY = "ttktjmt-org"
@@ -98,17 +97,10 @@ def main():
         # The injection above edits this config, so the scene has to build from the same
         # object — `load_env_cfg` returns a deepcopy, and a second call would diverge.
         scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
-        # Spawn the single env on a random flat terrain patch (no-op for non-terrain
-        # tasks). A traced term like any other; see events/__init__.py.
-        apply_terrain_spawn(scene)
         if viewer_cfg := TASK_VIEWER_CONFIG_MAP.get(task_id):
             scene.set_viewer(viewer_cfg)
-        run_ids = wandb_run_id
-        if isinstance(run_ids, str):
-            run_ids = [run_ids]
+        run_ids = [wandb_run_id] if isinstance(wandb_run_id, str) else wandb_run_id
         wandb_paths = [f"{ENTITY}/{PROJECT}/{rid}" for rid in run_ids]
-        # The scene holds the `env_cfg` above, registrations included, so every term set
-        # (and `task_id`) defaults off it.
         scene.add_policy_wandb(wandb_paths)
 
     app = builder.build()

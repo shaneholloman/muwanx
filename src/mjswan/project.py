@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import mujoco
 
 from .adapters import apply_mjlab_sim_options, ensure_mjlab_extensions
+from .envs.mdp.events import apply_terrain_spawn
 from .scene import SceneConfig, SceneHandle, _env_cfg_control_dt
 from .utils import collect_spec_assets
 from .viewer import ViewerConfig
@@ -243,13 +244,14 @@ class ProjectHandle:
             handle.set_viewer(viewer_cfg)
         terrain_data = _extract_terrain_data(scene)
         if terrain_data:
-            # Core only surfaces the data; overriding the spawn event with it is task-side.
             handle._config.terrain_data = terrain_data
         scene_events = (
             events if events is not None else getattr(env_cfg, "events", None)
         )
         if scene_events:
             handle.set_events(scene_events)
+        # After both: it rewrites an adapted event term using the patch table.
+        apply_terrain_spawn(handle._config)
         return handle
 
 
