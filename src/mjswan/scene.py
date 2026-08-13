@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import re
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -179,6 +179,29 @@ def _enrich_joint_observations(
             term.params = params
 
 
+def _default_to_latest(handles: list[PolicyHandle]) -> None:
+    """Open the scene on the highest-step checkpoint."""
+    if not handles:
+        return
+
+    def _step(handle: PolicyHandle) -> int:
+        match = re.search(r"_(\d+)", handle._config.name)
+        return int(match.group(1)) if match else -1
+
+    max(handles, key=_step)._config.default = True
+
+
+@dataclass
+class PendingConversion:
+    """One scene's W&B → ONNX conversion, held until the build reaches that scene.
+
+    ``run`` reports each run id as it starts, for the build's progress line.
+    """
+
+    run_paths: list[str]
+    run: Callable[[Callable[[str], None]], None]
+
+
 @dataclass
 class SceneConfig:
     """Configuration for a MuJoCo scene."""
@@ -194,6 +217,10 @@ class SceneConfig:
 
     policies: list[PolicyConfig] = field(default_factory=list)
     """List of policies available for this scene."""
+
+    pending_conversions: list[PendingConversion] = field(default_factory=list)
+    """W&B checkpoint conversions ``Builder.build`` runs when it reaches this scene, so
+    each scene converts, then traces, before the next one starts."""
 
     metadata: dict[str, Any] = field(default_factory=dict)
     """Additional metadata for the scene."""
@@ -236,8 +263,10 @@ class SceneConfig:
     event/command term bodies against. Built at build time from
     :attr:`mjlab_env_cfg` when the scene came from a task (see
     ``builder._scene_trace_env``), so a tracking task's env is constructed only once
-    its clip is in the bundle; a scene built via plain
-    :meth:`ProjectHandle.add_scene` (no mjlab task) has none by default — set
+    its clip is in the bundle — unless :meth:`SceneHandle.add_policy_wandb` already
+    built one to export the checkpoints, which it hands over rather than closing. A
+    scene built via plain :meth:`ProjectHandle.add_scene` (no mjlab task) has none by
+    default — set
     one explicitly with :meth:`SceneHandle.set_trace_env` if it uses
     plain-callable (non-``Binding``) term functions. Only needs
     ``env.scene[name].data.<field>`` (and, for events, entity write methods) —
@@ -564,7 +593,10 @@ class SceneHandle:
 
         Returns:
             Flat list of :class:`PolicyHandle` instances across all runs, in the
-            order the runs were provided.
+            order the runs were provided — **empty when ``only_latest=False``**: that
+            path converts ``.pt`` checkpoints, which is deferred to ``Builder.build``
+            so each scene converts and traces before the next one starts, and the
+            checkpoint names those handles would carry are not known until then.
 
         Raises:
             ValueError: If ``only_latest=False`` and ``task_id`` is not provided,
@@ -657,105 +689,124 @@ class SceneHandle:
                     )
                     handles.append(handle)
         else:
+            # Deferred to build time so a scene converts, then traces, then the next
+            # starts; converting every scene up front held one mjlab env per scene alive.
             assert task_id is not None
-            from .wandb_io import (
-                create_pt_onnx_export_context,
-                fetch_motion_npz_from_wandb_run,
-                fetch_pt_onnx_from_wandb_run,
+
+            def _convert(on_run: Callable[[str], None] = lambda _: None) -> None:
+                from .wandb_io import (
+                    create_pt_onnx_export_context,
+                    fetch_motion_npz_from_wandb_run,
+                    fetch_pt_onnx_from_wandb_run,
+                )
+
+                with tempfile.TemporaryDirectory() as staging_dir:
+                    # The config mjlab's *export* env is built from. A copy of the scene's, so a
+                    # scene built from the training config does not silently get a play-config
+                    # export env — the observation widths that env reports are what the exported
+                    # ONNX takes as input. Copied rather than shared because the tracking branch
+                    # below writes a staging path into it that dies with this block.
+                    source_cfg = self._resolve_env_cfg(env_cfg)
+                    export_env_cfg: Any = (
+                        copy.deepcopy(source_cfg) if source_cfg is not None else None
+                    )
+                    if tracking_motion_term is not None:
+                        existing_file = getattr(
+                            tracking_motion_term, "motion_file", None
+                        )
+                        if existing_file and Path(existing_file).is_file():
+                            motion_name = Path(existing_file).stem
+                            motion_bytes = Path(existing_file).read_bytes()
+                            motion_file_for_env = existing_file
+                        else:
+                            motion_name, motion_bytes = fetch_motion_npz_from_wandb_run(
+                                run_paths[0]
+                            )
+                            staged = Path(staging_dir) / f"{motion_name}.npz"
+                            staged.write_bytes(motion_bytes)
+                            motion_file_for_env = str(staged)
+                        for rp in run_paths:
+                            tracking_motion_cache.setdefault(
+                                rp, (motion_name, motion_bytes)
+                            )
+
+                        if export_env_cfg is None:
+                            # A plain scene carries no config to follow, so fall back on the same
+                            # play config `add_scene_mjlab` would have chosen.
+                            try:
+                                from mjlab.tasks.registry import (
+                                    load_env_cfg as _load_env_cfg,
+                                )
+                            except ImportError as exc:
+                                raise ImportError(
+                                    "mjlab is required to resolve the tracking motion for "
+                                    "export."
+                                ) from exc
+                            export_env_cfg = _load_env_cfg(task_id, play=True)
+                        export_env_cfg.commands[
+                            "motion"
+                        ].motion_file = motion_file_for_env  # type: ignore[attr-defined]
+
+                    export_context = create_pt_onnx_export_context(
+                        task_id, env_cfg=export_env_cfg
+                    )
+                    try:
+                        for path in run_paths:
+                            on_run(path.rsplit("/", 1)[-1])
+                            for name, model in fetch_pt_onnx_from_wandb_run(
+                                path, task_id, export_context=export_context
+                            ):
+                                if name in seen_names:
+                                    continue
+                                seen_names.add(name)
+                                handle = self.add_policy(
+                                    name=name,
+                                    policy=model,
+                                    config_path=config_path,
+                                    metadata=metadata,
+                                    env_cfg=env_cfg,
+                                    task_id=task_id,
+                                    observations=observations,
+                                    commands=commands,
+                                    actions=actions,
+                                    terminations=terminations,
+                                    policy_joint_names=export_context.joint_names
+                                    or None,
+                                    default_joint_pos=export_context.default_joint_pos
+                                    or None,
+                                    encoder_bias=export_context.encoder_bias or None,
+                                    clip_actions=clip_actions,
+                                    extras=extras,
+                                )
+                                _attach_tracking_motion(
+                                    handle,
+                                    path,
+                                    tracking_motion_term,
+                                    tracking_motion_cache,
+                                    dataset_joint_names=export_context.joint_names
+                                    or None,
+                                )
+                                handles.append(handle)
+                    finally:
+                        # Keep it as the scene's trace env rather than building a second one
+                        # from the same config — unless it was built from a different one.
+                        if (
+                            env_cfg is None
+                            and self._config.mjlab_env_cfg is not None
+                            and self._config.mjlab_env is None
+                        ):
+                            self._config.mjlab_env = export_context.env.unwrapped
+                        else:
+                            export_context.close()
+
+                # Here, not after the call: these handles exist only once this runs.
+                _default_to_latest(handles)
+
+            self._config.pending_conversions.append(
+                PendingConversion(run_paths=list(run_paths), run=_convert)
             )
 
-            with tempfile.TemporaryDirectory() as staging_dir:
-                # The config mjlab's *export* env is built from. A copy of the scene's, so a
-                # scene built from the training config does not silently get a play-config
-                # export env — the observation widths that env reports are what the exported
-                # ONNX takes as input. Copied rather than shared because the tracking branch
-                # below writes a staging path into it that dies with this block.
-                source_cfg = self._resolve_env_cfg(env_cfg)
-                export_env_cfg: Any = (
-                    copy.deepcopy(source_cfg) if source_cfg is not None else None
-                )
-                if tracking_motion_term is not None:
-                    existing_file = getattr(tracking_motion_term, "motion_file", None)
-                    if existing_file and Path(existing_file).is_file():
-                        motion_name = Path(existing_file).stem
-                        motion_bytes = Path(existing_file).read_bytes()
-                        motion_file_for_env = existing_file
-                    else:
-                        motion_name, motion_bytes = fetch_motion_npz_from_wandb_run(
-                            run_paths[0]
-                        )
-                        staged = Path(staging_dir) / f"{motion_name}.npz"
-                        staged.write_bytes(motion_bytes)
-                        motion_file_for_env = str(staged)
-                    for rp in run_paths:
-                        tracking_motion_cache.setdefault(
-                            rp, (motion_name, motion_bytes)
-                        )
-
-                    if export_env_cfg is None:
-                        # A plain scene carries no config to follow, so fall back on the same
-                        # play config `add_scene_mjlab` would have chosen.
-                        try:
-                            from mjlab.tasks.registry import (
-                                load_env_cfg as _load_env_cfg,
-                            )
-                        except ImportError as exc:
-                            raise ImportError(
-                                "mjlab is required to resolve the tracking motion for "
-                                "export."
-                            ) from exc
-                        export_env_cfg = _load_env_cfg(task_id, play=True)
-                    export_env_cfg.commands["motion"].motion_file = motion_file_for_env  # type: ignore[attr-defined]
-
-                export_context = create_pt_onnx_export_context(
-                    task_id, env_cfg=export_env_cfg
-                )
-                try:
-                    for path in run_paths:
-                        for name, model in fetch_pt_onnx_from_wandb_run(
-                            path, task_id, export_context=export_context
-                        ):
-                            if name in seen_names:
-                                continue
-                            seen_names.add(name)
-                            handle = self.add_policy(
-                                name=name,
-                                policy=model,
-                                config_path=config_path,
-                                metadata=metadata,
-                                env_cfg=env_cfg,
-                                task_id=task_id,
-                                observations=observations,
-                                commands=commands,
-                                actions=actions,
-                                terminations=terminations,
-                                policy_joint_names=export_context.joint_names or None,
-                                default_joint_pos=export_context.default_joint_pos
-                                or None,
-                                encoder_bias=export_context.encoder_bias or None,
-                                clip_actions=clip_actions,
-                                extras=extras,
-                            )
-                            _attach_tracking_motion(
-                                handle,
-                                path,
-                                tracking_motion_term,
-                                tracking_motion_cache,
-                                dataset_joint_names=export_context.joint_names or None,
-                            )
-                            handles.append(handle)
-                finally:
-                    export_context.close()
-
-        if handles:
-
-            def _step(handle: PolicyHandle) -> int:
-                match = re.search(r"_(\d+)", handle._config.name)
-                return int(match.group(1)) if match else -1
-
-            latest = max(handles, key=_step)
-            latest._config.default = True
-
+        _default_to_latest(handles)
         return handles
 
     def add_splat(

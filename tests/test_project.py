@@ -687,3 +687,117 @@ class TestPolicyTermsDerivedFromEnvCfg:
         scene = _mjlab_scene(minimal_model, _MdpEnvCfg(), control_dt=0.02)
         same = _MdpEnvCfg(timestep=0.002, decimation=10)  # 0.02 s
         assert scene.add_policy(name="Policy", policy=minimal_onnx, env_cfg=same)
+
+
+class _FakeExportContext:
+    """Stands in for `PtOnnxExportContext` (a wrapped env plus the metadata it reads)."""
+
+    def __init__(self):
+        self.unwrapped = object()
+        self.env = type("Wrapped", (), {"unwrapped": self.unwrapped})()
+        self.joint_names: list[str] = []
+        self.default_joint_pos: list[float] = []
+        self.encoder_bias: list[float] = []
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class TestLatestCheckpointIsTheDefault:
+    """The scene opens on the newest checkpoint, not `model_0`.
+
+    Deferring the conversion moved the handles out from under the code that marked the
+    default, and the browser then opened on an untrained policy.
+    """
+
+    @pytest.fixture
+    def checkpoints(self, monkeypatch, minimal_onnx):
+        monkeypatch.setattr(
+            "mjswan.wandb_io.create_pt_onnx_export_context",
+            lambda task_id, env_cfg=None: _FakeExportContext(),
+        )
+        monkeypatch.setattr(
+            "mjswan.wandb_io.fetch_pt_onnx_from_wandb_run",
+            lambda run_path, task_id, export_context: [
+                ("model_0", minimal_onnx),
+                ("model_1000", minimal_onnx),
+                ("model_500", minimal_onnx),
+            ],
+        )
+
+    def test_the_deferred_conversion_still_marks_it(self, checkpoints, minimal_model):
+        scene = _mjlab_scene(minimal_model, _MdpEnvCfg())
+
+        scene.add_policy_wandb("org/proj/run", task_id="t")
+        for pending in scene._config.pending_conversions:
+            pending.run(lambda _: None)
+
+        defaults = [p.name for p in scene._config.policies if p.default]
+        assert defaults == ["model_1000"]
+
+
+class TestExportEnvBecomesTheTraceEnv:
+    """One `ManagerBasedRlEnv` per scene, not two.
+
+    Converting `.pt` checkpoints builds an env, and so did term tracing at build time —
+    the same config twice, so mjlab printed its MDP tables twice per scene and the build
+    paid for a second env. The export env is kept instead, which also means terms trace
+    against exactly the env the ONNX was exported against.
+
+    The conversion is deferred to `Builder.build`, so each test drives it as the build
+    loop does — `add_policy_wandb` alone leaves nothing to assert on.
+    """
+
+    @staticmethod
+    def _convert(scene):
+        """Run what the build's scene loop would run for this scene."""
+        for pending in scene._config.pending_conversions:
+            pending.run(lambda _: None)
+        scene._config.pending_conversions.clear()
+
+    @pytest.fixture
+    def context(self, monkeypatch, minimal_onnx):
+        context = _FakeExportContext()
+        monkeypatch.setattr(
+            "mjswan.wandb_io.create_pt_onnx_export_context",
+            lambda task_id, env_cfg=None: context,
+        )
+        monkeypatch.setattr(
+            "mjswan.wandb_io.fetch_pt_onnx_from_wandb_run",
+            lambda run_path, task_id, export_context: [("model_0", minimal_onnx)],
+        )
+        return context
+
+    def test_the_scene_keeps_it(self, context, minimal_model):
+        scene = _mjlab_scene(minimal_model, _MdpEnvCfg())
+
+        scene.add_policy_wandb("org/proj/run", task_id="t")
+        self._convert(scene)
+
+        assert scene._config.mjlab_env is context.unwrapped
+        assert not context.closed
+
+    def test_a_per_policy_env_cfg_describes_a_different_env(
+        self, context, minimal_model
+    ):
+        # Then it is not the scene's env, so keeping it would trace every *other* policy's
+        # terms against the wrong one.
+        scene = _mjlab_scene(minimal_model, _MdpEnvCfg())
+
+        scene.add_policy_wandb("org/proj/run", task_id="t", env_cfg=_MdpEnvCfg())
+        self._convert(scene)
+
+        assert scene._config.mjlab_env is None
+        assert context.closed
+
+    def test_an_explicit_trace_env_wins(self, context, minimal_model):
+        scene = _mjlab_scene(minimal_model, _MdpEnvCfg())
+        mine = object()
+        scene.set_trace_env(mine)
+
+        scene.add_policy_wandb("org/proj/run", task_id="t")
+        self._convert(scene)
+
+        assert scene._config.mjlab_env is mine
+        assert context.closed

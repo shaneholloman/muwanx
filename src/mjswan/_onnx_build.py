@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -976,13 +977,21 @@ def serialize_event(
 
 
 def serialize_events(
-    events: dict[str, EventTermCfg] | None, env: Any, out_dir: Path
+    events: dict[str, EventTermCfg] | None,
+    env: Any,
+    out_dir: Path,
+    on_term: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]] | None:
-    """Serialize a scene's events dict to the JSON list ``config.json`` carries."""
+    """Serialize a scene's events dict to the JSON list ``config.json`` carries.
+
+    ``on_term`` names each term before it is traced, for the build's progress line.
+    """
     if not events:
         return None
     result = []
     for name, term_cfg in events.items():
+        if on_term is not None:
+            on_term(name)
         entry = serialize_event(name, term_cfg, env, out_dir)
         if entry is not None:
             result.append(entry)

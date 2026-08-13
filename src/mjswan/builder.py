@@ -69,9 +69,9 @@ def _scene_trace_env(scene: SceneConfig) -> Any | None:
         return scene.mjlab_env
     if scene.mjlab_env_cfg is None:
         return None
-    from mjlab.envs import ManagerBasedRlEnv
+    from .trace_env import build_mjlab_env
 
-    scene.mjlab_env = ManagerBasedRlEnv(scene.mjlab_env_cfg, device="cpu")
+    scene.mjlab_env = build_mjlab_env(scene.mjlab_env_cfg)
     scene.mjlab_env.reset()
     return scene.mjlab_env
 
@@ -183,6 +183,31 @@ def _require_control_dt(scene: Any) -> float:
             "positive number of seconds."
         )
     return float(scene.control_dt)
+
+
+class _SceneSteps:
+    """The sub-step line under a project's progress bar: one phase at a time, counting
+    its own units and naming the one it is on."""
+
+    def __init__(self, progress: Progress):
+        self._progress = progress
+        self._task = progress.add_task("", total=1, scene="")
+        self._started = False
+
+    def begin(self, label: str, total: int) -> None:
+        self._started = False
+        # `total=None` means "keep the current total" to rich, so it is always passed.
+        self._progress.reset(
+            self._task, total=total, description=f"   └ {label}", scene=""
+        )
+
+    def on(self, name: str) -> None:
+        """Name the unit now starting; the previous one counts as done."""
+        self._progress.update(self._task, scene=name, advance=1 if self._started else 0)
+        self._started = True
+
+    def close(self) -> None:
+        self._progress.remove_task(self._task)
 
 
 class Builder:
@@ -830,6 +855,7 @@ class Builder:
                     total=len(project.scenes),
                     scene="",
                 )
+                steps = _SceneSteps(progress)
                 for scene in project.scenes:
                     progress.update(task, scene=scene.name)
                     scene_id = name2id(scene.name)
@@ -837,8 +863,19 @@ class Builder:
                     scene_dir.mkdir(parents=True, exist_ok=True)
                     scene_path = scene_dir / scene.scene_filename
 
+                    # First: the conversion is what creates this scene's policies (and
+                    # hands over its export env as the trace env).
+                    for pending in scene.pending_conversions:
+                        steps.begin(
+                            "converting checkpoints", total=len(pending.run_paths)
+                        )
+                        pending.run(steps.on)
+                    scene.pending_conversions.clear()
+
                     self._validate_muscle_action_terms(scene)
 
+                    steps.begin("building scene", total=3)
+                    steps.on("packaging scene")
                     if scene.spec is not None:
                         scene.spec.assets.update(collect_spec_assets(scene.spec))
                         to_zip_deflated(scene.spec, str(scene_path))  # Saves as .mjz
@@ -856,37 +893,11 @@ class Builder:
 
                     # Before anything that needs the trace env: a tracking task's env cannot
                     # be built until its clip is on disk, and the bundled copy is that file.
+                    steps.on("bundling clips")
                     motion_files = _write_scene_motions(scene, scene_dir)
                     _point_env_cfg_at_bundled_motion(scene, scene_dir, motion_files)
 
-                    # Needs scene_dir and the live env, so it happens here; overwrites `scene.events`
-                    # in place with the JSON list `_save_config_json` reads after this loop.
-                    if scene.events:
-                        from ._onnx_build import serialize_events
-
-                        scene.events = serialize_events(
-                            scene.events, _scene_trace_env(scene), scene_dir
-                        )
-
-                    # Save policies
-                    for policy in scene.policies:
-                        policy_id = name2id(policy.name)
-                        policy_path = scene_dir / f"{policy_id}.onnx"
-                        onnx.save(policy.model, str(policy_path))
-
-                        data = self._serialize_policy_config(
-                            policy,
-                            _scene_trace_env(scene),
-                            scene_dir,
-                            policy_path,
-                            motion_files,
-                        )
-                        if data is not None:
-                            target = policy_path.with_suffix(".json")
-                            with open(target, "w") as f:
-                                json.dump(data, f, indent=2)
-
-                    # Copy bundled .spz files for each splat with source set
+                    steps.on("copying splats")
                     for splat in scene.splats:
                         if splat.source is not None:
                             src = Path(splat.source).expanduser()
@@ -904,7 +915,42 @@ class Builder:
                                     stacklevel=2,
                                 )
 
+                    steps.begin(
+                        "tracing mdps",
+                        total=len(scene.events or {}) + len(scene.policies),
+                    )
+                    if scene.events:
+                        from ._onnx_build import serialize_events
+
+                        # Overwrites `scene.events` with the JSON list `_save_config_json`
+                        # reads after this loop.
+                        scene.events = serialize_events(
+                            scene.events,
+                            _scene_trace_env(scene),
+                            scene_dir,
+                            on_term=lambda name: steps.on(f"event/{name}"),
+                        )
+
+                    for policy in scene.policies:
+                        steps.on(f"policy/{policy.name}")
+                        policy_id = name2id(policy.name)
+                        policy_path = scene_dir / f"{policy_id}.onnx"
+                        onnx.save(policy.model, str(policy_path))
+
+                        data = self._serialize_policy_config(
+                            policy,
+                            _scene_trace_env(scene),
+                            scene_dir,
+                            policy_path,
+                            motion_files,
+                        )
+                        if data is not None:
+                            target = policy_path.with_suffix(".json")
+                            with open(target, "w") as f:
+                                json.dump(data, f, indent=2)
+
                     progress.advance(task)
+                steps.close()
 
         # After the scene loop, which resolves each scene's `events` into the JSON form.
         self._save_config_json(output_path)
