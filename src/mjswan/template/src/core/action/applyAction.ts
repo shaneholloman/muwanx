@@ -226,10 +226,13 @@ export function stepPhysics(
   actions: Float32Array,
   decimation: number,
   onSubstep?: () => void,
+  /** After the step, where mjlab's `scene.update(dt=physics_dt)` reads sensors. */
+  onSubstepEnd?: () => void,
 ): void {
   for (let substep = 0; substep < decimation; substep++) {
     applyAction(mjData, terms, actions);
     onSubstep?.();
     mujoco.mj_step(mjModel, mjData);
+    onSubstepEnd?.();
   }
 }

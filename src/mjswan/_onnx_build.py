@@ -368,7 +368,9 @@ def _fused_group_entry(
         "layout": export.layout,
         "size": _tensor_width(export.reference_output),
     }
-    sensors = _raycast_descriptors(export, env)
+    sensors = _structured_sensor_descriptors(
+        export, env, owner=f"Observation group {group_name!r}"
+    )
     if sensors:
         # Structured sensors only; a builtin one is a `sensordata` window.
         entry["sensors"] = sensors
@@ -385,6 +387,41 @@ def _mj_element_name(env: Any, obj_type: str, obj_id: int) -> str:
     return {"body": mj_model.body, "site": mj_model.site, "geom": mj_model.geom}[
         obj_type
     ](obj_id).name
+
+
+_CONTACT_HISTORY_FIELDS = ("force", "torque", "dist")
+"""Fields mjlab buffers (``ContactSensor.initialize``)."""
+
+
+def contact_sensor_descriptor(env: Any, sensor_name: str) -> dict[str, Any] | None:
+    """What the browser needs to reproduce one ``ContactSensor``, or None if not one.
+
+    None of the physics is ours: mjlab adds a real MuJoCo contact sensor per
+    ``(primary, field)`` pair, so the compiled scene already carries them and their
+    values are in ``sensordata``. Only the layout to read them back travels — the ring
+    buffer is the one piece the runtime owns.
+    """
+    sensor = env.scene.sensors.get(sensor_name)
+    slots = getattr(sensor, "_slots", None)
+    if not slots:
+        return None
+    fields: dict[str, Any] = {}
+    for slot in slots:
+        entry = fields.setdefault(slot.field_name, {"sensors": []})
+        entry["sensors"].append(slot.sensor_name)
+    for entry in fields.values():
+        window = env.sim.mj_model.sensor(entry["sensors"][0])
+        # `num_slots * dim` per window; the runtime reshapes with `dim`.
+        entry["dim"] = int(window.dim[0]) // int(sensor.cfg.num_slots)
+    history = [f for f in _CONTACT_HISTORY_FIELDS if f in fields]
+    return {
+        "kind": "contact",
+        "num_slots": int(sensor.cfg.num_slots),
+        "history_length": int(sensor.cfg.history_length),
+        # Only these have a buffer, whatever `history_length` says.
+        "history_fields": history if sensor.cfg.history_length > 0 else [],
+        "fields": fields,
+    }
 
 
 def raycast_sensor_descriptor(env: Any, sensor_name: str) -> dict[str, Any] | None:
@@ -421,20 +458,37 @@ def raycast_sensor_descriptor(env: Any, sensor_name: str) -> dict[str, Any] | No
     }
 
 
-def _raycast_descriptors(export: Any, env: Any) -> dict[str, Any]:
-    """Descriptors for every structured sensor the group's slots name."""
+def _structured_sensor_descriptors(
+    export: Any, env: Any, *, owner: str
+) -> dict[str, Any]:
+    """Descriptors for the structured sensors a graph's slots name.
+
+    A ``{sensor, field}`` slot is unreadable in the browser without one, and the runtime
+    would hold a stale value instead of failing — a termination that never fires while
+    looking installed. So an undescribable sensor fails the build.
+    """
     from .compile.tracer import _SENSOR_NS
 
     descriptors: dict[str, Any] = {}
     for namespace, name_part in export.input_slots:
         if namespace != _SENSOR_NS or "." not in name_part:
             continue
-        sensor_name = name_part.split(".", 1)[0]
+        sensor_name, field = name_part.split(".", 1)
         if sensor_name in descriptors:
             continue
-        descriptor = raycast_sensor_descriptor(env, sensor_name)
-        if descriptor is not None:
-            descriptors[sensor_name] = descriptor
+        descriptor = raycast_sensor_descriptor(
+            env, sensor_name
+        ) or contact_sensor_descriptor(env, sensor_name)
+        if descriptor is None:
+            sensor = env.scene.sensors.get(sensor_name)
+            raise ValueError(
+                f"{owner} reads {sensor_name!r}.{field}, but the browser has no "
+                f"implementation for a {type(sensor).__name__} — only raycast and "
+                "contact sensors can serve fields. Implement it in the runtime and emit "
+                "a descriptor here, hand the term to the browser as a TS class, or drop "
+                "it from the exported set."
+            )
+        descriptors[sensor_name] = descriptor
     return descriptors
 
 
@@ -509,6 +563,11 @@ def serialize_termination(
         "onnx": ref,
         "input_slots": slots_json(export),
     }
+    sensors = _structured_sensor_descriptors(
+        export, env, owner=f"Termination term {name!r}"
+    )
+    if sensors:
+        entry["sensors"] = sensors
     if term_cfg.time_out:
         entry["time_out"] = True
     return entry

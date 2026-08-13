@@ -25,6 +25,7 @@
  */
 
 import { quatApply, quatApplyInv } from '../observation/math';
+import type { ContactSensorSet } from './contact';
 import { RaycastSensor, isRaycastField, type RaycastSensorDescriptor } from './raycast';
 import type { OnnxInputSlot, SlotReader } from './session';
 
@@ -51,6 +52,8 @@ export type SlotReaderOptions = {
   jointBias?: (jointName: string) => number;
   /** A function because descriptors arrive with the policy, the reader with the runtime. */
   raycastSensors?: () => Record<string, RaycastSensorDescriptor>;
+  /** The engine owns these, since it advances their history per substep. */
+  contactSensors?: () => ContactSensorSet | null;
 };
 
 /** Everything about one entity that resolving its fields needs, computed once. */
@@ -281,7 +284,11 @@ export function isReadableEntityField(field: string): boolean {
  * The build records mjlab's prefixed name (`robot/imu_lin_vel`); a model exported
  * from plain MJCF has the bare name. Try both before giving up.
  */
-function sensorWindow(mjModel: MjModel, sensor: string): { adr: number; dim: number } | null {
+/** A named MuJoCo sensor's `sensordata` window, by *unprefixed* name if need be. */
+export function sensorWindow(
+  mjModel: MjModel,
+  sensor: string,
+): { adr: number; dim: number } | null {
   const names = decodeNames(mjModel, mjModel.nsensor, mjModel.name_sensoradr);
   let idx = names.indexOf(sensor);
   if (idx < 0) {
@@ -370,7 +377,13 @@ export function createSlotReader(
 
     if (slot.sensor) {
       if (slot.field) {
-        // A `RayCastSensor` field, which has no `sensordata` window to fall through to.
+        // A structured sensor: no single `sensordata` window to fall through to, so
+        // each kind is served by the module that knows its layout.
+        const contacts = options.contactSensors?.();
+        const contact = contacts?.read(slot.sensor, slot.field, mjModel, mjData, sensor =>
+          sensorWindow(mjModel, sensor),
+        );
+        if (contact) return contact;
         return readRaycast(slot.sensor, slot.field, context);
       }
       const window = sensorWindow(mjModel, slot.sensor);

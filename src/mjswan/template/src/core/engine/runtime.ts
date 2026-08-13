@@ -47,8 +47,9 @@ import { EventManager } from '../event/EventManager';
 import { Events } from '../event/events';
 import type { EventConfig, EventContext, TerrainData } from '../event/EventBase';
 import { OnnxSessionCache, type SlotReader } from '../onnx/session';
+import { ContactSensorSet, type ContactSensorDescriptor } from '../onnx/contact';
 import type { RaycastSensorDescriptor } from '../onnx/raycast';
-import { createSlotReader } from '../onnx/slotReader';
+import { createSlotReader, sensorWindow } from '../onnx/slotReader';
 import { SeededRng } from '../rng';
 
 /** Fixed rather than time-derived, so a plain page load replays identically. */
@@ -71,17 +72,29 @@ function buildJointBias(config: PolicyConfig): Map<string, number> {
   return bias;
 }
 
-/** Flattens the per-group sensor descriptors so the slot reader needn't know groups. */
-function collectRaycastSensors(
-  config: PolicyConfig
-): Record<string, RaycastSensorDescriptor> {
-  const sensors: Record<string, RaycastSensorDescriptor> = {};
-  for (const group of Object.values(config.observations ?? {})) {
-    const declared = (group as { sensors?: Record<string, RaycastSensorDescriptor> })
-      .sensors;
-    if (declared) Object.assign(sensors, declared);
+type StructuredSensorDescriptor = RaycastSensorDescriptor | ContactSensorDescriptor;
+
+/**
+ * Descriptors for the structured sensors this policy's graphs read, by kind. Terminations
+ * carry them too, not just observation groups (`ee_ground_collision` is termination-only).
+ */
+function collectStructuredSensors(config: PolicyConfig): {
+  raycast: Record<string, RaycastSensorDescriptor>;
+  contact: Record<string, ContactSensorDescriptor>;
+} {
+  const raycast: Record<string, RaycastSensorDescriptor> = {};
+  const contact: Record<string, ContactSensorDescriptor> = {};
+  const owners: Array<{ sensors?: Record<string, StructuredSensorDescriptor> }> = [
+    ...Object.values(config.observations ?? {}),
+    ...Object.values(config.terminations ?? {}),
+  ] as Array<{ sensors?: Record<string, StructuredSensorDescriptor> }>;
+  for (const owner of owners) {
+    for (const [name, descriptor] of Object.entries(owner?.sensors ?? {})) {
+      if (descriptor.kind === 'contact') contact[name] = descriptor;
+      else raycast[name] = descriptor;
+    }
   }
-  return sensors;
+  return { raycast, contact };
 }
 
 /** A policy with its ONNX weights resolved to bytes; motion data stays lazy. */
@@ -220,6 +233,8 @@ export class mjswanRuntime {
   private jointBias = new Map<string, number>();
   private clipActions: number | null = null;
   private raycastSensors: Record<string, RaycastSensorDescriptor> = {};
+  /** Owned here, not by the slot reader: the history advances per substep. */
+  private contactSensors = new ContactSensorSet();
 
   constructor(mujoco: MainModule, container: HTMLElement, termSeed = DEFAULT_TERM_SEED) {
     this.mujoco = mujoco;
@@ -242,6 +257,7 @@ export class mjswanRuntime {
       {
         jointBias: (name) => this.jointBias.get(name) ?? 0,
         raycastSensors: () => this.raycastSensors,
+        contactSensors: () => this.contactSensors,
       },
     );
 
@@ -760,6 +776,7 @@ export class mjswanRuntime {
     this.jointBias.clear();
     this.clipActions = null;
     this.raycastSensors = {};
+    this.contactSensors = new ContactSensorSet();
     // eventManager, sceneGraphs and terrainData are scene-level; do not clear here.
 
     // Clear existing commands when switching policies
@@ -780,7 +797,9 @@ export class mjswanRuntime {
       await this.policyGraphs.load(policy.graphs ?? []);
       this.jointBias = buildJointBias(config);
       this.clipActions = readClipActions(config.clip_actions);
-      this.raycastSensors = collectRaycastSensors(config);
+      const structured = collectStructuredSensors(config);
+      this.raycastSensors = structured.raycast;
+      this.contactSensors = new ContactSensorSet(structured.contact);
       // Metadata comes from policy.json, bytes from the app; merge them by name.
       if (Array.isArray(config.motions)) {
         const dataByName = new Map(policy.motions.map((m) => [m.name, m.data]));
@@ -1184,6 +1203,9 @@ export class mjswanRuntime {
         qvel[i] = this.initialQvel[i];
       }
     }
+    // With the sim state, as mjlab does: a force from before the reset would otherwise
+    // keep an `illegal_contact` term firing.
+    this.contactSensors.reset();
     // Reset with the sim state, not the terms: it reads nothing from the scene.
     if (this.onnxModule) {
       this.onnxInputDict = this.onnxModule.initInput();
@@ -1221,6 +1243,18 @@ export class mjswanRuntime {
       this.policyControl ?? [],
       this.policyRunner?.getLastActions() ?? EMPTY_ACTIONS,
       this.decimation,
+      undefined,
+      // Per substep, not per control step, as mjlab rolls it from
+      // `scene.update(dt=physics_dt)` inside its own decimation loop.
+      this.contactSensors.size > 0 ? () => this.advanceContactSensors() : undefined,
+    );
+  }
+
+  private advanceContactSensors(): void {
+    if (!this.mjModel || !this.mjData) return;
+    const mjModel = this.mjModel;
+    this.contactSensors.advance(mjModel, this.mjData, (sensor) =>
+      sensorWindow(mjModel, sensor),
     );
   }
 
