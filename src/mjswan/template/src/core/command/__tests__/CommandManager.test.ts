@@ -58,6 +58,35 @@ describe('CommandManager: resetTerms', () => {
     };
   }
 
+  it('leaves the UI values alone when a reset redraws the command', async () => {
+    // The panel used to mirror `getCommand()` by position, so the drawn forward velocity
+    // landed in the `enabled` checkbox and flipped the Joystick toggle on every reset.
+    const context = await contextWithSession(
+      'command/twist.onnx',
+      fakeSession(() => ({ next_vel_command_b: { data: new Float32Array([0.9, 0, 0]), dims: [1, 3] } })),
+    );
+    const mgr = new CommandManager();
+    mgr.initialize(
+      {
+        twist: {
+          ...VELOCITY_CFG,
+          ui: {
+            inputs: [
+              { type: 'checkbox', name: 'enabled', label: 'Joystick', default: false },
+              { type: 'slider', name: 'lin_vel_x', label: 'Forward', min: -1, max: 1, step: 0.05, default: 0.5 },
+            ],
+          },
+        } as OnnxCommandConfig,
+      },
+      context,
+    );
+
+    await mgr.resetTerms();
+
+    expect(mgr.getValues()['twist:enabled']).toBe(0);
+    expect(mgr.getValues()['twist:lin_vel_x']).toBe(0.5);
+  });
+
   it('awaits each term in config order, not concurrently', () => {
     // Each reset *is* the term's resample and may write to the sim, so overlaps resolve
     // last-writer-wins by config order. `Promise.all` would interleave the four events.

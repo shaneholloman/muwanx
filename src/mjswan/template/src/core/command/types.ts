@@ -102,6 +102,8 @@ export interface CommandTerm {
   update?(dt: number): void;
   updateDebugVisuals?(): void;
   setValue?(inputName: string, value: number): number | void;
+  /** Current value of one UI input, for the panel's mirror of it. */
+  getUiValue?(inputName: string): number | undefined;
   triggerButton?(inputName: string): void;
   dispose?(): void;
 }

@@ -200,6 +200,10 @@ export class OnnxCommand implements CommandTerm {
     }
   }
 
+  getUiValue(inputName: string): number | undefined {
+    return this.uiValues.get(inputName);
+  }
+
   setValue(inputName: string, value: number): number {
     this.uiValues.set(inputName, value);
     return value;

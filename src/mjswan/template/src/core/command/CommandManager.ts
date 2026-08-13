@@ -75,6 +75,10 @@ class UiCommand implements CommandTerm {
     }
   }
 
+  getUiValue(inputName: string): number | undefined {
+    return this.values.get(inputName);
+  }
+
   setValue(inputName: string, value: number): number {
     const input = this.inputs.find(
       (entry): entry is SliderCommandConfig | CheckboxCommandConfig =>
@@ -325,12 +329,8 @@ export class CommandManager {
       this.commands.set(id, { id, groupName, config: input });
       this.commandGroups.get(groupName)!.push(id);
       if (input.type === 'slider' || input.type === 'checkbox') {
-        const current = term.getCommand();
-        const valueIndex = inputs
-          .filter((entry): entry is ValueCommandConfig => entry.type === 'slider' || entry.type === 'checkbox')
-          .findIndex(entry => entry.name === input.name);
         const fallback = input.type === 'checkbox' ? (input.default ? 1.0 : 0.0) : input.default;
-        this.values.set(id, current[valueIndex] ?? fallback);
+        this.values.set(id, term.getUiValue?.(input.name) ?? fallback);
       }
     }
     this.emit({
@@ -340,24 +340,19 @@ export class CommandManager {
     });
   }
 
+  /**
+   * Re-read what the panel shows, after a reset moved the terms.
+   *
+   * By input name: a term's command vector is not its UI vector (an `OnnxCommand`'s is
+   * the policy's), so pairing them by position showed one input's value under another.
+   */
   private syncValuesFromTerms(): void {
     for (const [id, command] of this.commands) {
       if (command.config.type !== 'slider' && command.config.type !== 'checkbox') {
         continue;
       }
-      const term = this.terms.get(command.groupName);
-      if (!term) {
-        continue;
-      }
-      const inputs = term.getUiConfig?.()?.inputs ?? [];
-      const valueInputs = inputs.filter(
-        (entry): entry is ValueCommandConfig => entry.type === 'slider' || entry.type === 'checkbox'
-      );
-      const index = valueInputs.findIndex(entry => entry.name === command.config.name);
-      if (index >= 0) {
-        const current = term.getCommand();
-        this.values.set(id, current[index] ?? this.values.get(id) ?? 0.0);
-      }
+      const value = this.terms.get(command.groupName)?.getUiValue?.(command.config.name);
+      if (value !== undefined) this.values.set(id, value);
     }
   }
 
