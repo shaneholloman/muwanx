@@ -353,6 +353,8 @@ def run_command_parity(
     feeds["resample_mask"] = np.zeros((term.num_envs,), dtype=bool)
     feeds["rand"] = _to_numpy(export.reference_rand)
     outs = session.run(export.output_names, feeds)
+    # State fields only: the mask does not gate the write outputs, so there is no
+    # reference to compare them against (`OnnxCommand`'s tests cover that half).
     for f, out in zip(state_fields, outs[: len(state_fields)]):
         if not np.allclose(out, _to_numpy(ref_false[f]), atol=atol, rtol=rtol):
             tr.passed = False

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import re
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
@@ -900,6 +901,7 @@ class _EventModule(nn.Module):
         dynamic_keys: list[SlotKey],
         tensor_consts: dict[TaggedKey, torch.Tensor],
         scalar_consts: dict[TaggedKey, Any],
+        *,
         real_env: Any,
     ):
         super().__init__()
@@ -949,6 +951,42 @@ class EventExport:
     constant_slots: list[str] = field(default_factory=list)
     input_shapes: list[list[int]] = field(default_factory=list)
     """Traced shape of each input slot, parallel to ``input_slots`` (see :func:`slots_json`)."""
+
+
+_EXPORT_FILTERS_INSTALLED = False
+
+
+def _prepare_single_env_export(num_envs: int) -> None:
+    """Refuse a batched trace, and silence the three warnings a single-env one raises.
+
+    All three are safe by construction: the `index_put_` mutation is read back as a
+    graph output, `len(env_ids)` bakes the row count the guard below pins to 1, and the
+    `torch.tensor` constants are config that cannot vary (a wrongly baked *varying*
+    value is what the parity harness catches, not these warnings).
+
+    Installed once, process-wide: `catch_warnings` per export resets Python's
+    per-location dedup and reprints every *other* warning once per exported graph.
+    """
+    if num_envs != 1:
+        raise ValueError(
+            f"tracing with num_envs={num_envs}: the graph would bake that row count "
+            "while the runtime feeds one row (session.ts pins the batch axis to 1). "
+            "Trace single-env, as Project.add_mjlab_task does."
+        )
+    global _EXPORT_FILTERS_INSTALLED
+    if _EXPORT_FILTERS_INSTALLED:
+        return
+    warnings.filterwarnings(
+        "ignore",
+        message="ONNX Preprocess - Removing mutation from node aten::index_put_",
+        category=UserWarning,
+    )
+    # No category: `TracerWarning` is not on `torch.jit`'s public stub.
+    warnings.filterwarnings("ignore", message="Using len to get tensor shape")
+    warnings.filterwarnings(
+        "ignore", message="torch.tensor results are registered as constants"
+    )
+    _EXPORT_FILTERS_INSTALLED = True
 
 
 def trace_event_term(
@@ -1017,6 +1055,7 @@ def trace_event_term(
     ).eval()
     dyn_axes = {n: {0: "batch"} for n in [*dyn_input_names, *output_names]}
     buffer = io.BytesIO()
+    _prepare_single_env_export(env.num_envs)
     with torch.no_grad():
         torch.onnx.export(
             module,
@@ -1167,6 +1206,10 @@ class _CommandModule(nn.Module):
     baked constants; state is injected and read back; the resample is gated by
     ``resample_mask`` (``where(mask, resampled, prev)``); ``_update_command`` always
     runs; any ``entity_write`` is captured. Reset unifies to ``resample_mask=True``.
+
+    ``resample_mask`` gates the state fields only. The captured writes are a fresh draw
+    on every call, so they are valid only when the mask is true — mjlab writes the entity
+    from ``_resample_command`` alone. The runtime enforces that (``OnnxCommand.step``).
     """
 
     def __init__(
@@ -1348,6 +1391,7 @@ def trace_command_term(
         for n in [*dyn_names, *prev_names, "resample_mask", *output_names]
     }
     buffer = io.BytesIO()
+    _prepare_single_env_export(term.num_envs)
     with torch.no_grad():
         torch.onnx.export(
             module,

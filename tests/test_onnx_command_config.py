@@ -8,6 +8,7 @@ runtime needs and validates structurally.
 from __future__ import annotations
 
 import json
+import warnings
 
 import pytest
 
@@ -250,6 +251,7 @@ def _write_capture_env():
     class _Env:
         def __init__(self, entities):
             self.scene = _Scene(entities)
+            self.num_envs = 1  # read by the tracer's single-env guard
 
     data = _Data(
         joint_pos=torch.tensor([[0.1, 0.2]]),
@@ -263,6 +265,47 @@ class _AssetCfg:
 
     def __init__(self, name):
         self.name = name
+
+
+def test_the_export_filters_match_the_exporters_wording(monkeypatch):
+    """String matches against torch's wording, so drift is silent.
+
+    What keeps an unvetted warning — a `copy_` removal, another constructor's bake —
+    from being swallowed with the three that are safe. `catch_warnings` stops the
+    process-wide install from leaking into the rest of the session.
+    """
+    from mjswan.compile import tracer
+
+    monkeypatch.setattr(tracer, "_EXPORT_FILTERS_INSTALLED", False)
+    vetted = [
+        "ONNX Preprocess - Removing mutation from node aten::index_put_ on block "
+        "input: 'value.1'. This changes graph semantics.",
+        "Using len to get tensor shape might cause the trace to be incorrect. "
+        "Recommended usage would be tensor.shape[0].",
+        "torch.tensor results are registered as constants in the trace. You can "
+        "safely ignore this warning if you use this function to create tensors out "
+        "of constant variables that would be the same every time you call this "
+        "function.",
+    ]
+    others = [
+        "ONNX Preprocess - Removing mutation from node aten::copy_ on block input",
+        "Converting a tensor to a Python boolean might cause the trace to be incorrect",
+        "torch.as_tensor results are registered as constants in the trace",
+    ]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tracer._prepare_single_env_export(1)
+        for message in vetted + others:
+            warnings.warn(message, UserWarning, stacklevel=1)
+    assert [str(w.message) for w in caught] == others
+
+
+def test_a_batched_trace_is_refused():
+    """Silencing `len(env_ids)` is only sound while the baked row count is 1."""
+    from mjswan.compile.tracer import _prepare_single_env_export
+
+    with pytest.raises(ValueError, match="num_envs=4"):
+        _prepare_single_env_export(4)
 
 
 def test_native_command_emits_a_traced_reset_graph(tmp_path):
