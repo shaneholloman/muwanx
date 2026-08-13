@@ -99,6 +99,35 @@ describe('applyEntityWrite: joint_state', () => {
     expect(data.qpos[1]).toBeCloseTo(0.2, 6);
   });
 
+  it('skips the free joint, which mjlab\'s joint list does not have', () => {
+    // It used to land here: `position[0]` went into `qpos[0]` — the root's x — and every
+    // joint took its neighbour's angle, spawning the robot on the wrong terrain tile.
+    const model = fakeModel(3);
+    const data = fakeData(model);
+    data.qpos.set([-16, -8, 0.84, 1, 0, 0, 0], 0);
+    applyEntityWrite(
+      model,
+      data,
+      { kind: 'joint_state', entity: 'robot', fields: ['position'], joint_ids: 'all' },
+      { joint_state__position: new Float32Array([0.1, 0.2, 0.3]) },
+    );
+    expect(Array.from(data.qpos.slice(0, 7))).toEqual([-16, -8, 0.84, 1, 0, 0, 0]);
+    expect(Array.from(data.qpos.slice(7))).toEqual([0.1, 0.2, 0.3].map(v => expect.closeTo(v, 6)));
+  });
+
+  it('reads explicit ids as indices into that same joint list', () => {
+    const model = fakeModel(2);
+    const data = fakeData(model);
+    applyEntityWrite(
+      model,
+      data,
+      { kind: 'joint_state', entity: 'robot', fields: ['position'], joint_ids: [1] },
+      { joint_state__position: new Float32Array([0.5]) },
+    );
+    expect(data.qpos[8]).toBeCloseTo(0.5, 6); // second hinge, not model joint 1
+    expect(data.qpos[0]).toBe(0);
+  });
+
   it('sets (does not accumulate) — the graph already computed the final value', () => {
     const model = fakeModel(1, false);
     const data = fakeData(model);

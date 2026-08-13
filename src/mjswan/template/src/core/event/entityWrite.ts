@@ -78,12 +78,28 @@ export function applyEntityWrites(
   return applied;
 }
 
-function resolveJointIds(mjModel: MjModel, target: WriteTarget): number[] {
-  const ids = target.joint_ids;
-  if (ids === undefined || ids === 'all') {
-    return Array.from({ length: mjModel.njnt }, (_, j) => j);
+/**
+ * What `joint_ids` indexes: the entity's 1-DoF joints in model order, as mjlab's
+ * `Entity.joint_names` lists them. The model's own joint list is not the same — it
+ * includes the free joint, whose `qpos[0]` is the root's x, not an angle.
+ */
+function entityJointIds(mjModel: MjModel, entity: string | null | undefined): number[] {
+  const ids: number[] = [];
+  for (let j = 0; j < mjModel.njnt; j++) {
+    if (mjModel.jnt_type[j] >= 2) ids.push(j); // not mjJNT_FREE / mjJNT_BALL
   }
-  return ids;
+  if (!entity) return ids;
+  const names = decodeJointNames(mjModel);
+  const owned = ids.filter(j => names[j].startsWith(`${entity}/`));
+  // Unprefixed names mean a single-entity scene, where every joint is the entity's.
+  return owned.length > 0 ? owned : ids;
+}
+
+function resolveJointIds(mjModel: MjModel, target: WriteTarget): number[] {
+  const all = entityJointIds(mjModel, target.entity);
+  const ids = target.joint_ids;
+  if (ids === undefined || ids === 'all') return all;
+  return ids.map(i => all[i] ?? -1);
 }
 
 function writeJointState(

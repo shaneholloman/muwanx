@@ -53,10 +53,10 @@ class FakeSession {
   }
 }
 
-function fakeModelData(nJoint = 1): { mjModel: MjModel; mjData: MjData } {
+function fakeModelData(nJoint = 1, jntType = 2): { mjModel: MjModel; mjData: MjData } {
   const mjModel = {
     njnt: nJoint,
-    jnt_type: Int32Array.from({ length: nJoint }, () => 0), // free joint(s)
+    jnt_type: Int32Array.from({ length: nJoint }, () => jntType), // mjJNT_SLIDE
     jnt_qposadr: Int32Array.from({ length: nJoint }, (_v, i) => i * 7),
     jnt_dofadr: Int32Array.from({ length: nJoint }, (_v, i) => i * 6),
     names: new Uint8Array(0).buffer,
