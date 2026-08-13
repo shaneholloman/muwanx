@@ -322,6 +322,17 @@ export function createSlotReader(
   // One per sensor, held for its frame resolution and ray buffers: ~200 rays a step.
   const casters = new Map<string, RaycastSensor | null>();
 
+  /**
+   * Drop what the previous scene resolved: both maps hold model indices, and a caster
+   * also holds that scene's descriptor (two scenes name their height scan alike).
+   */
+  const forModel = (mjModel: MjModel): void => {
+    if (mjModel === cachedModel) return;
+    cachedModel = mjModel;
+    indices.clear();
+    casters.clear();
+  };
+
   const readRaycast = (
     sensor: string,
     field: string,
@@ -329,6 +340,7 @@ export function createSlotReader(
   ): Float32Array | null => {
     const { mjModel, mjData, mujoco } = context;
     if (!mjModel || !mjData || !mujoco) return null;
+    forModel(mjModel);
     if (!casters.has(sensor)) {
       const descriptor = options.raycastSensors?.()[sensor];
       if (!descriptor) {
@@ -349,10 +361,7 @@ export function createSlotReader(
   };
 
   const indexFor = (mjModel: MjModel, entity: string | null | undefined): EntityIndex => {
-    if (mjModel !== cachedModel) {
-      cachedModel = mjModel;
-      indices.clear();
-    }
+    forModel(mjModel);
     const key = entity ?? '';
     let index = indices.get(key);
     if (!index) {

@@ -362,6 +362,36 @@ describe('createSlotReader — structured sensor fields', () => {
     expect(read(SCAN)).toBeNull();
   });
 
+  it('re-resolves a raycast sensor when the scene swaps the model', () => {
+    // Both scenes call it `terrain_scan`, on their own robot's body. Held across the
+    // switch, the first scene's caster looked for a body the new model does not have.
+    const modelWith = (body: string) => {
+      const names = new TextEncoder().encode(`world\0${body}\0`);
+      return {
+        model: { names: names.buffer, nbody: 2, name_bodyadr: [0, 6] } as never,
+        data: { xpos: new Float64Array([0, 0, 0, 1, 2, 3]), xmat: new Float64Array(18) } as never,
+      };
+    };
+    const scan = (body: string) => ({
+      frames: [{ type: 'body' as const, name: body }],
+      local_offsets: [[0, 0, 0]],
+      local_directions: [[0, 0, -1]],
+      ray_alignment: 'yaw' as const,
+      max_distance: 5,
+    });
+
+    let scene = { ...modelWith('robot/pelvis'), descriptor: scan('robot/pelvis') };
+    const read = createSlotReader(
+      () => ({ mujoco: {} as never, mjModel: scene.model, mjData: scene.data }),
+      { raycastSensors: () => ({ terrain_scan: scene.descriptor as never }) },
+    );
+    const slot = { sensor: 'terrain_scan', field: 'frame_pos_w', input: 'x' };
+    close(read(slot), [1, 2, 3]);
+
+    scene = { ...modelWith('robot/trunk'), descriptor: scan('robot/trunk') };
+    close(read(slot), [1, 2, 3]);
+  });
+
   it('still serves a builtin sensor, which carries no field', () => {
     const read = createSlotReader(() => context());
     close(read({ sensor: 'robot/imu_lin_vel' }), [1, 2, 3]);
