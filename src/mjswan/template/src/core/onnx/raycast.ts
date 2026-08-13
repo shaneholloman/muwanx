@@ -33,6 +33,8 @@ export interface RaycastSensorDescriptor {
   ray_alignment: RayAlignment;
   max_distance: number;
   exclude_parent_body: boolean;
+  /** Geom groups the rays may hit; null/absent means all. A terrain scan is `[0]`. */
+  include_geom_groups?: number[] | null;
 }
 
 /** Fields of `RayCastData` this module can serve, by the tracer's slot names. */
@@ -137,6 +139,16 @@ function decodeNames(mjModel: MjModel, count: number, adr: ArrayLike<number>): s
   return names;
 }
 
+/** mjlab's `include_geom_groups` as the mask `mj_ray` takes, or null for every group. */
+export function geomGroupMask(groups: number[] | null | undefined): Uint8Array | null {
+  if (!groups) return null;
+  const mask = new Uint8Array(6);
+  for (const group of groups) {
+    if (group >= 0 && group < mask.length) mask[group] = 1;
+  }
+  return mask;
+}
+
 /** Resolve a frame's model index, tolerating a missing `entity/` prefix. */
 function findByName(names: string[], wanted: string): number {
   const exact = names.indexOf(wanted);
@@ -155,6 +167,9 @@ export class RaycastSensor {
   private readonly distances: Float32Array;
   private readonly hitPos: Float32Array;
 
+  /** `mj_ray`'s per-group mask (nonzero = castable), or null for every group. */
+  private readonly geomGroup: Uint8Array | null;
+
   constructor(
     private readonly mujoco: MainModule,
     private readonly descriptor: RaycastSensorDescriptor,
@@ -162,6 +177,7 @@ export class RaycastSensor {
     const total = descriptor.frames.length * descriptor.local_offsets.length;
     this.distances = new Float32Array(total);
     this.hitPos = new Float32Array(total * 3);
+    this.geomGroup = geomGroupMask(descriptor.include_geom_groups);
   }
 
   /** One of the sensor's fields, or null if this model has no such frame. */
@@ -263,7 +279,7 @@ export class RaycastSensor {
           mjData,
           origin as unknown as number[],
           direction as unknown as number[],
-          null as unknown as number[],
+          this.geomGroup as unknown as number[],
           1,
           exclude,
           this.geomId,

@@ -456,6 +456,12 @@ def raycast_sensor_descriptor(env: Any, sensor_name: str) -> dict[str, Any] | No
         "max_distance": float(sensor.cfg.max_distance),
         # mjlab excludes each frame's own parent body so a ray cannot self-hit.
         "exclude_parent_body": bool(sensor.cfg.exclude_parent_body),
+        # A terrain scan is `(0,)`: without it the rays hit the robot's own legs.
+        "include_geom_groups": (
+            None
+            if sensor.cfg.include_geom_groups is None
+            else [int(g) for g in sensor.cfg.include_geom_groups]
+        ),
     }
 
 

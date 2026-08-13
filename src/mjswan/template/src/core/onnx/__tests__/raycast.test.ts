@@ -151,6 +151,29 @@ describe('RaycastSensor', () => {
     expect(sensor.read('distances', mjModel, mjData)).toBeNull();
   });
 
+  it('casts only into the geom groups the sensor allows', () => {
+    // mjlab's terrain scan is `include_geom_groups=(0,)`. Without it the rays stop on the
+    // robot's own legs (group 3), which reads as a step in the ground under the robot.
+    const scene = `<mujoco><worldbody>
+      <geom name="floor" type="plane" size="5 5 0.1"/>
+      <geom name="leg" type="box" size="0.2 0.2 0.2" pos="0 0 0.5" group="3"/>
+      <body name="robot/pelvis" pos="0 0 1"><joint type="free"/>
+        <geom type="sphere" size="0.1"/>
+      </body>
+    </worldbody></mujoco>`;
+    const model = (mujoco as unknown as { MjModel: { from_xml_string(s: string): never } })
+      .MjModel.from_xml_string(scene);
+    const data = new (mujoco as unknown as { MjData: new (m: unknown) => never }).MjData(
+      model,
+    );
+    mujoco.mj_forward(model, data);
+    const down = descriptor({ local_offsets: [[0, 0, 0]], local_directions: [[0, 0, -1]] });
+
+    expect(new RaycastSensor(mujoco, down).read('distances', model, data)![0]).toBeCloseTo(0.3, 3);
+    const filtered = { ...down, include_geom_groups: [0] };
+    expect(new RaycastSensor(mujoco, filtered).read('distances', model, data)![0]).toBeCloseTo(1.0, 3);
+  });
+
   it('knows which fields it can serve', () => {
     expect(isRaycastField('distances')).toBe(true);
     expect(isRaycastField('hit_pos_w')).toBe(true);
