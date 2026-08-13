@@ -415,6 +415,29 @@ describe('OnnxCommand: entity_write hand-off (§3b)', () => {
     expect(Array.from(cmd.getCommand())).toEqual([0.4, 0, 0.3].map(v => Math.fround(v)));
   });
 
+  it('leaves the entity alone between resamples', async () => {
+    // mjlab writes the cube only from `_resample_command`. The graph still emits a
+    // freshly drawn pose every frame, so applying it unconditionally teleported the
+    // cube on every step instead of once per resampling interval.
+    const { mjModel, mjData } = fakeModelData();
+    const session = new FakeSession(() => ({
+      next_target_pos: { data: new Float32Array([0.4, 0, 0.3]), dims: [1, 3] },
+      root_pose__pose: { data: new Float32Array([0.1, 0.2, 0.05, 1, 0, 0, 0]), dims: [1, 7] },
+      root_velocity__velocity: { data: new Float32Array(6), dims: [1, 6] },
+    }));
+    const cmd = new OnnxCommand(
+      'lift_height',
+      LIFT_CFG,
+      { mjModel, mjData } as unknown as import('../types').CommandTermContext,
+      { session, rng: new SeededRng(1) },
+    );
+
+    await cmd.step(false);
+
+    expect(mjData.qpos[0]).toBe(0);
+    expect(mjData.qpos[3]).toBe(0);
+  });
+
   it('does not treat next_<state> outputs as writes', async () => {
     const { mjModel, mjData } = fakeModelData();
     const session = new FakeSession(() => ({

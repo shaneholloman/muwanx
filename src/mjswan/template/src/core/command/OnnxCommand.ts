@@ -239,7 +239,10 @@ export class OnnxCommand implements CommandTerm {
     const commandTensor = this.state.get(this.cfg.command_field);
     if (commandTensor) this.command = toFloat32(commandTensor.data);
 
-    this.applyWrites(outputs);
+    // Only on resample, as mjlab writes the entity from `_resample_command` alone. The
+    // graph cannot say so — `resample_mask` gates the state fields only — so its write
+    // outputs are a fresh draw every frame, which would teleport the object each step.
+    if (resample) this.applyWrites(outputs);
   }
 
   private applyWrites(outputs: Record<string, OnnxTensorLike>): void {
