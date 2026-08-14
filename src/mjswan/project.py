@@ -152,34 +152,21 @@ class ProjectHandle:
 
         Args:
             task_id: mjlab task identifier (e.g. ``"go2_flat"``).
-            play: Which of the task's two registered configs to load. mjlab keeps
-                them as ``env_cfg`` (training) and ``play_env_cfg``, and this
-                selects between them exactly as its
+            play: Which of the task's two registered configs to load, as mjlab's
                 ``load_env_cfg(task_id, play=...)`` does.
 
-                Unset means **play** — the opposite of mjlab's own default,
-                deliberately: that one serves training scripts, and this is a
-                playback tool. The training config sets ``episode_length_s`` to
-                10-20 s, which mjswan serializes into the browser's ``time_out``
-                termination, so a viewer built from it resets the robot every few
-                seconds while someone is watching; it also keeps ``push_robot`` and
-                the terrain-bounds termination, and lacks ``randomize_terrain``.
-                Pass ``False`` to reproduce training-time conditions.
+                Unset means **play**, unlike mjlab's own default: the training config
+                sets ``episode_length_s`` to 10-20 s, so a viewer built from it resets
+                the robot every few seconds while someone is watching. Pass ``False``
+                to reproduce training-time conditions.
 
-                Mutually exclusive with ``env_cfg``: that is already one of the two
-                configs, so nothing is left to select, and passing both raises rather
-                than quietly ignoring one.
-            env_cfg: Pre-loaded (and possibly edited) env config to use instead
-                of loading ``task_id`` fresh. Load it with the ``play`` you want —
-                ``load_env_cfg(task_id, play=True)`` — since ``play`` on this method
-                then has nothing left to do. A tracking task does not need this:
-                mjlab ships ``commands["motion"].motion_file = ""``, and the builder
-                aims it at the clip it bundles.
+                Mutually exclusive with ``env_cfg``, which is already one of the two.
+            env_cfg: Pre-loaded (and possibly edited) env config, loaded with the
+                ``play`` you want. A tracking task does not need this — the builder aims
+                mjlab's empty ``motion_file`` at the clip it bundles.
 
-                The scene keeps whichever config it used, and every policy added to it
-                falls back on that config for its observations / commands / actions /
-                terminations — so passing your own here is also how you get those
-                defaults to reflect your edits.
+                The scene keeps whichever config it used, and its policies default their
+                term sets off it, so this is also how those defaults pick up your edits.
             events: Scene events, overriding the task's own ``env_cfg.events``. Omit to
                 take the task's (the usual case); pass ``{}`` for a scene with none.
 
@@ -213,10 +200,8 @@ class ProjectHandle:
         ensure_mjlab_extensions()
         if env_cfg is None:
             env_cfg = load_env_cfg(task_id, play=True if play is None else play)
-        # Always 1: the browser renders a single env, and mjlab's `num_envs` only sets the
-        # batch dimension of the env's tensors — `Scene.spec` is the same either way, and
-        # traced graphs carry a dynamic batch axis. A larger value would buy nothing and
-        # cost the build one `ManagerBasedRlEnv` that size.
+        # Always 1: `num_envs` only sets the batch dimension, `Scene.spec` is the same
+        # either way, and traced graphs carry a dynamic batch axis.
         env_cfg.scene.num_envs = 1
         scene = Scene(env_cfg.scene, device="cpu")
         scene.spec.assets.update(_collect_mjlab_scene_assets(env_cfg.scene))
@@ -227,10 +212,9 @@ class ProjectHandle:
         handle._config.mjlab_env_cfg = env_cfg
         handle._config.mjlab_task_id = task_id
 
-        # The tracing env is built at build time instead (`builder._scene_trace_env`): a
-        # tracking task cannot construct one until its clip is on disk, and that only
-        # happens once the clip has been fetched and written into the bundle.
-        # The task's own rate: tasks disagree (Cartpole 0.05, locomotion 0.02).
+        # The trace env comes later, from `builder._scene_trace_env`: a tracking task
+        # cannot build one until its clip has been written into the bundle.
+        # Rates differ per task — Cartpole 0.05, locomotion 0.02 — so read it here.
         control_dt = _env_cfg_control_dt(env_cfg)
         if control_dt is None:
             raise ValueError(

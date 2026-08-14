@@ -1,12 +1,9 @@
-"""Mjlab-specific command registrations for mjswan examples.
+"""Mjlab-specific command registrations for mjswan examples. Import before
+``builder.build()``.
 
-Import before ``builder.build()``.
-
-``LiftingCommandCfg`` and ``UniformVelocityCommandCfg`` are ONNX-traced (ADR 0005
-§3): the mjlab cfg is built and its ``_resample_command``/``_update_command``
-traced against the scene's live env, then run by the shared ``OnnxCommand``
-handler — no per-command TS class. ``MotionCommandCfg`` stays native, with only
-its reset jitter traced.
+``LiftingCommandCfg`` and ``UniformVelocityCommandCfg`` are traced to ONNX and run by
+the shared ``OnnxCommand`` handler. ``MotionCommandCfg`` stays native, with only its
+reset jitter traced.
 """
 
 from __future__ import annotations
@@ -26,10 +23,8 @@ from mjlab.utils.lab_api.math import (
 from mjswan import CommandBinding, register_command
 from mjswan.command import _serialize_motion_command
 
-# ---------------------------------------------------------------------------
-# LiftingCommand (Lift-Cube-Yam) — traces directly. `_resample_command`'s pose/velocity
-# writes are captured as `entity_write`, and `target_pos` is the only state.
-# ---------------------------------------------------------------------------
+# --- LiftingCommand (Lift-Cube-Yam) traces directly: `_resample_command`'s writes are
+# captured as `entity_write`, and `target_pos` is the only state. ---
 
 
 def _lifting_viz(cfg: Any) -> dict[str, Any]:
@@ -52,11 +47,9 @@ register_command(
 )
 
 
-# ---------------------------------------------------------------------------
-# UniformVelocityCommand (velocity tasks) — needs a trace-friendly override: the real
+# --- UniformVelocityCommand (velocity tasks) needs a trace-friendly override: the real
 # `_resample_command` uses RNG the spy cannot see and `_update_command` branches on data.
-# The override is equivalent at N=1, via `sample_uniform` and `torch.where`.
-# ---------------------------------------------------------------------------
+# The override is equivalent at N=1, via `sample_uniform` and `torch.where`. ---
 
 
 def _tf_resample_command(self: Any, env_ids: torch.Tensor) -> None:
@@ -112,9 +105,8 @@ register_command(
 )
 
 
-# ---------------------------------------------------------------------------
-# MotionCommand (tracking tasks) — the clip lookup stays native, the RSI jitter is traced.
-# ---------------------------------------------------------------------------
+# --- MotionCommand (tracking tasks): the clip lookup stays native, the RSI jitter is
+# traced. ---
 
 _POSE_KEYS = ("x", "y", "z", "roll", "pitch", "yaw")
 
@@ -142,21 +134,13 @@ def motion_rsi_offset(
 ) -> None:
     """Reference-state-initialization jitter from ``MotionCommand._resample_command``.
 
-    mjlab perturbs the reference frame it is about to write; this reads the frame
-    *already written* and perturbs it in place. Numerically the same — the offsets
-    are added to the same values, and the clip still lands after the addition —
-    but it needs no access to the motion clip, so the whole thing is ordinary term
-    math over ``asset.data`` and traces to ONNX with the mechanisms Cartpole's
-    resets and Go1's ``push_robot``/``reset_base`` already use.
+    mjlab perturbs the reference frame it is about to write; this perturbs the frame
+    *already written*, in place. Numerically the same, but it needs no access to the
+    motion clip, so it is ordinary term math over ``asset.data`` and traces like any
+    other reset event — its draws becoming the graph's ``rand`` input, fed from the
+    seeded PRNG.
 
-    That is the point: the browser previously did this jitter in hand-written
-    TypeScript off ``Math.random()``, which is neither mjlab's function nor
-    replayable. Here it is mjlab's own ``sample_uniform``, so the draws become the
-    graph's ``rand`` input, fed from the orchestrator's seeded PRNG (ADR 0005 §2),
-    and the arithmetic is mjlab's rather than a paraphrase of it.
-
-    The draws are ordered pose -> velocity -> joint to match mjlab's own order, so
-    the two bodies read side by side.
+    Draws are ordered pose -> velocity -> joint, as mjlab's are.
     """
     asset = env.scene[asset_cfg.name]
     device = asset.data.joint_pos.device

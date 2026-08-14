@@ -145,8 +145,8 @@ export class CommandManager {
   /**
    * `OnnxCommand` bypasses the class registry: one shared handler needing a session and
    * rng that `new Term(name, config, context)` has no room for. Warns and skips, so one
-   * missing session spares the others — but a skipped term leaves `termNames()`, so an
-   * observation reading it fails to bind and the policy does not load.
+   * missing session spares the others — and the skipped term leaves `termNames()`, so an
+   * observation reading it fails to bind rather than reading zeros.
    */
   private buildOnnxCommand(
     groupName: string,

@@ -56,11 +56,8 @@ class ActionTermCfg(abc.ABC):
     def _add_clip(self, entry: dict[str, Any]) -> None:
         """Attach ``clip`` to a serialized entry, if this term declares any.
 
-        Every ``to_dict`` calls this rather than inheriting it, because each
-        subclass builds its own entry from scratch. Emitted as patterns and
-        resolved browser-side with the same fullmatch mjlab uses — unlike
-        ``stiffness``/``damping``, which are mjswan's own fields and keyed by
-        exact joint name.
+        Emitted as patterns and resolved browser-side with mjlab's fullmatch — unlike
+        ``stiffness``/``damping``, which are mjswan's own and keyed by exact joint name.
         """
         if self.clip is not None:
             entry["clip"] = {k: list(v) for k, v in self.clip.items()}

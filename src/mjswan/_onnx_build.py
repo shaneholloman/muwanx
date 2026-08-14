@@ -1,16 +1,12 @@
-"""Build-time ONNX serialization helpers (ADR 0005).
+"""Bridges the term config dataclasses to the ``mjswan.compile`` tracer.
 
-Bridges the config-side dataclasses (``ObservationGroupCfg``,
-``TerminationTermCfg``, ``EventTermCfg``, ``CommandTermConfig``) to the
-``mjswan.compile`` tracer: traces each plain-callable term body against the
-scene's live mjlab env, writes the resulting ``.onnx`` bytes under the scene's
-output directory, and returns the manifest-shaped JSON entry the runtime
-consumes. Legacy ``*Binding``-typed terms (``ts_src`` / built-in named classes)
-still serialize via each cfg's own ``to_dict()`` — only the *representation* of
-author-authored term bodies changes, not the wire contract for the rest.
+Traces each plain-callable term body against the scene's live mjlab env, writes the
+``.onnx`` bytes under the scene's output directory, and returns the manifest-shaped
+JSON entry the runtime consumes. ``*Binding``-typed terms (custom TS classes) keep
+serializing through their own ``to_dict()``.
 
-Called from :mod:`mjswan.builder`, once per scene, after that scene's live
-``mjlab_env`` and output directory (``scene_dir``) are both known.
+Called from :mod:`mjswan.builder` once per scene, after that scene's ``mjlab_env`` and
+``scene_dir`` are both known.
 """
 
 from __future__ import annotations
@@ -42,10 +38,9 @@ def _onnx_ref(kind: str, name: str) -> str:
 def _require_ts_src(kind: str, name: str, binding: Any) -> None:
     """A ``*Binding`` without ``ts_src`` names a class the browser does not have.
 
-    mjswan ships no built-in TS observation/termination/event classes — every
-    built-in term is a traced graph or a native marker — so a binding is only ever
-    the custom-TS escape hatch. Without the file there is nothing to run, and the
-    term would go missing from a bundle that reports itself as complete.
+    mjswan ships no built-in TS term classes, so a binding is only ever the custom-TS
+    escape hatch — without the file the term goes missing from a bundle that reports
+    itself complete.
     """
     if binding.ts_src:
         return
@@ -64,9 +59,7 @@ def _write_onnx(out_dir: Path, ref: str, onnx_bytes: bytes) -> None:
     path.write_bytes(onnx_bytes)
 
 
-# ---------------------------------------------------------------------------
-# Observations
-# ---------------------------------------------------------------------------
+# --- Observations ---
 
 
 def _tensor_width(value: Any) -> int:
@@ -77,17 +70,12 @@ def _tensor_width(value: Any) -> int:
 def _resolved_params(params: dict[str, Any], env: Any) -> dict[str, Any]:
     """Resolve every ``SceneEntityCfg`` in *params* against the live scene.
 
-    mjlab's managers do this once at ``_prepare_terms``, turning name patterns
-    into concrete indices (``site_names=('grasp_site',)`` → ``site_ids=[1]``);
-    the term bodies then index with those ids. The Builder serializes from the
-    *task config*, whose ``SceneEntityCfg``s are still unresolved
-    (``site_ids=slice(None)`` — i.e. *every* site), so tracing without this step
-    bakes a different function than mjlab actually runs. Lift-Cube-Yam's
-    ``ee_to_cube`` returned all 2 sites (6 values) instead of the grasp site
-    (3), which would have fed 6 wrong numbers to a policy trained on 3.
+    mjlab's managers do this at ``_prepare_terms``, turning name patterns into concrete
+    indices. The Builder serializes from the task config, whose cfgs are still
+    unresolved (``site_ids=slice(None)`` — every site), so tracing without this bakes a
+    different function than mjlab runs.
 
-    Resolution mutates the cfg, so a copy is resolved and the caller's config is
-    left untouched. Duck-typed rather than ``isinstance``-checked to keep mjlab a
+    A copy is resolved, since resolution mutates the cfg. Duck-typed to keep mjlab a
     soft dependency.
     """
     resolved = dict(params)
@@ -104,33 +92,13 @@ def _native_observation_entry(
 ) -> dict[str, Any] | None:
     """Classify a known non-``entity.data`` observation func into a native marker.
 
-    Two mjlab functions are legitimately native by design: ``last_action``
-    reads ``env.action_manager.action`` and ``generated_commands`` reads
-    ``env.command_manager.get_command(...)`` — both env-level, not
-    ``entity.data``, so the tracer's recording proxy (which only wraps
-    ``env.scene``) never sees them, and ``trace_term`` would raise ``ValueError``
-    (no dynamic state). Checked *before* attempting to trace (rather than
-    catching that ``ValueError``): a scene without the named command traced
-    (e.g. a demo pairing ``generated_commands`` with a purely-native
-    ``UiCommand``, not an ``OnnxCommand``) would raise from mjlab's own
-    ``assert command is not None`` during the discovery call itself, not a
-    clean ``ValueError``. Both are already computed natively every frame by
-    the TS orchestrator (the policy's previous output, and the named
-    command's current value), so no ONNX graph is needed — the observation
-    pipeline substitutes the live value directly. Returns ``None`` if *func*
-    isn't one of these two — the caller should attempt tracing as normal.
+    ``last_action`` and ``generated_commands`` read env-level state the runtime already
+    holds every frame, so they need no graph. Returns ``None`` for anything else, which
+    the caller then traces.
 
-    ``size`` is attached when the live env can supply it, since the runtime sizes
-    its observation buffers before the first step. It is best-effort here: a scene
-    may pair ``generated_commands`` with a command that only exists browser-side
-    (a native ``UiCommand``), in which case mjlab's own lookup raises and the
-    runtime resolves the width from the command itself instead.
-
-    ``action_offset`` rides along when ``last_action`` names a term, because then it
-    is that term's slice of the policy output rather than the whole vector, and the
-    runtime holds the vector whole (see :func:`~mjswan.compile.tracer.
-    action_term_offset`). Unlike ``size`` it is *not* best-effort: falling back to the
-    whole vector is the silently-wrong observation it exists to prevent.
+    Checked before tracing rather than by catching the tracer's error: a scene pairing
+    ``generated_commands`` with a browser-only ``UiCommand`` fails mjlab's own assert
+    during discovery.
     """
     from .compile.tracer import action_term_offset
 
@@ -140,7 +108,7 @@ def _native_observation_entry(
         action_name = params.get("action_name")
         if action_name is not None:
             entry["action_name"] = action_name
-            # Outside the `size` probe below, whose swallowed failure would lose this slice.
+            # Outside the `size` probe below, whose swallowed failure would lose it.
             entry["action_offset"] = action_term_offset(env, action_name)
     elif func_name == "generated_commands":
         entry = {
@@ -166,9 +134,8 @@ def _apply_observation_pipeline(
     term_cfg: ObservationTermCfg,
     group_history_length: int | None,
 ) -> dict[str, Any]:
-    """Add scale/clip/history metadata shared by every entry shape (traced,
-    native, or baked-constant) — mirrors mjlab's compute -> scale -> history
-    pipeline order (noise/delay are training-only, dropped, ADR 0005)."""
+    """Add the scale/clip/history metadata every entry shape carries, in mjlab's
+    compute -> scale -> history order. Noise and delay are training-only, so dropped."""
     if term_cfg.scale is not None:
         entry["scale"] = (
             list(term_cfg.scale)
@@ -204,11 +171,8 @@ def serialize_observation_term(
 ) -> dict[str, Any] | None:
     """Serialize one observation term.
 
-    Raises rather than degrading. An observation is part of the policy's input
-    vector, so every way of *not* emitting a term correctly produces a silently
-    wrong policy: dropping it shortens the vector the network was trained on, and
-    baking a time-varying term freezes an input. Both used to happen here — see
-    :class:`~mjswan.compile.tracer.UntraceableTerm`.
+    Raises rather than degrading: dropping a term shortens the vector the policy was
+    trained on, and baking a time-varying one freezes an input.
     """
     from .compile import trace_term
     from .compile.tracer import ConstantTerm, slots_json
@@ -227,8 +191,7 @@ def serialize_observation_term(
     try:
         export = trace_term(func, params, env, name=name)
     except ConstantTerm:
-        # Reads nothing off the env, so bake it from a real call. Not `UntraceableTerm`,
-        # where state *was* read and merely not followed.
+        # Reads nothing off the env, so bake it from a real call.
         import torch
 
         value = func(env, **params)
@@ -267,25 +230,17 @@ def _effective_history(group: ObservationGroupCfg, term_cfg: ObservationTermCfg)
 
 
 def _group_is_fusable(group: ObservationGroupCfg) -> bool:
-    """Whether the whole group can become one graph (ADR §4, brief §4b).
+    """Whether the whole group can become one graph.
 
-    Two things disqualify a group:
-
-    - **A legacy ``*Binding`` term.** It resolves to a hand-written TS class, whose
-      body exists only in the browser — there is nothing to trace into the graph.
-    - **Per-term history deeper than one frame.** mjlab stacks each term
-      *before* concatenating, so the group vector interleaves per-term histories;
-      a fused graph emits one concatenation and the runtime's group-level ring
-      buffer would stack the whole thing instead, giving step-major order where
-      mjlab gives term-major. A depth of 1 is a no-op and stays fusable.
-
-    Anything else — traced bodies, native markers, baked constants — fuses. An
-    untraceable term is not handled here: it fails the build either way.
+    A ``*Binding`` term has no body to trace, and per-term history deeper than one
+    frame cannot fuse: mjlab stacks each term *before* concatenating, so a group-level
+    ring buffer over one fused output would give step-major order where mjlab gives
+    term-major.
     """
     for term_cfg in group.terms.values():
         if isinstance(term_cfg.func, ObservationBinding):
             return False
-        # Sparse offsets disqualify at any length: no fused output can hold a delayed frame.
+        # Sparse offsets disqualify at any length: no fused output holds a delayed frame.
         if term_cfg.history_steps or _effective_history(group, term_cfg) > 1:
             return False
     return True
@@ -296,12 +251,10 @@ def policy_native_sizes(
 ) -> dict[str, int]:
     """Widths of the native observation terms, keyed as :func:`_native_size` reads them.
 
-    ``last_action`` and ``generated_commands`` read env-level state, and a trace env
-    built for a plain ``add_scene()`` scene has neither an action term nor the
-    command (a browser-only ``UiCommand``). A fused graph still needs a fixed
-    width, so it comes from the policy's own config: the action count the runtime
-    will drive, and the command's value-bearing UI inputs (buttons carry no value —
-    see ``UiCommand.getCommand``).
+    A trace env built for a plain ``add_scene()`` scene has neither an action term nor
+    the command, so a fused graph takes its fixed widths from the policy config
+    instead: the action count, and the command's value-bearing UI inputs (a button
+    carries none).
     """
     sizes: dict[str, int] = {}
     num_actions = data.get("policy_num_actions") or len(
@@ -325,7 +278,7 @@ def _native_size(
     """Declared width for a native term, or ``None`` if it isn't native."""
     func_name = getattr(term_cfg.func, "__name__", None)
     if func_name == "last_action":
-        # The whole vector: a term-scoped `last_action` needs `action_offset` for its slice.
+        # The whole vector; a term-scoped one needs `action_offset` for its slice.
         if term_cfg.params.get("action_name") is not None:
             return None
         return native_sizes.get("prev_action")
@@ -398,10 +351,9 @@ _CONTACT_HISTORY_FIELDS = ("force", "torque", "dist")
 def contact_sensor_descriptor(env: Any, sensor_name: str) -> dict[str, Any] | None:
     """What the browser needs to reproduce one ``ContactSensor``, or None if not one.
 
-    None of the physics is ours: mjlab adds a real MuJoCo contact sensor per
-    ``(primary, field)`` pair, so the compiled scene already carries them and their
-    values are in ``sensordata``. Only the layout to read them back travels — the ring
-    buffer is the one piece the runtime owns.
+    mjlab adds a real MuJoCo sensor per ``(primary, field)`` pair, so the values are
+    already in ``sensordata`` — only the layout to read them back travels, plus the
+    ring buffer the runtime owns.
     """
     sensor = env.scene.sensors.get(sensor_name)
     slots = getattr(sensor, "_slots", None)
@@ -429,13 +381,10 @@ def contact_sensor_descriptor(env: Any, sensor_name: str) -> dict[str, Any] | No
 def raycast_sensor_descriptor(env: Any, sensor_name: str) -> dict[str, Any] | None:
     """Everything the browser needs to reproduce one ``RayCastSensor``'s readings.
 
-    A structured sensor's fields are graph inputs (ADR 0005 §6: state collection is
-    native), and unlike a builtin sensor there is no ``sensordata`` window to read —
-    the browser has to cast the rays itself. It can: ``mj_ray`` is in the WASM
-    build. What it cannot do is re-derive the pattern, so the ray offsets and
-    directions are baked here from the live sensor rather than re-implementing
-    mjlab's ``GridPatternCfg``/``PinholeCfg``/``RingCfg`` generators — that also
-    means a pattern mjswan has never heard of works for free.
+    There is no ``sensordata`` window for a raycast sensor, so the browser casts the
+    rays itself with ``mj_ray``. The offsets and directions are baked from the live
+    sensor rather than re-implementing mjlab's pattern generators, which means an
+    unknown pattern works for free.
 
     Returns ``None`` if *sensor_name* is not a raycast sensor.
     """
@@ -471,9 +420,8 @@ def _structured_sensor_descriptors(
 ) -> dict[str, Any]:
     """Descriptors for the structured sensors a graph's slots name.
 
-    A ``{sensor, field}`` slot is unreadable in the browser without one, and the runtime
-    would hold a stale value instead of failing — a termination that never fires while
-    looking installed. So an undescribable sensor fails the build.
+    Without one the runtime would hold a stale value rather than fail, so an
+    undescribable sensor fails the build instead.
     """
     from .compile.tracer import _SENSOR_NS
 
@@ -507,13 +455,7 @@ def serialize_observation_group(
     group_name: str = "policy",
     native_sizes: dict[str, int] | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
-    """Serialize an observation group — one fused graph where possible, else per term.
-
-    Fusion is ADR §4's mandatory-for-v1 optimization: a per-term graph can be a
-    single node (three of G1's five are ``Identity``), so the fixed per-``ort.run()``
-    cost is the entire expense, and a slot two terms share gets marshalled twice.
-    See the companion brief §4b for the measurements.
-    """
+    """Serialize an observation group — one fused graph where possible, else per term."""
     from .compile.tracer import ConstantGroup
 
     if _group_is_fusable(group):
@@ -532,9 +474,7 @@ def serialize_observation_group(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Terminations
-# ---------------------------------------------------------------------------
+# --- Terminations ---
 
 
 def serialize_termination(
@@ -554,7 +494,7 @@ def serialize_termination(
             func, _resolved_params(term_cfg.params, env), env, name=name
         )
     except ValueError:
-        # No time-varying state read (mjlab's `time_out` counts steps); the threshold rides along.
+        # No time-varying state read, as with `time_out`; the threshold rides along.
         entry: dict[str, Any] = {
             "name": name,
             "native": "elapsed_s >= episode_length_s",
@@ -584,12 +524,8 @@ def serialize_termination(
 def _native_termination_entry(
     name: str, term_cfg: TerminationTermCfg, env: Any
 ) -> dict[str, Any]:
-    """The `time_out` marker: ADR 0005 §2's one legitimately-native termination.
-
-    It compares env-level step counters rather than entity data, so there is
-    nothing to trace. The threshold travels with it — the marker alone names a
-    comparison the runtime has no number for.
-    """
+    """The `time_out` marker: it compares env-level step counters rather than entity
+    data, so there is nothing to trace. The threshold travels with it."""
     entry: dict[str, Any] = {
         "name": name,
         "native": "elapsed_s >= episode_length_s",
@@ -622,16 +558,8 @@ def serialize_terminations(
 ) -> dict[str, Any]:
     """Serialize a policy's terminations, fusing the traced ones into one graph.
 
-    Same mechanism and motivation as observation fusion (companion brief §4b),
-    with one difference in the output: a bool *lane* per term rather than one
-    value, so the manager keeps per-term ``reasons`` and its
-    terminated-vs-truncated split.
-
-    Native markers (`time_out`) and legacy `*Binding` terms stay as their own
-    entries; the fused graph joins them under ``__fused__``. The gain scales with
-    the traced-term count, which is 0–1 for mjlab's locomotion and manipulation
-    tasks but 3 for the tracking tasks `examples/mjlab/g1_spinkick` and
-    `unitree_rl` use (`anchor_pos`, `anchor_ori`, `ee_body_pos`).
+    Native markers (`time_out`) and `*Binding` terms stay as their own entries; the
+    fused graph joins them under ``__fused__``.
     """
     result: dict[str, Any] = {}
     if not terminations:
@@ -666,12 +594,8 @@ def serialize_terminations(
 
 
 FUSED_TERMINATION_KEY = "__fused__"
-"""Config key the fused termination graph lives under.
-
-Terminations are a name-keyed map, and the fused graph covers several of those
-names at once, so it needs a key of its own rather than one term's. The sentinel
-cannot collide: mjlab term names come from Python identifiers in a config class.
-"""
+"""Config key the fused termination graph lives under. Cannot collide with a term
+name, which is always a Python identifier."""
 
 
 def _fused_termination_entry(
@@ -695,7 +619,7 @@ def _fused_termination_entry(
     return {
         "fused": ref,
         "input_slots": slots_json(export),
-        # Lane order is the graph's; `time_out` rides along so the manager can still split it out.
+        # Lane order is the graph's; `time_out` rides along for the manager's split.
         "lanes": [
             {"name": name, "time_out": bool(terms[name].time_out)}
             for name in export.lanes
@@ -703,9 +627,7 @@ def _fused_termination_entry(
     }
 
 
-# ---------------------------------------------------------------------------
-# Events
-# ---------------------------------------------------------------------------
+# --- Events ---
 
 
 _DR_ENTITY_INDEX_ATTR = {
@@ -716,12 +638,8 @@ _DR_ENTITY_INDEX_ATTR = {
 
 
 def _dr_entity_names(env: Any, asset_cfg: Any, entity_type: str) -> list[str] | None:
-    """Names of the model elements a startup-DR event perturbs.
-
-    Names, not ids: the browser compiles its own model, so an id from the build env
-    means nothing there. ``None`` when the entity type is one this does not know how
-    to enumerate — the caller then leaves the event native.
-    """
+    """Names of the model elements a startup-DR event perturbs, or ``None`` for an
+    entity type this cannot enumerate (the caller then leaves the event native)."""
     attr = _DR_ENTITY_INDEX_ATTR.get(entity_type)
     if attr is None:
         return None
@@ -730,7 +648,7 @@ def _dr_entity_names(env: Any, asset_cfg: Any, entity_type: str) -> list[str] | 
     all_ids = getattr(asset.indexing, attr)
     ids = [int(i) for i in all_ids.tolist()]
     if scoped is not None and not isinstance(scoped, slice):
-        # mjlab's `_get_entity_indices`: positions into the entity's own elements, in cfg order.
+        # As mjlab's `_get_entity_indices`: positions into the entity's own elements.
         positions = list(scoped) if hasattr(scoped, "__iter__") else [scoped]
         ids = [ids[int(p)] for p in positions]
     accessor = {
@@ -744,12 +662,8 @@ def _dr_entity_names(env: Any, asset_cfg: Any, entity_type: str) -> list[str] | 
 def _dr_arg(func: Any, params: dict[str, Any], key: str) -> Any:
     """A DR keyword as mjlab would see it: the term's value, else *func*'s default.
 
-    The default is read off the wrapper's signature rather than assumed, because
-    mjlab's wrappers do not share one: ``geom_friction`` defaults ``operation`` to
-    ``"abs"``, ``body_com_offset`` to ``"add"``, ``body_mass`` to ``"scale"``. A
-    single hardcoded default would describe an omitted ``operation`` as replacing
-    the value when mjlab actually scales it — a silent divergence, and the worse
-    one for mass.
+    Read off the signature, since mjlab's wrappers do not share defaults —
+    ``geom_friction`` is ``"abs"``, ``body_mass`` is ``"scale"``.
     """
     if key in params:
         return params[key]
@@ -785,18 +699,16 @@ def model_field_dr_descriptor(
 ) -> dict[str, Any] | None:
     """Describe a startup model-field randomization for the browser, or None.
 
-    These events (`geom_friction`, `body_com_offset`, …) perturb the *model* rather
-    than `mjData`, so the `entity_write` tracer has nothing to capture and they look
-    to it exactly like an event that did nothing. They also need no graph: the whole
-    event is "draw a number per element per axis, combine it with the base value,
-    write it back", and the browser can do that itself at startup from the
-    orchestrator's seeded PRNG (ADR 0005 §2), so a session still replays.
+    These events perturb ``mjModel`` rather than ``mjData``, so the tracer captures no
+    write. They need no graph either — draw a number per element per axis, combine it
+    with the base value, write it back — so the browser does it at startup from the
+    seeded PRNG and a session still replays.
 
-    Returns ``None`` for anything this cannot describe — an unknown entity type, or
-    the string-keyed `ranges` form mjlab resolves by name pattern.
+    Returns ``None`` for anything undescribable: an unknown entity type, or the
+    string-keyed ``ranges`` form mjlab resolves by name pattern.
     """
     func = term_cfg.func
-    # Resolved params: an unresolved `SceneEntityCfg` widens a scoped event to every geom.
+    # Resolved: an unresolved `SceneEntityCfg` widens a scoped event to every geom.
     params = params if params is not None else _resolved_params(term_cfg.params, env)
     field = getattr(func, "_mjswan_dr_field", None) or _DR_FIELD_BY_FUNC.get(
         getattr(func, "__name__", "")
@@ -832,13 +744,13 @@ def model_field_dr_descriptor(
         "field": field_name,
         "entity_type": entity_type,
         "entity_names": names,
-        # Axis -> [lo, hi]; only these are written, so events on different axes compose.
+        # Axis -> [lo, hi]. Only these are written, so events on different axes compose.
         "axis_ranges": axis_ranges,
         "operation": operation,
         "distribution": _dr_name_of(_dr_arg(func, params, "distribution"), "uniform"),
         "shared_random": bool(_dr_arg(func, params, "shared_random")),
-        # Which base the browser reads: `add`/`scale` use the compiled default, so they never
-        # accumulate across events on one axis.
+        # Which base the browser reads: `add`/`scale` take the compiled default, so
+        # they never accumulate across events on one axis.
         "uses_defaults": operation in _DR_OPS_USING_DEFAULTS,
         "set_const": _dr_needs_recompute(func, field_name),
     }
@@ -856,11 +768,8 @@ _SET_CONST_FIELDS = frozenset(
 def _dr_needs_recompute(func: Any, field_name: str) -> bool:
     """Whether the browser owes an ``mj_setConst`` after writing this field.
 
-    mjlab's `requires_model_fields` decorator records this on the function as a
-    `RecomputeLevel`, so read it rather than guessing. Its three non-zero levels
-    recompute progressively larger subsets; MuJoCo's C API exposes only the full
-    `mj_setConst`, so any level above `none` maps to that — more work than the
-    lower levels need, same result.
+    Read off mjlab's `requires_model_fields` decorator. Its partial recompute levels
+    all map to the full `mj_setConst`, the only one MuJoCo's C API exposes.
     """
     recompute = getattr(func, "recompute", None)
     if recompute is not None:
@@ -868,9 +777,9 @@ def _dr_needs_recompute(func: Any, field_name: str) -> bool:
     return field_name in _SET_CONST_FIELDS
 
 
+# mjlab's DR helpers bake an entity type and axes into `_randomize_model_field` where
+# nothing can introspect them. An author's own wrapper can set `_mjswan_dr_field`.
 _DR_FIELD_BY_FUNC: dict[str, tuple[str, str, list[int]]] = {
-    # mjlab's DR helpers wrap `_randomize_model_field` with an entity type and axes that are
-    # not introspectable, hence this table. An author's own wrapper can set `_mjswan_dr_field`.
     "geom_friction": ("geom_friction", "geom", [0]),
     "geom_rgba": ("geom_rgba", "geom", [0, 1, 2, 3]),
     "body_com_offset": ("body_ipos", "body", [0, 1, 2]),
@@ -879,10 +788,9 @@ _DR_FIELD_BY_FUNC: dict[str, tuple[str, str, list[int]]] = {
 }
 
 
+# Trace failure is expected for these, for the stated reason. Everything else raises: a
+# silently dropped reset randomization is invisible in the build output and the browser.
 _EVENTS_WITH_NOTHING_TO_WRITE: dict[str, str] = {
-    # Trace failure is the *expected* outcome for these, for a stated reason. Everything
-    # else raises: a silently dropped reset randomization is invisible in both the build
-    # output and the browser.
     "randomize_terrain": (
         "it re-draws each env's sub-terrain origin, and the browser has one baked terrain "
         "with one origin"
@@ -904,9 +812,9 @@ def _event_writes_nothing_reason(
         return reason
     if not func_name.startswith("reset_root_state"):
         return None
-    # A root-state write cannot move a fixed-base entity — not here, and not in mjlab
-    # either. mjlab's manipulation tasks still configure `reset_base` on their arms,
-    # leaving `asset_cfg` to the signature default, hence `_dr_arg` and not `params`.
+    # A root write cannot move a fixed-base entity, in mjlab either — and its
+    # manipulation tasks still configure `reset_base` on their arms, leaving
+    # `asset_cfg` to the signature default, hence `_dr_arg` and not `params`.
     entity_name = getattr(_dr_arg(term_cfg.func, params, "asset_cfg"), "name", None)
     if entity_name is None:
         return None
@@ -922,7 +830,7 @@ def _event_writes_nothing_reason(
 def serialize_event(
     name: str, term_cfg: EventTermCfg, env: Any, out_dir: Path
 ) -> dict[str, Any] | None:
-    """Serialize one event term (any mode). Returns ``None`` if genuinely nothing to emit."""
+    """Serialize one event term, or ``None`` if there is genuinely nothing to emit."""
     from .compile import trace_event_term
     from .compile.tracer import slots_json
 
@@ -941,8 +849,8 @@ def serialize_event(
             mode=term_cfg.mode,
         )
     except ValueError as exc:
-        # `entity_write` captures nothing for an `mjModel` write, so describe it instead and
-        # let the browser draw from the seeded PRNG at load.
+        # An `mjModel` write captures nothing, so describe it and let the browser draw
+        # from the seeded PRNG at load.
         descriptor = model_field_dr_descriptor(term_cfg, env, resolved)
         if descriptor is not None:
             return {"name": name, "mode": term_cfg.mode, **descriptor}
@@ -1005,9 +913,7 @@ def serialize_events(
     return result or None
 
 
-# ---------------------------------------------------------------------------
-# Commands
-# ---------------------------------------------------------------------------
+# --- Commands ---
 
 
 def _serialize_reset_graph(
@@ -1015,9 +921,8 @@ def _serialize_reset_graph(
 ) -> dict[str, Any] | None:
     """Trace a native command's reset-time graph, or ``None`` if it has none.
 
-    The entry shape is deliberately an event entry (:func:`serialize_event`'s), so
-    the browser can run it through the same ``OnnxEvent`` handler instead of
-    growing a second way to evaluate a graph with ``rand`` and ``entity_write``s.
+    Deliberately shaped as an event entry, so the browser runs it through the same
+    ``OnnxEvent`` handler rather than growing a second graph evaluator.
     """
     pending = cmd_cfg.pending_reset_trace
     if pending is None:
@@ -1085,12 +990,9 @@ def serialize_command(
 def _record_command_gui(term: Any, name: str) -> dict[str, Any] | None:
     """The term's own viewer GUI as a UI descriptor, or ``None``.
 
-    Called after ``trace_command_term``, since ``create_gui`` leaves handles on the
-    term that ``compute()`` reads — the tracer happens not to go through
-    ``compute()``, and running downstream keeps that irrelevant.
-
-    A descriptor is presentation, not policy behaviour, so a term this cannot
-    record still builds.
+    Called after ``trace_command_term``: ``create_gui`` leaves handles on the term that
+    ``compute()`` reads. A descriptor is presentation, not behaviour, so a term this
+    cannot record still builds.
     """
     from .adapters.gui_spy import record_gui
 

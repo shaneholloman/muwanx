@@ -41,10 +41,9 @@ export function slotInputName(slot: OnnxInputSlot): string {
 }
 
 /**
- * The dims to feed a slot's flat value as. ORT rejects a rank mismatch outright and
- * fields are not all rank 2 (`site_pos_w` is `(batch, sites, 3)`), so the traced
- * shape wins, batch pinned to 1. `[1, length]` when it disagrees with the actual
- * element count — feeding the declared shape there would misdescribe the data.
+ * The dims to feed a slot's flat value as. Not every field is rank 2 (`site_pos_w` is
+ * `(batch, sites, 3)`) and ORT rejects a rank mismatch, so the traced shape wins, batch
+ * pinned to 1 — except where it disagrees with the actual element count.
  */
 export function slotDims(slot: OnnxInputSlot, length: number): number[] {
   const shape = slot.shape;

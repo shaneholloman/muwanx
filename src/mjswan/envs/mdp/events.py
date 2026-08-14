@@ -1,15 +1,11 @@
-"""Custom event registry for mjswan (ADR 0005).
+"""Custom event registry.
 
-mjswan carries no reimplementation of mjlab's event functions. A task's real
-function object — mjlab's own, or an author's plain
-``func(env, env_ids, **params) -> None`` written against the same live-env API
-(writing via ``entity.write_*_to_sim``) — is traced directly to ONNX at build
-time (:mod:`mjswan.compile`). There is no mjswan-side mirror to resolve by name.
+mjswan reimplements none of mjlab's event functions: a task's real function object —
+``func(env, env_ids, **params)``, writing via ``entity.write_*_to_sim`` — is traced to
+ONNX at build time.
 
-This module carries the ``EventBinding`` escape hatch — a hand-written TS class
-for a term that cannot be expressed as a traced function at all, registered via
-:func:`register_event` — plus :func:`reset_root_state_on_flat_patch`, the one
-event mjswan does own.
+It carries the ``EventBinding`` escape hatch, for a term that cannot be traced at all,
+plus :func:`reset_root_state_on_flat_patch` — the one event mjswan owns.
 """
 
 from __future__ import annotations
@@ -35,19 +31,13 @@ except ImportError:
 class EventBinding:
     """A hand-written TS event class, bound to an mjlab event name.
 
-    The escape hatch for a term ONNX tracing cannot express. Nothing else needs
-    one: an authored term passes a traceable ``func=`` straight to
-    ``EventTermCfg`` and is traced.
-
     Attributes:
         ts_name: Class the ``.ts`` file exports, and the name the browser's
             ``Events`` registry resolves.
         defaults: Default parameters merged into the JSON config entry.
-        ts_src: Absolute path to the ``.ts`` file exporting ``ts_name``, injected
-            into the browser bundle at build time. Without it there is no
-            implementation to run and the build fails: mjswan ships no built-in
-            TS event classes, since every built-in event is a traced graph or a
-            model-field randomization the runtime draws itself.
+        ts_src: Absolute path to the ``.ts`` file exporting ``ts_name``, injected into
+            the bundle at build time. Required — mjswan ships no built-in TS classes,
+            so without it the build fails.
     """
 
     ts_name: str
@@ -86,14 +76,13 @@ def reset_root_state_on_flat_patch(
     """Place the root on a uniformly-chosen flat terrain patch, at a random yaw.
 
     mjlab's own ``reset_root_state_from_flat_patches`` cannot be traced: it draws with
-    ``torch.randint`` (which the tracer does not record, so the patch would bake in as a
-    constant) and indexes the live terrain's per-env level/type tensors, which the
-    browser has no counterpart for. ``patches`` is the generator's sampled ``(x, y, z)``
-    list instead, baked into the graph, with both draws as its ``rand`` input.
+    ``torch.randint``, which the tracer does not record, and indexes per-env terrain
+    tensors the browser has no counterpart for. ``patches`` is the generator's sampled
+    ``(x, y, z)`` list instead, baked into the graph.
 
     Standing height and orientation come from ``default_root_state``, as mjlab's do —
     never from the live root pose, which the browser's keyframe restore has zeroed by
-    the time a reset event runs (the robot spawns inside the terrain).
+    the time a reset event runs.
     """
     asset = env.scene[asset_cfg.name]
     root_states = asset.data.default_root_state
@@ -124,9 +113,8 @@ def apply_terrain_spawn(scene: Any) -> None:
 
     mjlab spreads many envs over the terrain, so its uniform reset only jitters each
     around its own origin; the browser has one env, so drawing a patch is what covers
-    the terrain at all. Called by
-    :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`; a no-op unless the scene has
-    both a flat-patch table and that mjlab term.
+    the terrain at all. A no-op unless the scene has both a flat-patch table and that
+    mjlab term.
     """
     flat_patches = (scene.terrain_data or {}).get("flat_patches", {})
     events = scene.events

@@ -1,17 +1,9 @@
-"""Trace real mjlab MDP term bodies to ONNX, for value-returning terms.
+"""Trace real mjlab MDP term bodies to ONNX.
 
-An mjlab term is ``func(env, **params)`` reading a few fields off ``env``. To get it
-through ``torch.onnx.export``:
-
-1. **Discover** which fields it reads, by running it once against a recording proxy
-   wrapping the real env.
-2. **Classify** each as time-varying state (a graph input) or a model-derived
-   constant (baked in) — see ``_STATIC_DATA_FIELDS``.
-3. **Wrap** it in an ``nn.Module`` whose ``forward`` takes the dynamic tensors and
-   serves the constants from buffers, then export that.
-
-Statically-resolved indices (``asset_cfg.joint_ids``) are plain Python values closed
-over by the function, so they bake in for free.
+A term is ``func(env, **params)`` reading a few fields off ``env``. Each is run once
+against a recording proxy to discover those reads, classified into time-varying state
+(a graph input) or a model-derived constant (baked in), then exported as an
+``nn.Module`` whose ``forward`` takes the dynamic tensors.
 """
 
 from __future__ import annotations
@@ -27,12 +19,10 @@ from torch import nn
 
 from .rng import DrawRecorder, ReplayRng
 
-# Only the *constants* are listed, so an unrecognized field defaults to dynamic:
-# baking a field that varies is silent corruption, while threading one that doesn't
-# costs an extra graph input and fails loudly.
+# Only constants are listed, so an unknown field defaults to dynamic: baking a field
+# that varies is silent corruption, while threading a constant merely costs an input.
 _STATIC_DATA_FIELDS: frozenset[str] = frozenset(
     {
-        # Model default pose/velocity, and the limits derived from the MJCF.
         "default_joint_pos",
         "default_joint_vel",
         "default_root_state",
@@ -60,21 +50,15 @@ def _is_dynamic_field(field_name: str) -> bool:
 SlotKey = tuple[str, str]
 
 _SENSOR_NS = "__sensor__"
-"""Marks a sensor read; mjlab indexes sensors and entities in one ``scene[name]``."""
-
 _COMMAND_NS = "__command__"
-"""Marks a read of another command term's state; name part is ``"{cmd}.{attr}"``."""
 
 
 def _class_proxy(real: Any, overrides: dict[str, Any]) -> Any:
     """A stand-in for a live mjlab object that still satisfies ``isinstance`` checks.
 
-    Terms assert on concrete classes (``builtin_sensor`` does
-    ``assert isinstance(sensor, BuiltinSensor)``; ``object_to_goal_distance`` does
-    the same for ``LiftingCommand``), so the duck-typed proxies used for entities
-    are rejected outright. Subclassing the *real* object's own class and sharing
-    its ``__dict__`` keeps those checks true — and keeps every unrelated attribute
-    working — while replacing only what ``overrides`` names.
+    Terms assert on concrete classes (``builtin_sensor`` on ``BuiltinSensor``, say),
+    so subclass the real object's class and share its ``__dict__``, replacing only
+    what ``overrides`` names.
     """
     cls = type(real)
     proxy_cls = type(f"_Proxy{cls.__name__}", (cls,), overrides)
@@ -91,11 +75,8 @@ def _sensor_proxy(real: Any, get_data: Callable[[], Any]) -> Any:
 def _command_proxy(real: Any, on_tensor: Callable[[str, Any], Any]) -> Any:
     """A command-term stand-in routing every tensor attribute through ``on_tensor``.
 
-    Unlike sensors (one ``data`` property) a command's state is a set of plain
-    instance attributes (``target_pos``, ``vel_command_b``, …) living in
-    ``__dict__``, so ``__getattr__`` never fires for them and ``__getattribute__``
-    is the only hook that sees the read. Non-tensor attributes pass through
-    untouched, so methods and cfg still behave normally.
+    A command's state lives in plain instance attributes, so ``__getattr__`` never
+    fires and ``__getattribute__`` is the only hook that sees the read.
     """
 
     def __getattribute__(self: Any, attr: str) -> Any:  # noqa: N807
@@ -108,18 +89,12 @@ def _command_proxy(real: Any, on_tensor: Callable[[str, Any], Any]) -> Any:
 
 
 def _is_sensor(scene: Any, name: str) -> bool:
-    """Whether ``scene[name]`` resolves to a sensor rather than an entity.
-
-    Asks the real scene's own ``sensors`` mapping rather than sniffing the object,
-    so it matches mjlab's own ``Scene.__getitem__`` resolution order exactly.
-    """
+    """Whether ``scene[name]`` resolves to a sensor rather than an entity."""
     sensors = getattr(scene, "sensors", None)
     return bool(sensors) and name in sensors
 
 
-# ---------------------------------------------------------------------------
-# Recording proxy — discovers which env fields a term reads.
-# ---------------------------------------------------------------------------
+# --- Recording proxy: discovers which env fields a term reads. ---
 
 
 class _RecordingData:
@@ -243,9 +218,7 @@ class _RecordingEnv:
         return getattr(self._real, name)
 
 
-# ---------------------------------------------------------------------------
-# Replay proxy — serves recorded slots to the term during tracing.
-# ---------------------------------------------------------------------------
+# --- Replay proxy: serves recorded slots to the term during tracing. ---
 
 
 class _ReplayData:
@@ -343,10 +316,8 @@ class _ReplayEnv:
         self._real_env = real_env
 
     def __getattr__(self, name: str) -> Any:
-        # Forwarded, not copied: no default to drift from the real env, and a term
-        # that reads something else still raises here rather than reading a stand-in.
-        # `view(env.num_envs, -1)` bakes the batch dim past `dynamic_axes`; fine while
-        # both the trace env and the runtime are single-env.
+        # Forwarded, not copied, so nothing drifts from the real env. Anything else
+        # raises rather than silently reading a stand-in.
         if name in ("num_envs", "device"):
             return getattr(self._real_env, name)
         raise AttributeError(name)
@@ -409,21 +380,16 @@ class ConstantTerm(ValueError):
 class ConstantGroup(ValueError):
     """Every term in a group is native or constant, so the group has no graph.
 
-    Not an error: the per-term path serializes each of these on its own (a native
-    marker, or a baked ``native: constant``). The fused path raises this so the
-    caller can fall back to it rather than fusing an empty graph.
+    Not an error: the caller falls back to the per-term path rather than fusing an
+    empty graph.
     """
 
 
 class UntraceableTerm(ValueError):
-    """A term that read state the tracer could not follow into the graph.
+    """A term read time-varying state the tracer could not follow into the graph.
 
-    The recording pass saw accesses but none yielded a tensor — e.g. mjlab's
-    ``height_scan`` reads a ``RayCastSensor`` whose ``.data`` is a dataclass of
-    ray hits, not a tensor field. Such a term is *time-varying*, so baking its
-    trace-time value freezes it: a policy would receive a fixed terrain profile
-    forever, with nothing in the build output saying so. ADR 0005's rule applies —
-    a term that fails to trace fails the build.
+    Baking its trace-time value would freeze that state silently, so the build fails
+    instead.
     """
 
     def __init__(self, term: str, touched: list[str]):
@@ -465,11 +431,8 @@ class TermExport:
 def _slot_input_name(key: SlotKey) -> str:
     """The ONNX graph input name for a slot.
 
-    Sensor names carry MJCF paths (``robot/imu_lin_vel``) and command slots embed a
-    dotted ``cmd.attr``, so non-identifier characters are folded to ``_``. The
-    authoritative name always travels to the runtime in the slot's own ``input``
-    field (:func:`slot_to_json`) rather than being recomputed there, so this scheme
-    stays a build-time detail.
+    A build-time detail: the name travels to the runtime in the slot's own ``input``
+    field (:func:`slot_to_json`) rather than being recomputed there.
     """
     namespace, name_part = key
     if namespace == _SENSOR_NS:
@@ -492,25 +455,18 @@ def slot_label(key: SlotKey) -> str:
 def slot_to_json(key: SlotKey, shape: Sequence[int] | None = None) -> dict[str, Any]:
     """Serialize one input slot for ``policy.json`` / ``config.json``.
 
-    Three shapes, distinguished by which keys are present: ``{"entity", "field"}``
-    for an ``Entity.data`` read, ``{"sensor"}`` for a whole-sensor read, and
-    ``{"command", "field"}`` for another command term's state. All carry
-    ``input`` — the graph input name to feed this slot's value as — so the
-    runtime never has to re-derive it from the naming scheme.
-
-    ``shape`` is the traced tensor's shape, batch axis included. The runtime feeds
-    a flat value array, so without it there is nothing to reconstruct the rank
-    from and it can only guess ``(batch, n)`` — which ORT rejects outright for the
-    fields that aren't rank 2: ``site_pos_w`` is ``(batch, num_sites, 3)`` and
-    ``heading_w`` is ``(batch,)``.
+    Three shapes, told apart by which keys are present: ``{"entity", "field"}``,
+    ``{"sensor"}``, or ``{"command", "field"}``. All carry ``input`` (the graph input
+    name) and ``shape`` — the runtime feeds a flat array and cannot recover the rank
+    without it.
     """
     namespace, name_part = key
     if namespace == _SENSOR_NS:
         sensor_name, dot, sensor_field = name_part.partition(".")
         entry = {"sensor": sensor_name, "input": _slot_input_name(key)}
         if dot:
-            # A structured sensor (mjlab's RayCastSensor) contributes one slot per
-            # field the term reads, rather than one window of `sensordata`.
+            # A structured sensor contributes one slot per field the term reads,
+            # rather than one window of `sensordata`.
             entry["field"] = sensor_field
     elif namespace == _COMMAND_NS:
         command_name, _, attr = name_part.partition(".")
@@ -533,17 +489,9 @@ def slot_to_json(key: SlotKey, shape: Sequence[int] | None = None) -> dict[str, 
 def slots_json(export: Any) -> list[dict[str, Any]]:
     """Serialize the input slots the exported graph actually takes, shapes included.
 
-    Shared by all three export kinds so the wire format can only be described in
-    one place. ``input_shapes`` is positionally parallel to ``input_slots``; a
-    short or absent list degrades to shape-less entries rather than raising, which
-    keeps hand-built exports in tests usable.
-
-    Slots the exporter folded away are dropped rather than emitted: a term reading
-    an integer index tensor (mjlab's ``MotionCommand.body_indexes``) declares it as
-    a slot, and ``torch.onnx.export`` then bakes it into the Gather it feeds. The
-    runtime feeds by name, and ORT rejects a feed that is not a graph input
-    outright (``invalid input '…'``), so keeping the slot would break every run of
-    the graph — and there would be nothing to read it from either.
+    Shared by all three export kinds. Slots the exporter folded into a constant (an
+    index tensor baked into the Gather it feeds) are dropped: ORT rejects a feed that
+    is not a graph input.
     """
     shapes = getattr(export, "input_shapes", None) or []
     entries = [
@@ -559,10 +507,8 @@ def slots_json(export: Any) -> list[dict[str, Any]]:
 def _graph_input_names(onnx_bytes: bytes | None) -> set[str] | None:
     """Input names of an exported graph, or None when there is no graph to ask.
 
-    Unparseable bytes answer None rather than raising: a hand-built export in a
-    test carries a placeholder, and every real one came out of
-    ``torch.onnx.export`` a few lines earlier. Filtering nothing degrades to the
-    pre-filter behaviour; refusing to serialize the term does not.
+    Unparseable bytes answer None rather than raising, so a hand-built export in a
+    test degrades to no filtering instead of failing.
     """
     if not onnx_bytes:
         return None
@@ -585,20 +531,12 @@ def trace_term(
 ) -> TermExport:
     """Trace a value-returning mjlab term body to ONNX against a live ``env``.
 
-    Args:
-        func: The mjlab term function, ``func(env, **params) -> Tensor``.
-        params: Resolved params from the env's manager (``asset_cfg`` already
-            resolved to static indices).
-        env: A constructed mjlab ``ManagerBasedRlEnv`` (post-reset).
-        name: Term name, used for input/output naming and diagnostics.
-        opset: ONNX opset version.
-
-    Returns:
-        A :class:`TermExport` with the serialized ONNX graph and its input slots.
+    ``params`` come from the env's own manager (``asset_cfg`` already resolved to
+    static indices) and ``env`` must be post-reset.
 
     Raises:
-        ValueError: if the term reads no dynamic simulation state (it should then
-            be handled as a native term, e.g. ``time_out``), or if tracing fails.
+        ConstantTerm: the term reads no simulation state (handle it as native).
+        UntraceableTerm: the term reads state the tracer cannot follow.
     """
     # 1. Discovery: run once against the recording env.
     recorder = _RecordingEnv(env)
@@ -609,8 +547,7 @@ def trace_term(
             "only value-returning terms are traced here."
         )
 
-    # 2. Classify accessed slots into dynamic inputs vs baked constants,
-    #    de-duplicated and deterministically ordered.
+    # 2. Classify accessed slots into dynamic inputs vs baked constants.
     dynamic: dict[SlotKey, torch.Tensor] = {}
     constants: dict[SlotKey, torch.Tensor] = {}
     for key, value in recorder._log:  # noqa: SLF001 — internal proxy
@@ -681,11 +618,7 @@ def trace_term(
 
 
 def read_slot(env: Any, key: SlotKey) -> torch.Tensor:
-    """Read an input slot's current value from ``env``.
-
-    Handles all three slot namespaces: entity data, a whole sensor, and another
-    command term's state.
-    """
+    """Read an input slot's current value from ``env``."""
     namespace, name_part = key
     if namespace == _SENSOR_NS:
         sensor_name, dot, sensor_field = name_part.partition(".")
@@ -697,17 +630,11 @@ def read_slot(env: Any, key: SlotKey) -> torch.Tensor:
     return getattr(env.scene[namespace].data, name_part)
 
 
-# ---------------------------------------------------------------------------
-# Event terms — side-effecting bodies whose *written* values are traced.
-#
-# An event term returns None and writes via ``entity.write_*_to_sim``, so the tensors
-# it would write become the graph outputs. Randomness is threaded in as an explicit
-# ``rand`` input, replayed by :class:`ReplayRng`.
-# ---------------------------------------------------------------------------
+# --- Event terms: an event returns None and writes via `entity.write_*_to_sim`, so
+# the tensors it would write become the graph outputs, and its randomness is threaded
+# in as an explicit `rand` input replayed by ReplayRng. ---
 
-
-# The `entity_write` vocabulary: the mjData write call, and the tensors it writes in
-# argument order.
+# Each write call and the tensors it writes, in argument order.
 _WRITE_FIELDS: dict[str, tuple[str, ...]] = {
     "joint_state": ("position", "velocity"),
     "root_pose": ("pose",),
@@ -733,10 +660,10 @@ class _WriteCaptureMixin:
 def _flatten_captures(
     captures: dict[str, tuple[torch.Tensor, ...]],
 ) -> tuple[list[str], list[torch.Tensor]]:
-    """Flatten a captures dict into (output_names, tensors) deterministically.
+    """Flatten a captures dict into (output_names, tensors).
 
-    Insertion order is the term's own write-call order (stable across runs), so
-    the discovery pass and the traced module agree on output ordering.
+    Insertion order is the term's own write-call order, so discovery and the traced
+    module agree on output ordering.
     """
     names: list[str] = []
     tensors: list[torch.Tensor] = []
@@ -796,8 +723,7 @@ class _EvRecScene:
 
     def __getitem__(self, name: str) -> _EvRecEntity:
         if _is_sensor(self._real, name):
-            # Unsupported here, and letting it through surfaces as a bare assert
-            # deep inside the term. Fail naming the cause instead.
+            # Letting it through surfaces as a bare assert deep inside the term.
             raise ValueError(
                 f"Event/command term read sensor {name!r}; sensor slots are only "
                 "supported for observation/termination terms so far. Extend the "
@@ -878,8 +804,7 @@ class _EventReplayEnv:
         self._real_env = real_env
 
     def __getattr__(self, name: str) -> Any:
-        # Was `num_envs=1`/`device="cpu"` defaults, so discovery ran against the real
-        # env's N while replay silently saw 1.
+        # Forwarded, not defaulted: replay must see the same N discovery ran against.
         if name in ("num_envs", "device"):
             return getattr(self._real_env, name)
         raise AttributeError(name)
@@ -887,11 +812,10 @@ class _EventReplayEnv:
 
 class _EventModule(nn.Module):
     """Wraps a side-effecting event ``func`` so ``forward(*dynamic, rand)`` returns
-    the tensors the term would write, with randomness supplied via ``rand``.
+    the tensors the term would write.
 
-    Dynamic reads arrive as ``forward`` args (data slots that vary at runtime);
-    tensor constants are registered buffers; scalar/bool constants (control-flow)
-    are held as plain Python values. All are served back through the replay env.
+    Dynamic reads arrive as ``forward`` args, constants as buffers or plain Python
+    values; all are served back through the replay env.
     """
 
     def __init__(
@@ -959,13 +883,9 @@ _EXPORT_FILTERS_INSTALLED = False
 def _prepare_single_env_export(num_envs: int) -> None:
     """Refuse a batched trace, and silence the three warnings a single-env one raises.
 
-    All three are safe by construction: the `index_put_` mutation is read back as a
-    graph output, `len(env_ids)` bakes the row count the guard below pins to 1, and the
-    `torch.tensor` constants are config that cannot vary (a wrongly baked *varying*
-    value is what the parity harness catches, not these warnings).
-
-    Installed once, process-wide: `catch_warnings` per export resets Python's
-    per-location dedup and reprints every *other* warning once per exported graph.
+    All three are safe here: the `index_put_` mutation is read back as a graph output,
+    `len(env_ids)` bakes the row count this guard pins to 1, and the `torch.tensor`
+    constants are config that cannot vary.
     """
     if num_envs != 1:
         raise ValueError(
@@ -1000,14 +920,9 @@ def trace_event_term(
 ) -> EventExport:
     """Trace a side-effecting (write-to-sim) event term body to ONNX.
 
-    Supports any combination of ``write_joint_state_to_sim`` (reset joints) and
-    ``write_root_link_pose_to_sim`` / ``write_root_link_velocity_to_sim`` (root
-    ``entity_write``, companion brief §3/§3b). The written tensors become the
-    graph outputs; randomness is supplied via an explicit ``rand`` input recorded
-    from the live term. State the term reads off ``env`` is classified into
-    dynamic inputs vs baked constants: time-varying ``entity.data`` fields become
-    graph inputs; other ``data`` fields, scene-level tensors (``env_origins``),
-    and control-flow scalars (``is_fixed_base``) are baked as constants.
+    The written tensors become the graph outputs and randomness arrives as ``rand``.
+    Time-varying ``entity.data`` fields become graph inputs; everything else the term
+    reads (scene tensors, control-flow scalars) is baked in.
     """
     # 1. Discovery on the live env: record draws + reads + written values.
     log: list[tuple[TaggedKey, Any]] = []
@@ -1109,17 +1024,12 @@ def _static_ids(ids: Any) -> Any:
     return ids
 
 
-# ---------------------------------------------------------------------------
-# Command terms — stateful, class-based.
-#
-# A command is a live CommandTerm with hidden state, so `_resample_command` (gated by
-# resample_mask) + `_update_command` are traced as one pure function with the state
-# promoted to explicit graph I/O:
+# --- Command terms: a CommandTerm's hidden state is promoted to explicit graph I/O,
+# so `_resample_command` + `_update_command` trace as one pure function
 #
 #     forward(prev_state..., resample_mask, rand) -> (next_state..., entity_write?)
 #
-# The native orchestrator holds `state` across frames and owns the resample timer.
-# ---------------------------------------------------------------------------
+# with the runtime holding `state` across frames and owning the resample timer. ---
 
 _ENTITY_WRITE_METHODS = {
     "write_joint_state_to_sim": "joint_state",
@@ -1139,10 +1049,9 @@ def _entity_attrs(term: Any) -> list[str]:
 
 
 class _RecordCommand:
-    """Swap a command's entity attrs + ``_env`` to recording proxies (event tagged
-    keys) so its reads are logged and its writes captured, with no sim mutation.
+    """Swap a command's entity attrs + ``_env`` to recording proxies, so its reads are
+    logged and its writes captured without mutating the sim.
 
-    Reused by the tracer's discovery pass and the parity harness's reference run.
     Single-entity commands only: all entity attrs are keyed by ``cfg.entity_name``.
     """
 
@@ -1201,15 +1110,12 @@ def _gate(
 class _CommandModule(nn.Module):
     """Traces a CommandTerm's resample+update as a pure function.
 
-    ``forward(*dynamic_slots, *prev_state, resample_mask, rand)``. Entity attrs and
-    ``_env`` are swapped to replay proxies serving dynamic reads (graph inputs) and
-    baked constants; state is injected and read back; the resample is gated by
-    ``resample_mask`` (``where(mask, resampled, prev)``); ``_update_command`` always
-    runs; any ``entity_write`` is captured. Reset unifies to ``resample_mask=True``.
+    ``forward(*dynamic_slots, *prev_state, resample_mask, rand)``: state is injected
+    and read back, the resample is gated by ``resample_mask``, ``_update_command``
+    always runs, and any ``entity_write`` is captured.
 
-    ``resample_mask`` gates the state fields only. The captured writes are a fresh draw
-    on every call, so they are valid only when the mask is true — mjlab writes the entity
-    from ``_resample_command`` alone. The runtime enforces that (``OnnxCommand.step``).
+    The mask gates the state fields only — captured writes are a fresh draw every call
+    and are valid only when it is true, which ``OnnxCommand.step`` enforces.
     """
 
     def __init__(
@@ -1257,9 +1163,8 @@ class _CommandModule(nn.Module):
         for a in self._entity_attr_names:
             setattr(self._term, a, _EvReplayEntity(self._entity_name, served, captures))
         if orig_env is not None:
-            # The env being swapped out, not `self._term`: `ManagerTermBase.num_envs`
-            # forwards to `self._env`, so pointing back at the term would make the
-            # replay env forward to itself.
+            # `real_env` is the env being swapped out, not the term: `num_envs`
+            # forwards to `_env`, so the term would forward to itself.
             self._term._env = _EventReplayEnv(served, captures, real_env=orig_env)
         try:
             prev = {}
@@ -1318,14 +1223,11 @@ def trace_command_term(
     command_field: str,
     opset: int = 17,
 ) -> CommandExport:
-    """Trace a stateful CommandTerm to ONNX (companion brief §3).
+    """Trace a stateful CommandTerm to ONNX.
 
-    Promotes hidden state (``state_fields``) to explicit graph I/O, threads
-    randomness through ``rand`` (from ``sample_uniform``; tensor-method RNG like
-    ``Tensor.uniform_`` is unsupported — supply a trace-friendly override, brief
-    §3a), and threads time-varying runtime reads (``self.robot.data.<field>``) as
-    dynamic graph inputs while baking scene-level constants and control-flow
-    scalars. Any ``entity_write`` (cube/root pose+velocity) is captured as output.
+    Promotes ``state_fields`` to explicit graph I/O and threads randomness through
+    ``rand``. Only ``sample_uniform`` draws are supported — a term using tensor-method
+    RNG (``Tensor.uniform_``) needs a trace-friendly override.
     """
     entity_attr_names = _entity_attrs(term)
     entity_name = getattr(getattr(term, "cfg", None), "entity_name", None)
@@ -1437,14 +1339,11 @@ def trace_command_term(
     )
 
 
-# ---------------------------------------------------------------------------
-# Observation-group fusion (ADR 0005 §4, companion brief §4b)
-# ---------------------------------------------------------------------------
+# --- Observation-group fusion ---
 
-
+# mjlab funcs reading env-level state rather than `entity.data`: nothing to trace,
+# since the runtime already holds these values every frame.
 NATIVE_OBSERVATION_FUNCS: dict[str, str] = {
-    # mjlab funcs that read env-level state rather than `entity.data`, so there is
-    # nothing to trace: the runtime already holds these values every frame.
     "last_action": "prev_action",
     "generated_commands": "command",
 }
@@ -1457,20 +1356,10 @@ def _native_observation_kind(func: Callable[..., Any]) -> str | None:
 def action_term_offset(env: Any, action_name: str) -> int:
     """Where *action_name*'s slice starts inside the policy's action vector.
 
-    ``last_action(action_name=...)`` is mjlab's ``get_term(name).raw_action`` — that
-    one term's slice, not the whole vector — and ``ActionManager.process_action``
-    splits the policy output by accumulating ``action_term_dim`` in config order. So
-    the offset is the sum of the dims declared before this term.
-
-    The browser holds the policy's output whole (one tensor, one inference), so the
-    offset is what lets it reproduce the slice. The width already travels as the
-    entry's ``size``, taken from a real call.
-
-    Raises rather than degrading. Falling back to the whole vector is exactly the
-    silently-wrong observation this resolves: with a single action term the slice and
-    the vector coincide, so the mistake stays invisible until a scene has two, and
-    then the second term's observation reads the first term's numbers. mjlab raises
-    ``KeyError`` on the same lookup.
+    ``last_action(action_name=...)`` is one action term's slice, so the browser — which
+    holds the policy output whole — needs this offset to reproduce it. Raises rather
+    than falling back to the whole vector, which would look right until a scene has two
+    action terms.
     """
     manager = env.action_manager
     names = list(manager.active_terms)
@@ -1520,15 +1409,9 @@ class GroupExport:
 class _GroupModule(nn.Module):
     """Runs a whole observation group: every term body, then clip/scale, then cat.
 
-    The single ``forward`` reproduces mjlab's ``compute_group`` for the terms it
-    owns — per-term ``clip`` *then* ``scale`` (that order is mjlab's), then
-    concatenation in declaration order. One replay env is built for all of them, so
-    a slot two terms share is read once rather than marshalled twice.
-
-    Native terms are graph *inputs* rather than bodies: ``last_action`` and
-    ``generated_commands`` read env-level state the runtime already holds, so
-    feeding the value in keeps the group's output the complete observation vector
-    instead of something the runtime must splice offsets into.
+    Reproduces mjlab's ``compute_group``, sharing one replay env across the terms so a
+    slot two of them read is marshalled once. Native terms are graph *inputs* rather
+    than bodies, which keeps the output the complete observation vector.
     """
 
     def __init__(
@@ -1555,8 +1438,7 @@ class _GroupModule(nn.Module):
             buffer_name = f"_const_{i}"
             self.register_buffer(buffer_name, value.detach().clone())
             self._const_buffers[key] = buffer_name
-        # Terms with no dynamic state at all (a fixed-size padding term, say) are
-        # values, not functions — bake them like any other constant.
+        # A term reading no dynamic state is a value, not a function — bake it.
         self._baked_buffers: dict[str, str] = {}
         for i, (term_name, value) in enumerate(baked.items()):
             buffer_name = f"_baked_{i}"
@@ -1591,12 +1473,8 @@ class _GroupModule(nn.Module):
 def _native_example(term: GroupTermSpec, env: Any) -> torch.Tensor:
     """Example value fixing a native term's graph-input width.
 
-    A native term is an input, not a body, so only its width matters — but the
-    width has to be fixed at export time. The live env is asked first; a trace env
-    built by :func:`mjswan.trace_env.build_single_entity_trace_env` has no action
-    terms and no command manager, so ``last_action`` comes back empty and
-    ``generated_commands`` raises. Both widths live browser-side there, and the
-    build hands them down as ``native_size``.
+    The live env is asked first. A bare trace env has no action terms and no command
+    manager, so the build hands the width down as ``native_size`` instead.
     """
     try:
         value = term.func(env, **term.params).detach()
@@ -1632,22 +1510,14 @@ def trace_observation_group(
     name: str,
     opset: int = 17,
 ) -> GroupExport:
-    """Fuse an observation group's terms into one ONNX graph (ADR 0005 §4).
+    """Fuse an observation group's terms into one ONNX graph.
 
-    One graph per group instead of one per term. The motivation is measured in the
-    companion brief §4b: a per-term graph can be a *single* node (three of G1's
-    five are `Identity`), so the fixed per-``ort.run()`` cost — the JS↔WASM
-    crossing, tensor marshalling, a promise round-trip — is the entire expense, and
-    slots two terms share get marshalled twice.
+    One graph per group rather than one per term, since a per-term graph can be a
+    single node and the fixed per-``ort.run()`` cost then dominates (ADR 0005 §4).
 
-    Inputs are the deduplicated union of the terms' dynamic slots, followed by one
-    input per native term. The output is the group's concatenated vector with each
-    term's clip/scale folded in — i.e. exactly what the policy consumes, minus
-    history (state across frames, which stays with the runtime's ring buffer).
-
-    Raises:
-        ValueError: if no term reads dynamic state (the whole group is constant, so
-            there is nothing to run per frame) or if tracing fails.
+    Inputs are the deduplicated union of the terms' dynamic slots, then one input per
+    native term. The output is the concatenated vector with clip/scale folded in —
+    what the policy consumes, minus history.
     """
     # 1. Discovery, per term: what does each read, and is it native?
     dynamic: dict[SlotKey, torch.Tensor] = {}
@@ -1672,9 +1542,6 @@ def trace_observation_group(
             elif term.params.get("action_name") is not None:
                 action_name = term.params["action_name"]
                 entry["action_name"] = action_name
-                # The runtime is fed the whole action vector and needs the offset to
-                # slice it. Resolved before the discovery call below, so an unknown
-                # name reports the scene's terms instead of a bare KeyError.
                 entry["action_offset"] = action_term_offset(env, action_name)
             value = _native_example(term, env)
             entry["size"] = int(value.reshape(1, -1).shape[-1])
@@ -1703,8 +1570,7 @@ def trace_observation_group(
         sensors.update(recorder._sensors)  # noqa: SLF001 — internal proxy
         commands.update(recorder._commands)  # noqa: SLF001 — internal proxy
         if not term_dynamic:
-            # As in `trace_term`: nothing read means a constant, while reads the
-            # tracer could not follow mean state that must not be frozen.
+            # Nothing read means a constant; unfollowable reads mean live state.
             if recorder._log:  # noqa: SLF001 — internal proxy
                 raise UntraceableTerm(
                     term.name,
@@ -1721,8 +1587,8 @@ def trace_observation_group(
             "native or constant, so there is no graph to run."
         )
 
-    # 2. Fuse and export. Slot order is sorted for determinism; native inputs
-    #    follow, in declaration order.
+    # 2. Fuse and export. Slots sorted for determinism, then natives in declaration
+    #    order.
     dynamic_keys = sorted(dynamic)
     slot_names = [_slot_input_name(k) for k in dynamic_keys]
     native_names = [entry["name"] for entry in native_inputs]
@@ -1768,9 +1634,7 @@ def trace_observation_group(
     )
 
 
-# ---------------------------------------------------------------------------
-# Termination-group fusion (ADR 0005 §4, companion brief §4b)
-# ---------------------------------------------------------------------------
+# --- Termination-group fusion ---
 
 
 @dataclass
@@ -1792,9 +1656,7 @@ class TerminationGroupExport:
 class _TerminationGroupModule(nn.Module):
     """Every termination body in one graph, emitting one bool lane per term.
 
-    A lane rather than a single OR because the manager reports *which* term fired
-    (its `reasons`) and splits `time_out` from real terminations — collapsing them
-    here would throw that away to save one comparison.
+    A lane rather than a single OR, so the manager keeps reporting *which* term fired.
     """
 
     def __init__(
@@ -1835,18 +1697,11 @@ def trace_termination_group(
     name: str,
     opset: int = 17,
 ) -> TerminationGroupExport:
-    """Fuse termination terms into one graph, one bool lane each (ADR 0005 §4).
+    """Fuse termination terms into one graph, one bool lane each.
 
-    Same motivation as observation fusion (companion brief §4b) and the same
-    mechanics — the deduplicated union of the terms' slots in, one graph out —
-    but the output is a bool *vector*, one lane per term, so the manager keeps
-    per-term `reasons` and its terminated-vs-truncated split.
-
-    `time_out` never reaches here: it reads no entity state, so it is classified
-    native before this is called.
-
-    Raises:
-        ValueError: if no term reads dynamic state, or if tracing fails.
+    Same mechanics as :func:`trace_observation_group`, but the output is a bool vector
+    so the manager keeps its per-term reasons. `time_out` never reaches here — it reads
+    no entity state and is classified native first.
     """
     dynamic: dict[SlotKey, torch.Tensor] = {}
     constants: dict[SlotKey, torch.Tensor] = {}
@@ -1874,8 +1729,7 @@ def trace_termination_group(
         sensors.update(recorder._sensors)  # noqa: SLF001 — internal proxy
         commands.update(recorder._commands)  # noqa: SLF001 — internal proxy
         if not term_dynamic:
-            # Nothing to bake: a termination blind to state never fires or always
-            # does, and the build should say so rather than emit it.
+            # Never baked: a termination blind to state never fires or always does.
             raise UntraceableTerm(
                 term.name,
                 sorted({slot_label(k) for k, _ in recorder._log}),  # noqa: SLF001

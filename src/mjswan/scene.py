@@ -131,16 +131,12 @@ def _enrich_joint_observations(
     scene_config: SceneConfig,
     observations: dict[str, Any] | None,
 ) -> None:
-    """Resolve joint_names/default_joint_pos from the scene spec for legacy
-    (``ObservationBinding``-typed, ``ts_name``-keyed) joint terms.
+    """Resolve joint_names/default_joint_pos from the scene spec, for ``ts_name``-keyed
+    joint terms only.
 
-    Only applies to the legacy path: those terms serialize straight into JSON
-    for a native TS class, which needs literal joint names/defaults resolved
-    ahead of time. A plain-callable term (ADR 0005) is unconditionally traced
-    to ONNX against the scene's live env instead — the tracer resolves
-    whatever indices/defaults the function itself reads directly from that
-    env, so pre-resolving them here would inject params a real function
-    (mjlab's own, or an author's) doesn't expect and was never asked for.
+    Those serialize straight into JSON for a native TS class, which needs the literals
+    up front. A plain-callable term is traced instead, and the tracer reads whatever the
+    function itself needs off the live env.
     """
     if observations is None:
         return
@@ -297,7 +293,7 @@ class SceneConfig:
     :func:`mjswan.adapters.resolve_runner_defaults`."""
 
     def __post_init__(self) -> None:
-        # Fixed at construction: `_save_web` drops `spec`/`model` right after writing the asset.
+        # Fixed now: `_save_web` drops `spec`/`model` right after writing the asset.
         self.scene_filename = "scene.mjz" if self.spec is not None else "scene.mjb"
         """Filename of the scene asset, from whichever of spec/model was provided."""
 
@@ -321,12 +317,9 @@ class SceneHandle:
     def _resolve_env_cfg(self, env_cfg: Any | None) -> Any | None:
         """The env config a policy's unset term sets come from, or ``None``.
 
-        An explicit one wins over the scene's, and is checked against the scene's control
-        rate first. ``control_dt`` is a scene-level field — the runtime derives its physics
-        substep count and every timer from one value per scene — so a policy config that
-        wants a different rate is not something this can honour, and running it at the
-        scene's rate silently would be exactly the failure ``_require_control_dt`` exists
-        to prevent.
+        An explicit one wins over the scene's, but its control rate must match: the
+        runtime derives every timer from one ``control_dt`` per scene, so a policy
+        wanting a different rate needs its own scene rather than a silent demotion.
         """
         if env_cfg is None:
             return self._config.mjlab_env_cfg
@@ -356,16 +349,12 @@ class SceneHandle:
     ) -> tuple[Any, Any, Any, Any]:
         """Fill each unset term set from an mjlab env config, and return all four.
 
-        Per field, so "the task's observations but my own terminations" needs only the one
-        override rather than a restatement of all four. ``{}`` is not ``None``, so an
-        explicitly empty term set still reads as "this policy has none".
+        Per field, so "the task's observations but my own terminations" needs one
+        override rather than all four. ``{}`` is not ``None``, so an explicitly empty
+        term set still reads as "this policy has none".
 
-        Shared with :meth:`add_policy_wandb` rather than left inside :meth:`add_policy`,
-        because that method has to read the resolved ``commands`` itself — it scans them
-        for the tracking term to know which motion clip to fetch. Reading the unresolved
-        parameter there meant a tracking scene whose commands came from its env config got
-        no clip at all, and nothing said so until playback, where the browser's
-        ``TrackingCommand`` had no frames to answer ``anchor_pos_w`` with.
+        :meth:`add_policy_wandb` needs the resolved ``commands`` too — it scans them for
+        the tracking term to know which motion clip to fetch — hence a shared helper.
         """
         source_cfg = self._resolve_env_cfg(env_cfg)
         if source_cfg is None:
@@ -421,47 +410,29 @@ class SceneHandle:
             source_path: Optional source path for the policy ONNX file.
             config_path: Optional source path for the policy config JSON file.
             env_cfg: mjlab env config to take this policy's unset term sets from,
-                instead of the scene's. For the case one scene hosts policies trained
-                against different configs — in mjlab that is several env configs sharing
-                one ``scene``, since an env has exactly one observation design. Its
-                control rate must match the scene's ``control_dt``; the scene owns that
-                rate, so a mismatch is an error rather than a silent reinterpretation.
-            task_id: mjlab task id used to read the task's *runner* config — which
-                observation group the actor network reads, and ``clip_actions``.
-                Defaults to the scene's task.
-            observations: Either a **single** observation group — mjlab's
-                ``env_cfg.observations["actor"]`` — or mjlab's whole
+                instead of the scene's — for one scene hosting policies trained against
+                different configs. Its control rate must match the scene's
+                ``control_dt``, which the scene owns.
+            task_id: mjlab task id whose *runner* config supplies the actor's
+                observation group and ``clip_actions``. Defaults to the scene's task.
+            observations: A single observation group, mjlab's whole
                 ``env_cfg.observations`` dict, or a dict already keyed by ONNX input
-                name. Prefer handing over the group (or the whole dict) and letting
-                mjswan key it: the key is the input name the runtime feeds, not a free
-                label, and an ONNX policy exported by mjlab has exactly one input.
-                Accepts both mjswan and mjlab ``ObservationGroupCfg`` instances — mjlab
-                types are converted automatically (mjlab is a soft dependency).
-                A group named for a training-only mjlab network (``"critic"``)
-                is dropped with a warning: only the actor is exported to ONNX,
-                so nothing consumes it.
-            commands: Command term configurations. Accepts both mjswan and
-                mjlab ``CommandTermCfg`` instances. Custom mjlab terms are
-                converted through the Python command-term registry.
-            actions: Action term configurations.  Accepts both mjswan and
-                mjlab ``ActionTermCfg`` subclass instances.
-            terminations: Termination term configurations.  Accepts both
-                mjswan and mjlab ``TerminationTermCfg`` instances.
-            policy_num_actions: Output width for policies whose action count
-                cannot be inferred from ``policy_joint_names`` (e.g.
-                muscle-driven policies driving actuators, not joints).
-            clip_actions: Symmetric bound the raw policy output is clamped to
-                before any action term sees it, mirroring rsl-rl's
-                ``RslRlVecEnvWrapper``. Distinct from ``ActionTermCfg.clip``,
-                which bounds ``raw * scale + offset`` per target. Defaults to the
-                task's runner config; pass ``0.0`` or a number to override,
-                and note that ``0.0`` is a real bound (it pins every action to zero).
-            initial_qpos: Optional initial qpos payload serialized into the
-                generated policy config JSON.
-            initial_qvel: Optional initial qvel payload serialized into the
-                generated policy config JSON.
-            extras: Optional extra JSON payload merged into the generated
-                policy config.
+                name. Prefer the first two and let mjswan key it — the key is the input
+                name the runtime feeds, not a free label. A group named for a
+                training-only network (``"critic"``) is dropped with a warning.
+            commands: Command term configurations. Custom mjlab terms are converted
+                through the Python command-term registry.
+            actions: Action term configurations.
+            terminations: Termination term configurations.
+            policy_num_actions: Output width for policies whose action count cannot be
+                inferred from ``policy_joint_names`` (e.g. muscle-driven ones).
+            clip_actions: Symmetric bound on the raw policy output, before any action
+                term sees it, mirroring rsl-rl's ``RslRlVecEnvWrapper``. Distinct from
+                ``ActionTermCfg.clip``, which bounds ``raw * scale + offset``. Defaults
+                to the task's runner config; ``0.0`` is a real bound, not "unset".
+            initial_qpos: Initial qpos serialized into the policy config JSON.
+            initial_qvel: Initial qvel serialized into the policy config JSON.
+            extras: Extra JSON payload merged into the policy config.
 
         Returns:
             PolicyHandle for configuring the policy (adding commands, etc.)
@@ -501,7 +472,6 @@ class SceneHandle:
         if clip_actions is None:
             clip_actions = runner.clip_actions
 
-        # Adapt mjlab types to mjswan internals (no-op if already mjswan)
         adapted_observations = adapt_observations(
             observations, policy_groups=runner.policy_obs_groups
         )
@@ -592,11 +562,10 @@ class SceneHandle:
             extras: Optional extra JSON payload applied to every fetched policy.
 
         Returns:
-            Flat list of :class:`PolicyHandle` instances across all runs, in the
-            order the runs were provided — **empty when ``only_latest=False``**: that
-            path converts ``.pt`` checkpoints, which is deferred to ``Builder.build``
-            so each scene converts and traces before the next one starts, and the
-            checkpoint names those handles would carry are not known until then.
+            Flat list of :class:`PolicyHandle` instances across all runs, in the order
+            the runs were provided — **empty when ``only_latest=False``**, since that
+            path defers its ``.pt`` conversion to ``Builder.build`` and the checkpoint
+            names are not known until then.
 
         Raises:
             ValueError: If ``only_latest=False`` and ``task_id`` is not provided,
@@ -637,7 +606,6 @@ class SceneHandle:
             )
             ```
         """
-        # `add_scene_mjlab` already knows the task; re-stating it here was pure duplication.
         if task_id is None:
             task_id = self._config.mjlab_task_id
         if not only_latest and task_id is None:
@@ -649,9 +617,8 @@ class SceneHandle:
 
         run_paths = [run_path] if isinstance(run_path, str) else run_path
 
-        # Resolved here, not left to `add_policy`: the tracking term is found by scanning
-        # `commands`, so scanning the unresolved parameter would miss a clip whenever the
-        # commands come from the scene's env config rather than this call.
+        # Resolved here, not left to `add_policy`: the tracking clip is found by scanning
+        # `commands`, which would miss one that came from the scene's env config.
         observations, commands, actions, terminations = self._derive_term_sets(
             env_cfg, observations, commands, actions, terminations
         )
@@ -689,8 +656,8 @@ class SceneHandle:
                     )
                     handles.append(handle)
         else:
-            # Deferred to build time so a scene converts, then traces, then the next
-            # starts; converting every scene up front held one mjlab env per scene alive.
+            # Deferred to build time so each scene converts and traces before the next
+            # starts; converting up front held one mjlab env per scene alive.
             assert task_id is not None
 
             def _convert(on_run: Callable[[str], None] = lambda _: None) -> None:
@@ -701,11 +668,10 @@ class SceneHandle:
                 )
 
                 with tempfile.TemporaryDirectory() as staging_dir:
-                    # The config mjlab's *export* env is built from. A copy of the scene's, so a
-                    # scene built from the training config does not silently get a play-config
-                    # export env — the observation widths that env reports are what the exported
-                    # ONNX takes as input. Copied rather than shared because the tracking branch
-                    # below writes a staging path into it that dies with this block.
+                    # The config mjlab's *export* env is built from: the scene's own, so
+                    # the observation widths that env reports are the ones the exported
+                    # ONNX takes. Copied, since the tracking branch below writes a
+                    # staging path into it that dies with this block.
                     source_cfg = self._resolve_env_cfg(env_cfg)
                     export_env_cfg: Any = (
                         copy.deepcopy(source_cfg) if source_cfg is not None else None
@@ -731,7 +697,7 @@ class SceneHandle:
                             )
 
                         if export_env_cfg is None:
-                            # A plain scene carries no config to follow, so fall back on the same
+                            # A plain scene has no config to follow, so fall back on the
                             # play config `add_scene_mjlab` would have chosen.
                             try:
                                 from mjlab.tasks.registry import (
@@ -788,8 +754,8 @@ class SceneHandle:
                                 )
                                 handles.append(handle)
                     finally:
-                        # Keep it as the scene's trace env rather than building a second one
-                        # from the same config — unless it was built from a different one.
+                        # Keep it as the scene's trace env rather than building a second
+                        # one from the same config.
                         if (
                             env_cfg is None
                             and self._config.mjlab_env_cfg is not None
@@ -947,12 +913,8 @@ class SceneHandle:
     def set_events(self, events: Mapping[str, Any]) -> SceneHandle:
         """Set scene-level events.
 
-        Accepts a dict of ``EventTermCfg`` instances (mjswan or mjlab), covering
-        ``reset``, ``interval``, and ``startup`` modes. Adaptation resolves mjlab
-        types to mjswan ``EventTermCfg`` objects; actual ONNX tracing happens
-        lazily at build time (:meth:`Builder.build`), once the scene's live env
-        and output directory are known — the same timing as observations and
-        terminations.
+        Accepts mjswan or mjlab ``EventTermCfg`` instances in any of the three modes.
+        ONNX tracing happens at build time, as for observations and terminations.
 
         Args:
             events: Dict mapping event names to ``EventTermCfg`` instances.
@@ -966,26 +928,19 @@ class SceneHandle:
         return self
 
     def set_trace_env(self, env: Any) -> SceneHandle:
-        """Set the live env ONNX tracing (ADR 0005) runs authored term bodies against.
+        """Set the live env ONNX tracing runs authored term bodies against.
 
-        Required for a scene built via plain :meth:`ProjectHandle.add_scene`
-        (no mjlab task, hence no env of its own) that passes a plain-callable
-        ``func`` to ``ObservationTermCfg``/``TerminationTermCfg``/``EventTermCfg``
-        — mjswan has no way to construct a task env on its own for these; the
-        author supplies one written against the same
-        ``env.scene[name].data.<field>`` API mjlab's own functions use (and,
-        for write-side event/command terms, entity write methods). It doesn't
-        need to be a full ``ManagerBasedRlEnv`` with observations/actions/
-        terminations configured — see
-        :func:`mjswan.trace_env.build_single_entity_trace_env` for a minimal
-        one built from just a single entity's spec.
+        Required for a plain :meth:`ProjectHandle.add_scene` scene with plain-callable
+        term functions, which has no task env of its own. The env only has to satisfy
+        ``env.scene[name].data.<field>`` (plus the entity write methods for write-side
+        terms) — see :func:`mjswan.trace_env.build_single_entity_trace_env` for a minimal
+        one built from a single entity's spec.
 
-        A scene built via :meth:`ProjectHandle.add_scene_mjlab` builds its own at
-        build time; setting one here pre-empts that.
+        An :meth:`ProjectHandle.add_scene_mjlab` scene builds its own at build time;
+        setting one here pre-empts that.
 
         Args:
-            env: A live env satisfying the tracer's ``env.scene[name].data.<field>``
-                contract.
+            env: A live env satisfying the tracer's read/write contract.
 
         Returns:
             Self for method chaining.

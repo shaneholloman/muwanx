@@ -1,10 +1,9 @@
 /**
- * Reproduces mjlab's `RayCastSensor._compute_data` with `mj_ray`. A structured
- * sensor has no `sensordata` window to read, so the rays are cast here; the term's
- * own arithmetic stays in the traced graph.
+ * Reproduces mjlab's `RayCastSensor._compute_data` with `mj_ray`. A structured sensor
+ * has no `sensordata` window to read, so the rays are cast here; the term's own
+ * arithmetic stays in the traced graph.
  *
- * The build ships the generated ray offsets in the descriptor rather than having
- * this file re-derive them, so mjlab's grid/pinhole/ring patterns all work here.
+ * The build ships the generated ray offsets, so every mjlab pattern works here.
  *
  * `normals_w` is not produced — the emscripten binding does not marshal `mj_ray`'s
  * output pointers back, and no traced term reads normals.

@@ -2,10 +2,9 @@
  * Serves a `ContactSensor`'s fields to the slot reader (mjlab's
  * `_extract_sensor_data` / `_update_history`).
  *
- * No contact physics here: the values are MuJoCo's own `sensordata`, and the build ships
- * the layout to read them with. Only the rolling history is ours, and it advances per
- * *physics substep* like mjlab's `scene.update(dt=physics_dt)` — hence `advance()` from
- * the engine's decimation loop.
+ * No contact physics here: the values are MuJoCo's own `sensordata` and the build ships
+ * the layout. Only the rolling history is ours, advancing per *physics substep* as
+ * mjlab's `scene.update(dt=physics_dt)` does — hence `advance()` from the step loop.
  */
 
 type MjModel = import('mujoco').MjModel;

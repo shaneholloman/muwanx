@@ -52,15 +52,8 @@ class ObservationTermCfg:
     In mjswan the TS runtime handles scale and history; noise and delay are
     training-only and therefore accepted but ignored.
 
-    ``func`` accepts either:
-
-    - A legacy :class:`ObservationBinding` sentinel: the build emits the existing
-      ``{"name": ..., ...params}`` shape and the engine resolves the class
-      from its registry.
-    - A plain Python callable taking ``(env, **params)``: the build traces
-      it to ONNX against the scene's live env (:mod:`mjswan.compile`) — either
-      mjlab's own function, or an author's function written against the same
-      live-env API. See ADR 0005.
+    ``func`` is either an :class:`ObservationBinding` (resolved to a TS class by name)
+    or a plain ``func(env, **params)`` the build traces to ONNX.
     """
 
     func: ObservationBinding | Callable[..., Any]
@@ -112,14 +105,8 @@ class ObservationTermCfg:
     def to_dict(self) -> dict[str, Any]:
         """Serialize an ``ObservationBinding`` term.
 
-        Produces ``{"name": "MyCustomObs", ...}`` for a term whose ``func`` is an
-        ``ObservationBinding`` — a reference to a hand-written TS class.
-
-        A term whose ``func`` is a plain callable is traced to ONNX against a
-        live env at build time (ADR 0005) — that requires the scene's env and
-        output directory, which this method has no access to. The Builder calls
-        ``mjswan._onnx_build.serialize_observation_group`` for those instead;
-        this method is not a valid way to serialize them.
+        A plain-callable term needs a live env this method has no access to; the Builder
+        calls ``mjswan._onnx_build.serialize_observation_group`` for those.
         """
         if isinstance(self.func, ObservationBinding):
             return self._to_dict_legacy()

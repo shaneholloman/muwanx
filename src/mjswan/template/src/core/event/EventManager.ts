@@ -138,10 +138,10 @@ export class EventManager {
   }
 
   /**
-   * Advance one control step: fire the `mode="interval"` terms whose timer elapsed, **in
-   * config order**, and advance every reset-gate counter. Sequential and awaited, as
-   * `onReset` is, so overlaps resolve by config order rather than by ORT completion. The
-   * gate counters go first, since a failing graph must not stall them.
+   * Advance one control step: fire the `mode="interval"` terms whose timer elapsed **in
+   * config order**, and advance every reset-gate counter. Sequential, so overlaps
+   * resolve by config order rather than by ORT completion; the counters go first, since
+   * a failing graph must not stall them.
    */
   async tick(dt: number, context: EventContext): Promise<void> {
     for (const { trigger } of this.resetTerms) trigger.step();
@@ -152,9 +152,8 @@ export class EventManager {
 
   /**
    * Fire every `mode="reset"` term whose gate allows it, **in config order**. Sequential
-   * rather than `Promise.all`, since every write is an assignment and overlaps must
-   * resolve by config order. Bodies read `default_*`, so this decides which value
-   * survives an overlap rather than compounding them.
+   * rather than `Promise.all`: every write is an assignment over `default_*`, so the
+   * order decides which value survives an overlap.
    */
   async onReset(context: EventContext): Promise<void> {
     for (const entry of this.resetTerms) {

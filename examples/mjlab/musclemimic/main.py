@@ -78,35 +78,20 @@ def setup_builder() -> mjswan.Builder:
 
     project = builder.add_project(name="MuscleMimic Fullbody")
 
-    # TODO: adopt the single-config shape the other mjlab examples now use.
+    # TODO: adopt the single-config shape the other mjlab examples use — load `env_cfg`
+    # and inject `mimic_deviation` above this line, pass `env_cfg=` here, and drop the
+    # term sets from `add_policy_wandb`. Building the scene first means it never sees
+    # the injected config, hence the explicit term sets below.
     #
-    # Every other example loads `env_cfg` once, edits it, and hands it to
-    # `add_scene_mjlab(env_cfg=...)`; the scene then keeps it and every policy defaults its
-    # observations / commands / actions / terminations off it, so `add_policy_wandb` takes
-    # the run paths alone. Here the scene is built first and `env_cfg` loaded after, so the
-    # two are separate deepcopies (`load_env_cfg` copies) and the `mimic_deviation` params
-    # injected below are on a config the scene never sees — which is why all four term sets
-    # are still passed explicitly further down.
-    #
-    # To convert:
-    #   1. Move the `load_env_cfg` + `mimic_deviation` injection above `add_scene_mjlab`.
-    #   2. Pass `env_cfg=env_cfg` to `add_scene_mjlab`.
-    #   3. Drop `task_id`, `observations`, `commands`, `actions` and `terminations` from the
-    #      `add_policy_wandb` call — all five then come from the scene.
-    #
-    # The one thing to check when you do: step 1 means the live `ManagerBasedRlEnv` that
-    # `add_scene_mjlab` constructs is built from the *injected* config, so mjlab's own
-    # `TerminationManager` sees `mimic_deviation` carrying `clip_url` / `site_names` / `fps`
-    # — params mjlab's closure does not take. mjlab validates term params at `compute()`
-    # rather than at construction, and the tracing env is never stepped, so this is expected
-    # to be fine (it is, for the terrain-param injection in `defaults/`), but it could not be
-    # verified here: `myoMimicFullbody-v0` comes from `mjlab_myochallenge`, which is not
-    # installed in CI. Run the example once after converting.
+    # Converting makes mjlab's own `TerminationManager` see `mimic_deviation`'s extra
+    # params. That should be fine (params are validated at `compute()`, and the trace
+    # env is never stepped), but `myoMimicFullbody-v0` is not installed in CI, so run
+    # the example once afterwards.
     scene = project.add_scene_mjlab(task_id)
 
     env_cfg = load_env_cfg(task_id, play=True)
 
-    # Inject clip_url/site_names/fps/thresholds into mimic_deviation (mjlab closure carries no params).
+    # mjlab's `mimic_deviation` closure carries no params, so inject them here.
     mimic_dev = env_cfg.terminations.get("mimic_deviation")
     if mimic_dev is not None:
         mimic_dev.params = {
@@ -119,9 +104,7 @@ def setup_builder() -> mjswan.Builder:
         }
 
     # mimic_lookahead is registered as unsupported and will be skipped by the builder.
-    #
-    # All four passed explicitly because of the load order above, not by preference; see the
-    # TODO at the top of this function.
+    # The four term sets are explicit only because of the load order — see the TODO above.
     policy_handles = scene.add_policy_wandb(
         run_paths,
         task_id=task_id,

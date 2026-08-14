@@ -21,14 +21,9 @@ class EventTermCfg:
 
     Mirrors ``mjlab.managers.event_manager.EventTermCfg``.
 
-    ``func`` accepts either:
-
-    - A legacy :class:`EventBinding` sentinel: emits ``{"name": ..., "params": ...}``
-      and the engine resolves the class from its registry.
-    - A plain callable ``func(env, env_ids, **params) -> None`` (a side-effecting
-      mjlab-style event body, writing state via ``entity.write_*_to_sim``): traced
-      to ONNX against a live env at build time (ADR 0005), which requires an env
-      and output directory this class has no access to — see :func:`to_dict`.
+    ``func`` is either an :class:`EventBinding` (resolved to a TS class by name) or a
+    plain ``func(env, env_ids, **params)`` writing via ``entity.write_*_to_sim``, which
+    the build traces to ONNX — see :func:`to_dict`.
     """
 
     func: EventBinding | Callable[..., Any]
@@ -50,12 +45,10 @@ class EventTermCfg:
     """``mode="reset"`` only: suppress firing on resets that arrive too soon."""
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize a **legacy** ``EventBinding`` term.
+        """Serialize an ``EventBinding`` term.
 
-        A term whose ``func`` is a plain callable is traced to ONNX against a
-        live env at build time (ADR 0005), which this method has no access to.
-        The Builder calls ``mjswan._onnx_build.serialize_event`` for those
-        instead; this method is not a valid way to serialize them.
+        A plain-callable term needs a live env this method has no access to; the Builder
+        calls ``mjswan._onnx_build.serialize_event`` for those.
         """
         if isinstance(self.func, EventBinding):
             entry: dict[str, Any] = {"name": self.func.ts_name}

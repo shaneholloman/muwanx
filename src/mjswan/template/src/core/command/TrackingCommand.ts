@@ -85,12 +85,9 @@ function hasRenderableMesh(object: THREE.Object3D): boolean {
 }
 
 /**
- * mjlab's `update_relative_body_poses`: place the reference bodies onto the robot
- * by keeping the robot's anchor x/y (but the *reference's* z) and rotating the
+ * mjlab's `update_relative_body_poses`: place the reference bodies onto the robot by
+ * keeping the robot's anchor x/y (but the *reference's* z) and rotating the
  * anchor-relative offsets by the yaw between the two anchors.
- *
- * Exported for its own test: get the frame wrong and the tracking terminations fire
- * plausibly and wrongly.
  */
 export function reanchorBodyPositions(
   bodyPosW: Float32Array,
@@ -395,11 +392,9 @@ export class TrackingCommand implements CommandTerm {
 
   /**
    * mjlab `MotionCommand` state, for traced graphs declaring a `{command: "motion",
-   * field}` slot. A clip lookup is data rather than math, so `motion` stays native and
-   * this is the only place those slots can resolve — in mjlab's frame, element order
-   * and (`env_origins` omitted, the browser runs one env at the origin) units.
-   *
-   * An unlisted field returns null and its caller holds the previous value.
+   * field}` slot — in mjlab's frame, element order and units (`env_origins` omitted,
+   * since the browser runs one env at the origin). An unlisted field returns null and
+   * its caller holds the previous value.
    *
    * The `ref_*` fields and `is_ready` are the look-ahead window, which mjlab has no
    * equivalent of: each is the `time_steps` offsets' frames concatenated, and the
@@ -719,12 +714,11 @@ export class TrackingCommand implements CommandTerm {
    * Run the traced reference-state-initialization graph, if the build shipped one.
    *
    * mjlab perturbs the reference frame before writing it; this perturbs it after,
-   * reading it back off `asset.data`, which keeps the clip out of the graph for the
-   * same numbers. The `mj_forward` above is what makes that read valid —
-   * `root_link_*_vel_w` is `cvel`-derived.
+   * reading it back off `asset.data` — same numbers, and the clip stays out of the
+   * graph. The `mj_forward` above is what makes that read valid.
    *
-   * Fire-and-forget with a second forward once the writes land, since `reset()` is
-   * sync and ORT is not. A frame of un-jittered reference pose is harmless.
+   * Fire-and-forget, since `reset()` is sync and ORT is not. A frame of un-jittered
+   * reference pose is harmless.
    */
   private applyResetJitter(): void {
     const graph = this.resetJitter;
@@ -743,7 +737,7 @@ export class TrackingCommand implements CommandTerm {
 
   /**
    * The RSI graph, run through `OnnxEvent` rather than a second `rand`+`entity_write`
-   * evaluator. Skips if it or the PRNG is absent: a less varied start, not a broken scene.
+   * evaluator. Skips if it or the PRNG is absent: a less varied start, not a broken one.
    */
   private buildResetJitter(config: unknown): OnnxEvent | null {
     if (!isOnnxEventConfig(config)) return null;

@@ -1,27 +1,15 @@
 /**
- * Fills a traced graph's `input_slots` from `mjModel`/`mjData` — the one place that
- * reproduces mjlab's `EntityData` semantics natively. A field read wrong here makes
- * the graph compute the right function of the wrong numbers, silently.
+ * Fills a traced graph's `input_slots` from `mjModel`/`mjData`, reproducing mjlab's
+ * `EntityData` semantics natively. A field read wrong here makes the graph compute the
+ * right function of the wrong numbers, silently.
  *
- * Slot shapes match `mjswan.compile.tracer.slot_to_json`: `{entity, field}`,
- * `{sensor}` (a `sensordata` window), `{sensor, field}` (a `RayCastSensor`, whose
- * rays are recast in `raycast.ts`), and `{command, field}`.
- *
- * Invariants a slot must hold:
- * - The **whole** field, flattened, not the slice the term reads — the graph carries
- *   its own baked-in indexing.
- * - mjlab's element order, i.e. MJCF spec order, which ascending model id within an
- *   entity reproduces. Joints exclude the free joint.
- * - float32: mjData is float64, ORT-Web is not.
+ * Every slot must be the **whole** field, flattened (the graph carries its own baked-in
+ * indexing), in mjlab's element order (MJCF spec order, i.e. ascending model id within
+ * an entity, free joint excluded), as float32.
  *
  * Entities resolve by the `name/` prefix mjlab's `attach` adds; an unprefixed model
- * (the `set_trace_env` path) falls back to the whole model, correct because such a
- * scene is single-entity. mjlab's own `terrain` is prefix-free, so a `terrain` slot
- * reads as unavailable rather than swallowing every unprefixed element — no traced
- * term reads it as an entity (the height scan goes through a `RayCastSensor`).
- *
- * An unknown field returns null and the caller holds its previous value, rather than
- * being approximated.
+ * falls back to the whole model, which is correct because such a scene is
+ * single-entity. An unknown field returns null and the caller holds its previous value.
  */
 
 import { quatApply, quatApplyInv } from '../observation/math';
@@ -92,8 +80,7 @@ function decodeNames(mjModel: MjModel, count: number, adr: ArrayLike<number>): s
  * Indices of the elements belonging to `entity`, in ascending model id.
  *
  * The whole-model fallback is gated on `prefixed`, not on an empty match: an entity
- * legitimately having no sites or no joints is common, and answering that with every
- * other entity's elements is the silent-wrong-numbers failure to avoid.
+ * with no sites is common, and answering that with every other entity's is worse.
  */
 function scopedIndices(
   names: string[],
@@ -279,12 +266,9 @@ export function isReadableEntityField(field: string): boolean {
 }
 
 /**
- * Resolve a sensor's `sensordata` window, prefix-tolerantly.
- *
- * The build records mjlab's prefixed name (`robot/imu_lin_vel`); a model exported
- * from plain MJCF has the bare name. Try both before giving up.
+ * A named MuJoCo sensor's `sensordata` window. The build records mjlab's prefixed name
+ * (`robot/imu_lin_vel`), while a plain-MJCF model has the bare one, so try both.
  */
-/** A named MuJoCo sensor's `sensordata` window, by *unprefixed* name if need be. */
 export function sensorWindow(
   mjModel: MjModel,
   sensor: string,
@@ -322,10 +306,7 @@ export function createSlotReader(
   // One per sensor, held for its frame resolution and ray buffers: ~200 rays a step.
   const casters = new Map<string, RaycastSensor | null>();
 
-  /**
-   * Drop what the previous scene resolved: both maps hold model indices, and a caster
-   * also holds that scene's descriptor (two scenes name their height scan alike).
-   */
+  /** Drop what the previous scene resolved: both maps hold its model indices. */
   const forModel = (mjModel: MjModel): void => {
     if (mjModel === cachedModel) return;
     cachedModel = mjModel;

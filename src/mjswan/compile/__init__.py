@@ -1,9 +1,5 @@
-"""mjlab-native ONNX compiler (ADR 0005).
-
-Build-time tracing of mjlab MDP term bodies to ONNX graphs, plus a numeric
-parity harness that validates the exported graphs against the live mjlab env.
-Phase 1 covers value-returning terms (observations, non-native terminations).
-"""
+"""Build-time tracing of mjlab MDP term bodies to ONNX graphs, plus a numeric parity
+harness validating the exported graphs against the live mjlab env (ADR 0005)."""
 
 from __future__ import annotations
 

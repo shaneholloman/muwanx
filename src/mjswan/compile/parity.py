@@ -1,19 +1,8 @@
-"""Numeric-parity harness: live mjlab env vs exported ONNX graphs (ADR 0005).
+"""Numeric-parity harness: live mjlab env vs exported ONNX graphs.
 
-Phase 1 exit criterion (ADR 0005 §Phased execution plan): the ONNX graphs
-exported from a task's term bodies must match the live mjlab environment within
-tolerance for **every term, every step**.
-
-This harness:
-
-1. Builds a live mjlab ``ManagerBasedRlEnv``.
-2. Traces every value-returning observation term to ONNX (:mod:`.tracer`),
-   classifying terminations like ``time_out`` as native.
-3. Steps the env ``n_steps`` times with a seeded action sequence, and at each
-   step feeds the same raw state through each exported graph via ``onnxruntime``
-   (**not** torch) and asserts ``allclose`` against the live term output.
-
-Run headless with ``MUJOCO_GL=disable``.
+Steps a live env with a seeded action sequence and, at each step, feeds the same raw
+state through each exported graph via ``onnxruntime`` (not torch) and compares. Every
+term must match at every step. Run headless with ``MUJOCO_GL=disable``.
 """
 
 from __future__ import annotations

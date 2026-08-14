@@ -1,15 +1,9 @@
-"""Custom termination registry for mjswan (ADR 0005).
+"""Custom termination registry.
 
-mjswan carries no reimplementation of mjlab's termination functions. A task's
-real function object — mjlab's own, or an author's plain
-``func(env, **params) -> Tensor`` written against the same live-env API — is
-traced directly to ONNX at build time (:mod:`mjswan.compile`); a term that reads
-no time-varying state (e.g. mjlab's own ``time_out``) is classified as native
-automatically. There is no mjswan-side mirror to resolve by name.
-
-This module carries only the ``TerminationBinding`` escape hatch: a hand-written
-TS class for a term that cannot be expressed as a traced function at all.
-Register one via :func:`register_termination`.
+mjswan reimplements none of mjlab's termination functions: a task's real function
+object is traced to ONNX at build time, and one reading no time-varying state (like
+``time_out``) is classified native automatically. This module carries only the
+``TerminationBinding`` escape hatch, for a term that cannot be traced at all.
 """
 
 from __future__ import annotations
@@ -21,19 +15,13 @@ from dataclasses import dataclass, field
 class TerminationBinding:
     """A hand-written TS termination class, bound to an mjlab termination name.
 
-    The escape hatch for a term ONNX tracing cannot express. Nothing else needs
-    one: an authored term passes a traceable ``func=`` straight to
-    ``TerminationTermCfg`` and is traced.
-
     Attributes:
         ts_name: Class the ``.ts`` file exports, and the name the browser's
             ``Terminations`` registry resolves.
         defaults: Default parameters merged into the JSON config entry.
-        ts_src: Absolute path to the ``.ts`` file exporting ``ts_name``, injected
-            into the browser bundle at build time. Without it there is no
-            implementation to run and the build fails: mjswan ships no built-in
-            TS termination classes, since every built-in term is a traced graph
-            or the native ``time_out``.
+        ts_src: Absolute path to the ``.ts`` file exporting ``ts_name``, injected into
+            the bundle at build time. Required — mjswan ships no built-in TS classes,
+            so without it the build fails.
     """
 
     ts_name: str

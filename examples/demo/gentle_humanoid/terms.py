@@ -1,22 +1,13 @@
-"""Observation terms for the Gentle Humanoid tracking policy (ADR 0005).
+"""Observation terms for the Gentle Humanoid tracking policy.
 
-Plain ``func(env, **params)`` bodies written against the live-env API — the same
-one mjlab's own ``observations`` module uses — traced to ONNX at build time. This
-replaces the declarative-DSL version of these terms: the ops are now ordinary
-torch, and the two things the DSL had engine primitives for are state the browser
-serves as graph inputs instead:
+Plain ``func(env, **params)`` bodies written against the same live-env API mjlab's own
+``observations`` module uses, traced to ONNX at build time.
 
-- ``TrackingRefField(field, step)`` → the tracking command's ``ref_root_pos_w`` /
-  ``ref_root_quat_w`` / ``ref_joint_pos`` **windows**. Each is the reference
-  trajectory sampled at every offset in the command's ``time_steps``, so one read
-  covers the whole look-ahead and the term slices out the offset it wants (static
-  indices, baked into the graph).
-- ``TrackingIsReady()`` → the command's ``is_ready`` field, still multiplied in so a
-  motion-coupled term is zeros until a clip is loaded.
-
-Proprioceptive history is no longer built out of ``History`` + ``slice_``: the
-sparse look-back offsets go on the term itself (``history_steps``) and the runtime
-owns the ring buffer, so these bodies compute a single frame.
+The motion-coupled terms read the tracking command's ``ref_*`` windows — the reference
+trajectory at every offset in ``time_steps``, so one read covers the whole look-ahead
+and the term slices out what it wants — multiplied by ``is_ready`` so they stay zero
+until a clip loads. Proprioceptive history lives on the terms themselves
+(``history_steps``), with the runtime owning the ring buffer.
 """
 
 from __future__ import annotations
@@ -58,9 +49,7 @@ def _down(quat: torch.Tensor) -> torch.Tensor:
     )
 
 
-# ---------------------------------------------------------------------------
-# Motion-coupled terms — read the reference window, gated by `is_ready`.
-# ---------------------------------------------------------------------------
+# --- Motion-coupled terms: read the reference window, gated by `is_ready`. ---
 
 
 def tracking(

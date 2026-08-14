@@ -29,9 +29,9 @@ export interface PolicyInput {
   onnx: Bytes;
   /**
    * Traced term-body graphs, keyed by the path the config refers to them by
-   * (`"obs/joint_pos.onnx"`). The engine never fetches, so the app delivers the bytes;
-   * `mjswan/manifest` fills this in, and `policyGraphRefs(config)` enumerates what to
-   * load. A missing entry warns and skips that term rather than failing the load.
+   * (`"obs/joint_pos.onnx"`). The engine never fetches, so the app delivers the bytes —
+   * `mjswan/manifest` fills this in, `policyGraphRefs(config)` enumerates what to load.
+   * A missing entry warns and skips that term.
    */
   graphs?: Record<string, Bytes>;
   motions?: MotionInput[];

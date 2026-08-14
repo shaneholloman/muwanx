@@ -20,12 +20,11 @@ CommandType = Literal["slider", "button", "checkbox"]
 
 @dataclass
 class SliderRangeConfig:
-    """A companion slider that rescales another slider's drag range (ADR 0005 §3a).
+    """A companion slider that rescales another slider's drag range.
 
-    mjlab's play GUI pairs each velocity axis with a "Max <label>" slider whose
-    only effect is how far the value slider reaches. Purely presentational: the
-    browser clamps the value slider's displayed range to ``[-value, value]``
-    locally, and nothing about it is sent to the engine or the policy.
+    Mirrors the "Max <label>" slider mjlab's play GUI pairs with each velocity axis.
+    Purely presentational: the browser clamps the value slider's displayed range to
+    ``[-value, value]`` locally and sends nothing to the engine.
     """
 
     range: tuple[float, float] = (0.0, 2.0)
@@ -141,18 +140,14 @@ class CommandUiConfig:
 
 @dataclass
 class PendingCommandTrace:
-    """An mjlab ``CommandTermCfg`` not yet traced to ONNX (ADR 0005 §3).
+    """An mjlab ``CommandTermCfg`` not yet traced to ONNX.
 
-    Command tracing needs a live env (``mjlab_cfg.build(env)`` constructs the
-    term instance ``trace_command_term`` runs) and an output directory for the
-    ``.onnx`` bytes — neither is available at ``add_policy()`` time, so
-    resolution is deferred to build time (:func:`mjswan._onnx_build.serialize_command`),
-    mirroring observations/terminations/events.
+    Tracing needs a live env and an output directory, neither available at
+    ``add_policy()`` time, so it is deferred to build time as for the other term kinds.
     """
 
     mjlab_cfg: Any
-    """The raw mjlab ``CommandTermCfg`` (has ``.build(env)``, ``.resampling_time_range``,
-    ``.debug_vis``)."""
+    """The raw mjlab ``CommandTermCfg``."""
 
     state_fields: list[str]
     """Attribute names on the built term constituting its hidden state."""
@@ -161,22 +156,15 @@ class PendingCommandTrace:
     """Which state field is the command value."""
 
     trace_override: Callable[[Any], None] | None = None
-    """Optional hook mutating a freshly ``build()``-constructed term in place —
-    e.g. rebinding ``_resample_command``/``_update_command`` to a trace-friendly
-    implementation (ADR 0005 §3a's examples-side override pattern)."""
+    """Hook mutating a freshly ``build()``-constructed term in place, e.g. rebinding
+    ``_resample_command`` to a trace-friendly implementation."""
 
     ui: dict[str, Any] | None = None
-    """Author-authored UI descriptor (checkbox/sliders/button, §3a). Not
-    derivable from the trace. Already resolved to a concrete dict — a
-    callable ``CommandBinding.ui`` is called with the mjlab cfg before this
-    dataclass is constructed (see ``mjlab_adapter._adapt_command_cfg``)."""
+    """Author-authored control-panel descriptor, already resolved to a concrete dict."""
 
     viz: dict[str, Any] | None = None
-    """Author-authored debug-vis descriptor: ``{"field", "shape", "radius",
-    "color"}``, a ``state_fields`` entry rendered as a sphere marker
-    (generic ``OnnxCommand.updateDebugVisuals``, replacing a per-command
-    hand-written TS class). Not derivable from the trace. Already resolved,
-    same as ``ui``."""
+    """Author-authored debug-vis descriptor — ``{"field", "shape", "radius", "color"}``,
+    a ``state_fields`` entry rendered as a sphere marker."""
 
 
 @dataclass
@@ -206,19 +194,15 @@ class CommandTermConfig:
 
 @dataclass(frozen=True)
 class PendingResetTrace:
-    """A reset-time graph a *native* command term applies (ADR 0005 §3).
+    """A reset-time graph a *native* command term applies.
 
-    A permanently-native command can still have randomization that is term math
-    rather than a data lookup — ``MotionCommand``'s reference-state
-    initialization jitter is the case in hand: the clip lookup has to stay
-    native, but the jitter is mjlab ``sample_uniform`` over ``asset.data``, so it
-    traces exactly like a reset Event and the browser needs no hand-written
-    randomness for it. Traced at build time like everything else, since a live
-    env is required.
+    A native command can still have randomization that is term math rather than a data
+    lookup — ``MotionCommand``'s reference-state jitter, say — which traces exactly like
+    a reset Event while the class itself stays native.
     """
 
     func: Callable[..., None]
-    """Event-shaped body, ``func(env, env_ids, **params) -> None``, ending in ``write_*_to_sim``."""
+    """Event-shaped body, ``func(env, env_ids, **params)``, ending in ``write_*_to_sim``."""
 
     params: dict[str, Any]
     """Resolved params for *func* (``SceneEntityCfg``s included)."""
@@ -228,29 +212,19 @@ class PendingResetTrace:
 class CommandBinding:
     """Binding from an mjlab command-cfg class name to its browser command term.
 
-    Three mutually-exclusive shapes (ADR 0005 §3):
+    Three mutually-exclusive shapes:
 
-    - **Native**: ``ts_name`` names a permanently-native TS class (e.g.
-      ``TrackingCommand`` for ``MotionCommandCfg``) — ``serializer`` builds its
-      params directly from the mjlab cfg. Such a term may still declare
-      ``reset_trace``, a ``(mjlab_cfg) -> (func, params) | None`` hook naming one
-      reset-time body to trace (see :class:`PendingResetTrace`); the class stays
-      native, its randomization does not.
-    - **ONNX-traced**: ``state_fields``/``command_field`` set — the mjlab cfg is
-      built (``cfg.build(env)``) and traced to ONNX at build time (the shared
-      ``OnnxCommand`` handler; ``ts_name``/``serializer`` are unused). Set
-      ``trace_override`` when the term needs a trace-friendly rewrite first
-      (ADR 0005 §3a) — e.g. tensor-method RNG or data-dependent control flow
-      that ``torch.onnx.export`` cannot handle as-authored. ``ui`` and ``viz``
-      may each be a static dict or a ``(mjlab_cfg) -> dict`` callable when the
-      descriptor depends on the task's own cfg (e.g. slider ranges from
-      ``cfg.ranges``, or a marker color from ``cfg.viz.target_color``, both of
-      which can differ per task) — resolved once the real cfg is known.
-      ``viz`` names one ``state_fields`` entry to render as a debug-vis sphere
-      (e.g. ``LiftingCommand``'s target position) — see
-      :func:`mjswan.compile.serialize.command_config`.
-    - **``ts_src`` escape hatch**: a hand-written TS command term, for one neither
-      of the above two shapes fits.
+    - **Native**: ``ts_name`` names a permanently-native TS class and ``serializer``
+      builds its params from the mjlab cfg. It may still declare ``reset_trace``, a
+      ``(mjlab_cfg) -> (func, params) | None`` hook naming one reset-time body to trace
+      (see :class:`PendingResetTrace`) — the class stays native, its randomization does
+      not.
+    - **ONNX-traced**: ``state_fields``/``command_field`` set, so the term is built and
+      traced at build time and served by the shared ``OnnxCommand`` handler. Set
+      ``trace_override`` when it needs a trace-friendly rewrite first. ``ui`` and ``viz``
+      may each be a dict or a ``(mjlab_cfg) -> dict`` callable, for descriptors that
+      depend on the task's own cfg.
+    - **``ts_src`` escape hatch**: a hand-written TS command term.
     """
 
     ts_name: str = ""
@@ -355,18 +329,10 @@ def _serialize_motion_command(cfg: Any) -> dict[str, Any]:
 def _motion_rsi_unregistered(cfg: Any) -> None:
     """Stand-in `reset_trace` that says the real one is not loaded.
 
-    The reference-state-initialization jitter is traced from mjlab's own
-    `sample_uniform` / `quat_from_euler_xyz`, so its body lives author-side (in
-    `examples/mjlab/defaults/commands`) and this module keeps mjlab a soft
-    dependency. The binding below therefore has no jitter graph, and
-    `TrackingCommand` starts every episode from the unjittered reference frame when
-    none is supplied — correct for a task that jitters nothing, and a silent loss for
-    one that does.
-
-    It *was* silent: the browser-side jitter used to be `Math.random()` inside
-    `TrackingCommand.ts` and moved into the traced graph, so a task whose author
-    never imported the registration module quietly stopped jittering. This warns
-    instead. Always returns `None` — there is no graph to offer, only a diagnosis.
+    The reference-state-initialization jitter traces from mjlab's own helpers, so its
+    body lives author-side (`examples/mjlab/defaults/commands`) and this module keeps
+    mjlab a soft dependency. Without it `TrackingCommand` starts every episode
+    unjittered, which this warns about. Always returns `None`.
     """
     pose_range = dict(getattr(cfg, "pose_range", None) or {})
     velocity_range = dict(getattr(cfg, "velocity_range", None) or {})

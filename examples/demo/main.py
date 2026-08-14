@@ -42,15 +42,9 @@ from mjswan.managers.observation_manager import (  # noqa: E402
 from mjswan.managers.termination_manager import TerminationTermCfg  # noqa: E402
 from mjswan.trace_env import build_single_entity_trace_env  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Demo-specific observations (ADR 0005).
-#
-# These scenes have no mjlab task, so ONNX tracing needs a live env of its own
-# (build_single_entity_trace_env, wired via SceneHandle.set_trace_env — see
-# each _add_*_scene below) and self-authored functions written against the
-# same live-env API as mjlab's own (mjlab.envs.mdp.observations, imported
-# above as obs_fns) — traced identically, no special-casing.
-# ---------------------------------------------------------------------------
+# --- Demo-specific observations. These scenes have no mjlab task, so each supplies its
+# own trace env via SceneHandle.set_trace_env, and the terms below are written against
+# the same live-env API mjlab's own use. ---
 
 
 def joint_pos_abs(env, *, asset_cfg: SceneEntityCfg = SceneEntityCfg(name="robot")):

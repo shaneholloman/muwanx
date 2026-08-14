@@ -1,24 +1,9 @@
-"""Serialize traced terms into the ONNX artifact bundle (ADR 0005 §1, §6).
+"""Serialize a traced command into its ``policy.json`` entry and ``.onnx`` graph.
 
-Turns a :class:`~mjswan.compile.tracer.CommandExport` into the ``OnnxCommand``
-config entry the runtime consumes and writes the ``.onnx`` graph beside it. Per
-the companion brief §1, this reuses the existing ``config.json``/``policy.json``
-contract — the config entry here is what replaces a command's DSL/`UiCommand`
-mapping in ``policy.json``.
-
-A single generic ``OnnxCommand`` runtime handler interprets every command
-(velocity, lifting, …) from this data — there is no engine-side class per command
-(brief §3). The config declares everything the handler needs to allocate state,
-supply ``rand``, thread dynamic reads, and apply any ``entity_write``:
-
-- ``state_fields``  — each with **shape + dtype + init** so the handler can build the
-  ONNX I/O tensors and persist state across frames (brief §3a).
-- ``command_field`` — which state field is the command value.
-- ``rand_dim``      — how many seeded PRNG draws to feed as ``rand``.
-- ``rand_ranges``   — the ``[low, high]`` each of those draws comes from (the graph
-  consumes the sampler's output, so it carries no bounds of its own).
-- ``input_slots``   — time-varying runtime reads threaded as graph inputs.
-- ``write_targets`` — any ``entity_write`` (cube/root pose+velocity) the graph emits.
+One generic ``OnnxCommand`` runtime handler interprets every command from this data,
+so the entry has to declare everything it needs to allocate state, supply ``rand``,
+thread dynamic reads, and apply any ``entity_write`` — see
+:data:`COMMAND_JSON_SCHEMA`.
 """
 
 from __future__ import annotations
@@ -28,12 +13,9 @@ from typing import Any
 
 from .tracer import CommandExport, slots_json
 
-# Authoritative JSON Schema for one OnnxCommand config entry; the TS runtime
-# validates against it at load time.
-#
-# "name" is the registry key CommandManager resolves a class by — always the literal
-# "OnnxCommand" — not the term's identity, which is its key in `commands`. "term_id"
-# is the traced term's own name, for diagnostics.
+# Authoritative schema for one OnnxCommand config entry; the TS runtime validates
+# against it at load time. "name" is the registry key CommandManager resolves a class
+# by, so it is always the literal "OnnxCommand"; "term_id" is the traced term's name.
 COMMAND_JSON_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "OnnxCommand",
@@ -55,7 +37,7 @@ COMMAND_JSON_SCHEMA: dict[str, Any] = {
         "onnx": {"type": "string"},
         "command_field": {"type": "string"},
         "rand_dim": {"type": "integer", "minimum": 0},
-        # One [low, high] per `rand` element, in draw order — the graph carries none itself.
+        # One [low, high] per `rand` element, in draw order — the graph has none.
         "rand_ranges": {
             "type": "array",
             "items": {
@@ -142,30 +124,12 @@ def command_config(
 ) -> dict[str, Any]:
     """Build the ``OnnxCommand`` config entry for ``policy.json`` from a trace.
 
-    Follows the same wire convention as every other command term in this codebase
-    (``CommandTermConfig.to_dict()``): ``"name"`` is the **registry key** the
-    TS-side ``CommandManager`` looks up a class by (here, the constant
-    ``"OnnxCommand"`` — the one generic handler, ADR 0005 §3), not the term's own
-    identity. The term's own id is the *outer* dict key the author chooses when
-    placing this entry into ``PolicyConfig.commands`` (e.g.
-    ``commands={"twist": ...}``) — mirrored by every existing ``*_command()``
-    factory in ``command.py``. ``export.name`` is kept only as ``term_id`` for
-    diagnostics and is not consumed by ``CommandManager``.
+    The term's own id is the outer key the author gives this entry in
+    ``PolicyConfig.commands``; ``term_id`` here is only for diagnostics.
 
-    Args:
-        export: The traced command (:func:`~mjswan.compile.tracer.trace_command_term`).
-        onnx_ref: Bundle-relative path to the written ``.onnx`` graph.
-        resampling_time_range: The command's ``[min, max]`` resample seconds
-            (from ``cfg.resampling_time_range``) — the native timer uses it.
-        debug_vis: Mirror of ``cfg.debug_vis``.
-        ui: Optional authored UI descriptor (checkbox/sliders/button, brief §3a).
-            Not derivable from the trace; the task author supplies it.
-        viz: Optional generic debug-vis descriptor: a 3D-position ``state_fields``
-            entry rendered as a sphere marker (``OnnxCommand.updateDebugVisuals``),
-            visible only while ``debug_vis`` is true. Replaces a per-command
-            hand-written TS class for this — e.g. ``LiftingCommand``'s target
-            marker. Not derivable from the trace; the task author supplies it
-            (e.g. from ``cfg.viz.target_color``).
+    ``ui`` (control-panel inputs) and ``viz`` (a ``state_fields`` entry to render as a
+    sphere marker while ``debug_vis`` is on) are not derivable from the trace — the
+    task author supplies them.
     """
     cfg: dict[str, Any] = {
         "name": "OnnxCommand",
@@ -213,11 +177,10 @@ def write_command_artifact(
 
 
 def validate_command_config(cfg: dict[str, Any]) -> list[str]:
-    """Lightweight structural check of an OnnxCommand config (no jsonschema dep).
+    """Structural check of an OnnxCommand config, returning human-readable errors.
 
-    Returns a list of human-readable errors (empty if valid). The authoritative
-    contract is :data:`COMMAND_JSON_SCHEMA`, enforced browser-side at load time;
-    this catches emitter mistakes early in the Python build.
+    Catches emitter mistakes early; :data:`COMMAND_JSON_SCHEMA` remains the
+    authoritative contract, enforced browser-side at load time.
     """
     errors: list[str] = []
     required: dict[str, type | tuple[type, ...]] = {
@@ -239,8 +202,7 @@ def validate_command_config(cfg: dict[str, Any]) -> list[str]:
     if cfg.get("name") != "OnnxCommand":
         errors.append("'name' must be 'OnnxCommand' (the registry key)")
 
-    # One [low, high] per rand element, or the runtime falls back to [0, 1) — for a
-    # zero-width range, the difference between no jitter and a metre of it.
+    # One [low, high] per rand element, or the runtime silently draws [0, 1) instead.
     ranges = cfg.get("rand_ranges")
     if isinstance(ranges, list) and len(ranges) != cfg.get("rand_dim", 0):
         errors.append(

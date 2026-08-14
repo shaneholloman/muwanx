@@ -1,10 +1,9 @@
 /**
- * The one manager with no ONNX: a closed built-in set on the hottest loop, run once per
- * physics substep. mjlab models it the same way (`ActionTermCfg` is an ABC, not an
- * author `func`), so this mirrors the *kinds* rather than tracing anything.
+ * The one manager with no ONNX: a closed built-in set on the hottest loop, mirroring
+ * mjlab's own `ActionTermCfg` kinds rather than tracing anything.
  *
- * A free function over `mjData` rather than a method on the DOM-bound runtime, so the
- * rollout-parity harness can drive it in Node against the real MuJoCo WASM.
+ * A free function over `mjData`, not a method on the DOM-bound runtime, so the
+ * rollout-parity harness can drive it in Node.
  */
 
 type MjModel = import('mujoco').MjModel;
@@ -152,8 +151,8 @@ function clamp(value: number, lo: number, hi: number): number {
 
 /**
  * Per-target bounds from a pattern-keyed `clip` config. Anchored, as mjlab's
- * `re.fullmatch` is — which is why this cannot reuse the exact-name resolver
- * `stiffness`/`damping` share. An unmatched target stays unbounded.
+ * `re.fullmatch` is, hence not the exact-name resolver `stiffness`/`damping` share.
+ * An unmatched target stays unbounded.
  */
 export function resolveActionClip(
   clip: Record<string, readonly number[]> | undefined,
@@ -186,13 +185,11 @@ export function resolveActionClip(
 /**
  * The policy's raw-action bound (`clip_actions`), or `null` for unbounded.
  *
- * Not `resolveActionClip`'s per-target bound: that one is a property of an action term
- * and lands on `raw * scale + offset`. This one comes from the *runner* config
- * (rsl-rl's `RslRlVecEnvWrapper`) and bounds the policy's output itself, symmetrically,
- * before any term sees it.
+ * From the *runner* config, bounding the policy's output symmetrically before any term
+ * sees it — unlike `resolveActionClip`, which bounds `raw * scale + offset` per target.
  *
- * `0` is a legal bound — it pins every action to zero — so this cannot fall back on
- * truthiness. A negative bound would make the clamp invert, and is refused instead.
+ * `0` is a legal bound (it pins every action to zero), so truthiness will not do here.
+ * A negative one would invert the clamp, and is refused.
  */
 export function readClipActions(clipActions: unknown): number | null {
   if (typeof clipActions !== 'number' || !Number.isFinite(clipActions)) return null;
@@ -206,9 +203,8 @@ export function readClipActions(clipActions: unknown): number | null {
 /**
  * Clamp the raw action in place to `[-bound, +bound]`.
  *
- * In-place because the caller's copy is what goes on to be stored as the last action:
- * rsl-rl clamps ahead of `env.step`, so mjlab's action manager — and any `last_action`
- * observation reading it — sees the clamped vector, never the raw one.
+ * In-place because the caller's copy is stored as the last action: rsl-rl clamps ahead
+ * of `env.step`, so a `last_action` observation sees the clamped vector, never the raw.
  */
 export function clampActions(action: Float32Array, bound: number | null): void {
   if (bound === null) return;

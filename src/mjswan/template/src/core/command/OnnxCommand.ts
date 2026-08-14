@@ -2,17 +2,16 @@
  * The single generic command handler: every traced command is a data instantiation of
  * this class — a different graph, `state_fields`, `ui` and `write_targets`.
  *
- * The graph owns the math; this owns the native half — the scalar resample timer that
- * sets `resample_mask`, `prev_state` across frames, `rand` drawn from the seeded PRNG
- * (never ONNX's own random ops), the `entity_write` application, and the `viz` debug
- * marker any position-shaped state field gets for free.
+ * The graph owns the math; this owns the native half — the resample timer that sets
+ * `resample_mask`, `prev_state` across frames, `rand` drawn from the seeded PRNG, the
+ * `entity_write` application, and the `viz` debug marker.
  *
- * The UI override overwrites the command *after* the autonomous computation, which is
- * never skipped — mjlab's play-time behaviour.
+ * A UI override overwrites the command *after* the autonomous computation, which is
+ * never skipped, as mjlab does at play time.
  *
  * **Async boundary.** `update()`/`getCommand()` are sync but ORT-Web is not, so
- * `update()` kicks off inference and `getCommand()` serves the last completed value. A
- * frame arriving mid-flight is skipped, never queued, so no backlog can build.
+ * `update()` kicks off inference and `getCommand()` serves the last completed value.
+ * A frame arriving mid-flight is skipped, never queued.
  */
 
 import * as THREE from 'three';
@@ -157,9 +156,8 @@ export class OnnxCommand implements CommandTerm {
    * forward, so an `entity_write` it emits is published by that forward rather than
    * leaving the next observation on a stale `xpos`.
    *
-   * The frame's later `update()` runs the same graph again with `resample_mask = 0`,
-   * which is `_update_command` alone: mjlab's split across the forward, for one extra
-   * `ort.run()` on reset frames.
+   * The frame's later `update()` re-runs the graph with `resample_mask = 0`, which is
+   * `_update_command` alone.
    */
   async reset(): Promise<void> {
     this.timeLeft = this.sampleResampleTime();

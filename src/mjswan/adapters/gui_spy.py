@@ -1,11 +1,8 @@
 """Record an mjlab command term's viser GUI as an mjswan UI descriptor.
 
-mjlab declares each command's viewer controls in one place —
-``CommandTerm.create_gui``, calling viser's ``server.gui.add_*``. Running it
-against a recording stand-in makes that the browser control panel's only
-definition, instead of hand-copying slider ranges into ``CommandBinding(ui=...)``
-and watching them drift. A stand-in rather than a real ``ViserServer``, which
-would open a port and serve a page.
+Running ``CommandTerm.create_gui`` against a recording stand-in makes mjlab's own
+declaration the browser control panel's only definition, instead of hand-copying slider
+ranges into ``CommandBinding(ui=...)`` and watching them drift.
 """
 
 from __future__ import annotations
@@ -103,16 +100,14 @@ def _slug(label: str) -> str:
 def to_ui_descriptor(handles: list[_Handle]) -> dict[str, Any] | None:
     """Recorded controls -> a ``commands.<term>.ui`` descriptor, ``None`` if empty.
 
-    mjlab identifies handles by variable reference and treats labels as display
-    text, so all three conventions here are structural:
+    mjlab identifies handles by variable reference, so the conventions here are
+    structural rather than label-based:
 
-    - First checkbox takes the name ``enabled`` whatever its label, since
-      ``OnnxCommand.isUiEnabled`` looks for exactly that.
-    - A one-sided slider is a "Max <label>" companion rescaling the next axis's
-      reach, never a command axis (mjlab keeps these out of ``_joystick_sliders``,
-      but that list is a local). An axis straddles zero.
-    - Order is the contract: mjlab and the browser both map axis sliders onto the
-      command vector positionally.
+    - The first checkbox is named ``enabled``, which is what ``OnnxCommand.isUiEnabled``
+      looks for.
+    - A one-sided slider is a "Max <label>" companion rescaling the next axis, never an
+      axis itself — an axis straddles zero.
+    - Order is the contract: axis sliders map onto the command vector positionally.
     """
     inputs: list[dict[str, Any]] = []
     enable_name: str | None = None
@@ -166,9 +161,8 @@ def to_ui_descriptor(handles: list[_Handle]) -> dict[str, Any] | None:
 def record_gui(term: Any, name: str) -> dict[str, Any] | None:
     """A built term's ``create_gui`` recorded as a UI descriptor.
 
-    ``None`` when it declares no controls: ``CommandTerm.create_gui`` is a
-    base-class no-op, so every term has the method and an empty recording is the
-    only signal that this one does not override it.
+    ``None`` when it declares no controls — ``create_gui`` is a base-class no-op, so an
+    empty recording is the only signal that a term does not override it.
     """
     server = _ServerRecorder()
     term.create_gui(name, server, lambda: 0)

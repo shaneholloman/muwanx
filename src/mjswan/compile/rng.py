@@ -1,28 +1,11 @@
-"""RNG spy/replay for the parity harness (ADR 0005 §2 companion brief §2b).
+"""Build-time RNG spy/replay, so a traced graph can take ``rand`` as an explicit input.
 
-**Build-time only.** Unrelated to the orchestrator-owned seeded PRNG that governs
-mjswan's *runtime* randomness and its bit-for-bit session replay (ADR 0005 §2); do
-not conflate the two. One thing recorded here does travel to the browser, in the
-term's config rather than in code: the per-draw ``[low, high]`` bounds
-(``rand_ranges``), which the traced graph itself cannot carry — see
-:attr:`DrawRecorder.rand_ranges`.
+Nothing here is the runtime's seeded PRNG. Recording mjlab's real draws and replaying
+those exact values into the graph is what lets the parity harness compare the two
+without them diverging on randomness alone.
 
-Event/Command term bodies take ``rand`` as an explicit ONNX input rather than
-drawing their own randomness (ADR 0005 §2). So the parity harness cannot run
-mjlab's reference rollout and the exported graph independently — they would draw
-different numbers and diverge for reasons unrelated to whether the traced math is
-correct. Instead the harness **records every draw mjlab actually makes** during
-the reference computation, then **replays those exact values** into the graph's
-``rand`` input.
-
-This validates that the traced math reproduces mjlab's transformation of a given
-draw into a final value. It does *not* validate that mjlab and mjswan draw the
-same numbers at runtime — a separate, already-solved concern (ADR 0005 §2).
-
-The spy patches the *term function's own module globals* (e.g.
-``reset_joints_by_offset.__globals__["sample_uniform"]``), not the source module,
-because mjlab imports the name at import time — patching the source would not
-affect the already-bound reference.
+The spy patches the term function's *own* module globals, since mjlab binds the name
+at import time and patching the source module would not reach it.
 """
 
 from __future__ import annotations
@@ -38,10 +21,8 @@ _RNG_NAMES = ("sample_uniform",)
 class DrawRecorder:
     """Records the values a term's RNG calls return, in call order.
 
-    Used as a context manager around a single term invocation on the live env:
-    the wrapped RNG helpers still return mjlab's real draw (the reference rollout
-    is unaffected), while each returned tensor is captured. ``rand_vector`` then
-    concatenates them into the flat ``rand`` input to replay into the ONNX graph.
+    Wraps a single term invocation on the live env: the helpers still return mjlab's
+    real draw, so the reference rollout is unaffected.
     """
 
     def __init__(self, func: Callable[..., Any]):
@@ -89,12 +70,9 @@ class DrawRecorder:
     def rand_ranges(self) -> list[list[float]]:
         """Per-element ``[low, high]`` of the flat ``rand`` vector, in draw order.
 
-        The bounds are what :class:`ReplayRng` drops on the floor when it traces —
-        the graph consumes the sampler's *output*, so nothing in it remembers the
-        range. That makes these the only record of it, and the runtime cannot draw
-        a term's randomness without them: a ``pose_range`` of ``{}`` is mjlab
-        drawing exactly zero, which a rangeless [0, 1) draw turns into a robot
-        teleported up to a metre per reset.
+        The graph consumes the sampler's *output* and so remembers no bounds, making
+        these the only record of them — without which the runtime would draw [0, 1)
+        and turn an empty ``pose_range`` into a metre of teleport per reset.
         """
         if not self._bounds:
             return []
@@ -105,10 +83,8 @@ class DrawRecorder:
 def _element_bounds(shape: torch.Size, *args: Any, **kwargs: Any) -> torch.Tensor:
     """``(numel, 2)`` of the ``[low, high]`` behind each element of one draw.
 
-    ``sample_uniform(lower, upper, size)`` takes bounds that either are scalars or
-    broadcast against ``size`` (mjlab passes a per-axis column for a 6-dof pose
-    range and a scalar pair for joint offsets), so they are broadcast the same way
-    here and flattened in the draw's own element order.
+    ``sample_uniform``'s bounds are scalars or broadcast against ``size``, so they are
+    broadcast the same way here and flattened in the draw's own element order.
     """
     lower = kwargs.get("lower", args[0] if len(args) > 0 else 0.0)
     upper = kwargs.get("upper", args[1] if len(args) > 1 else 1.0)
@@ -124,11 +100,9 @@ def _element_bounds(shape: torch.Size, *args: Any, **kwargs: Any) -> torch.Tenso
 class ReplayRng:
     """Serves recorded draws back to a term as it runs, in call order.
 
-    Installed in place of the term's RNG helpers *during tracing*: each call
-    consumes the next ``numel(size)`` values from the ``rand`` input, reshaped to
-    the requested size, ignoring the ``lower``/``upper`` bounds — the recorded
-    value already lies in range (it is the sampler's *output*, not a [0,1) base).
-    This is what makes ``rand`` an explicit graph input per ADR 0005 §2.
+    Installed in place of the term's RNG helpers during tracing, which is what turns
+    ``rand`` into an explicit graph input. The bounds are ignored: a recorded value is
+    the sampler's output, already in range.
     """
 
     def __init__(self, func: Callable[..., Any], rand: torch.Tensor):

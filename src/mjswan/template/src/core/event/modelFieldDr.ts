@@ -1,13 +1,11 @@
 /**
- * Startup domain randomization that perturbs `mjModel` rather than `mjData`, so there
- * is no `entity_write` for the tracer to capture and no graph needed — draw, combine
- * with the base, write back, once at startup from the seeded PRNG.
+ * Startup domain randomization that perturbs `mjModel` rather than `mjData`: no graph
+ * needed, just draw, combine with the base, and write back once from the seeded PRNG.
  *
- * Reproducing mjlab's `_randomize_model_field`: `add`/`scale` combine against the
- * *compiled default* (`ModelFieldDefaults`) rather than the live value, so events on
- * one axis do not accumulate; only targeted axes are written, so events on different
- * axes of one field compose; and a field that invalidates derived constants needs
- * `mj_setConst`, which the build flags with `set_const`.
+ * As mjlab's `_randomize_model_field` does, `add`/`scale` combine against the *compiled
+ * default* so events on one axis do not accumulate, only targeted axes are written so
+ * events on different axes compose, and a field the build flags with `set_const` needs
+ * an `mj_setConst` afterwards.
  */
 
 import type { SeededRng } from '../rng';

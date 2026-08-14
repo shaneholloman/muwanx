@@ -1,19 +1,15 @@
 /**
  * One graph for a whole observation group, replacing its terms with a single
- * `ort.run()`. A per-term graph is often one `Identity` node, so the fixed per-call
- * cost — the JS↔WASM crossing, marshalling, a promise round-trip — is the whole
- * expense, and a shared slot is marshalled twice.
+ * `ort.run()`. A per-term graph is often a single node, so the fixed per-call cost is
+ * the whole expense, and a shared slot gets marshalled twice.
  *
- * The build folded per-term clip/scale and the concatenation into the graph, so the
- * output *is* the group vector.
+ * The build folded per-term clip/scale and the concatenation in, so the output *is* the
+ * group vector. Native terms (`prev_action`, a generated command) are fed as graph
+ * inputs to keep it complete, with a `command` input's name bound at construction —
+ * unbound, it would arrive as a zero block inside the policy's input vector.
  *
- * Declared slots come from the `SlotReader`; native terms (`prev_action`, a generated
- * command) are fed as graph inputs so the output stays complete. A `command` input's
- * name is bound at construction, since an unbound one would arrive as a zero block
- * inside the policy's input vector.
- *
- * History stays out: a stateless graph cannot hold it, and mjlab stacks per term
- * *before* concatenating, so the build refuses to fuse a group that carries it.
+ * History stays out: a stateless graph cannot hold it, so the build refuses to fuse a
+ * group that carries any.
  */
 
 import { ObservationBase, type ObservationConfig } from './ObservationBase';

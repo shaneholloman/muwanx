@@ -129,14 +129,12 @@ def create_pt_onnx_export_context(
         wrapped_env.close()
         raise
 
-    # Extract core policy metadata from the action manager.
+    # Joint names, default positions, and encoder bias from the action manager.
     joint_names: list[str] = []
     default_joint_pos: list[float] = []
     encoder_bias: list[float] = []
 
     inner_env = wrapped_env.env if hasattr(wrapped_env, "env") else wrapped_env
-
-    # Joint names, default positions, and encoder bias from the action manager.
     action_mgr = getattr(inner_env, "action_manager", None)
     if action_mgr is not None:
         for term_name in action_mgr.active_terms:

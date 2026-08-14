@@ -41,11 +41,8 @@ from .utils import collect_spec_assets, name2id, to_zip_deflated
 def _build_uses_custom_js() -> bool:
     """Whether the current build embeds author-supplied TypeScript.
 
-    Walks the four ``_custom_registry`` dicts (observations / terminations /
-    events / commands) and returns True iff any registered sentinel has a
-    non-None ``ts_src``. Surfaced at the top of ``config.json`` so downstream
-    consumers (notably mjswan Cloud) can enforce a declarative-only policy
-    without inspecting the bundled engine. See ADR 0003.
+    Surfaced at the top of ``config.json`` so a consumer can enforce a
+    declarative-only policy without inspecting the bundled engine (ADR 0003).
     """
     from .command import _custom_registry as _command_registry
     from .envs.mdp.events import _custom_registry as _event_registry
@@ -158,16 +155,11 @@ def _point_env_cfg_at_bundled_motion(
 def _require_control_dt(scene: Any) -> float:
     """A scene's seconds-per-control-step, or fail naming the scene.
 
-    Raises rather than defaulting. The runtime used to derive this from a hardcoded
-    0.02 s, which happened to be right for the locomotion and manipulation tasks
-    (0.005 x 4) and wrong for Cartpole (0.01 x 5 = 0.05) — so both Cartpole variants
-    played 2.5x too fast, and nothing failed. A wrong control rate raises no error at
-    playback: the physics substep count, the command resample schedule and the
-    interval-event timers all just count in the wrong unit, and the result reads as a
-    policy that behaves badly.
+    Raises rather than defaulting, because a wrong rate raises no error at playback: the
+    substep count, resample schedule, and interval timers all just count in the wrong
+    unit, and it reads as a policy that behaves badly.
 
-    Only reached for a scene that carries a policy; a viewer-only scene has no rate to
-    get wrong.
+    Only reached for a scene carrying a policy; a viewer-only scene has no rate.
     """
     if scene.control_dt is None:
         raise ValueError(
@@ -346,9 +338,8 @@ class Builder:
             ProjectHandle for the created project.
         """
         project = self.add_project(name=project_name)
-        # `play` is forwarded unresolved: materialising the default here would make it
-        # indistinguishable from an explicit one, and `add_scene_mjlab` rejects `play`
-        # together with `env_cfg` — so every caller of this would trip that guard.
+        # `play` stays unresolved: `add_scene_mjlab` rejects it alongside `env_cfg`, so
+        # materialising the default here would trip that guard for every caller.
         scene = project.add_scene_mjlab(task_id, play=play, env_cfg=env_cfg)
         if run_path is not None:
             scene.add_policy_wandb(run_path, task_id=task_id)
@@ -582,14 +573,9 @@ class Builder:
     ) -> dict | None:
         """Assemble one policy's JSON config, tracing ONNX terms via the scene's env.
 
-        Returns ``None`` when ``policy.config_path`` is set but the file doesn't
-        exist (a warning is issued; nothing is written, matching prior
-        behaviour) or when the policy has nothing to serialize at all.
-
-        Unlike the pre-ADR-0005 code this replaces, a trace or config-parse
-        failure is **not** caught and silently downgraded to a raw file copy —
-        it propagates and fails the build (ADR 0005: "a term that fails to
-        trace fails the build loudly").
+        Returns ``None`` (with a warning) when ``policy.config_path`` names a file that
+        does not exist, or when the policy has nothing to serialize. A trace or parse
+        failure is not caught: it fails the build.
         """
         from ._onnx_build import (
             policy_native_sizes,
@@ -658,8 +644,7 @@ class Builder:
             data["default_joint_pos"] = policy.default_joint_pos
         if policy.encoder_bias:
             data["encoder_bias"] = policy.encoder_bias
-        # Not `if policy.clip_actions:` — 0.0 is a legal (degenerate) bound, and dropping
-        # it would silently unclamp the policy.
+        # Not `if policy.clip_actions:` — 0.0 is a legal bound, not "unset".
         if policy.clip_actions is not None:
             data["clip_actions"] = float(policy.clip_actions)
         if getattr(policy, "initial_qpos", None):
@@ -678,20 +663,18 @@ class Builder:
             native_sizes = policy_native_sizes(data, policy.commands)
             obs_config = data.get("observations", {})
             for key, group in policy.observations.items():
-                # Avoid overwriting existing groups
-                # (e.g. ONNX "policy" group from config_path)
+                # Never overwrite a group `config_path` already declared. The key names
+                # the fused graph too, so two groups cannot collide.
                 target_key = key
                 if target_key in obs_config:
                     target_key = f"{key}_monitor"
-                # `target_key` names the fused graph too, so two groups cannot collide.
                 obs_config[target_key] = serialize_observation_group(
                     group, env, scene_dir, target_key, native_sizes
                 )
             data["observations"] = obs_config
         if policy.actions:
-            # The term *set* is the Python one, but each term merges field-wise over the authored
-            # config, where a motor robot's PD gains live. `to_dict` omits unset fields, so a scene
-            # can tweak the offset without restating the gains.
+            # Merged field-wise over the authored config, where a motor robot's PD gains
+            # live, so a scene can tweak the offset without restating them.
             authored = data.get("actions", {})
             data["actions"] = {
                 name: {**authored.get(name, {}), **cfg.to_dict()}
@@ -777,11 +760,10 @@ class Builder:
                     build_frontend=build_frontend,
                 )
 
-            # Only the built SPA: everything the app needs lands in dist/, so dev scaffolding stays
-            # out by construction rather than by a cleanup pass.
+            # Only the built SPA, so dev scaffolding stays out by construction.
             built_dist = template_dir / "dist"
             if built_dist.is_dir():
-                # Dev-only artifacts vite emits into dist/: the E2E fixture and the build-cache key.
+                # Dev-only artifacts vite emits: the E2E fixture, the build-cache key.
                 spa_excludes = {"fixtures", ".mjswan-build-meta.json"}
                 for item in built_dist.iterdir():
                     if item.name in spa_excludes:
@@ -891,8 +873,8 @@ class Builder:
                         scene.model = None
                     gc.collect()
 
-                    # Before anything that needs the trace env: a tracking task's env cannot
-                    # be built until its clip is on disk, and the bundled copy is that file.
+                    # Before anything needing the trace env: a tracking task's env loads
+                    # its clip from disk, and the bundled copy is that file.
                     steps.on("bundling clips")
                     motion_files = _write_scene_motions(scene, scene_dir)
                     _point_env_cfg_at_bundled_motion(scene, scene_dir, motion_files)
