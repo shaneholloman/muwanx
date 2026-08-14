@@ -22,10 +22,12 @@ test:
 .PHONY: test-all
 test-all: check test
 
+# `--directory docs` because zensical resolves zensical.toml from the cwd; it also
+# resolves --with-requirements from there, hence the bare filename.
 .PHONY: docs-build
 docs-build:
-	uv run --with-requirements docs/requirements.txt mkdocs build -f docs/mkdocs.yml
+	uv run --with-requirements requirements.txt --directory docs zensical build
 
 .PHONY: docs-serve
 docs-serve:
-	uv run --with-requirements docs/requirements.txt mkdocs serve -f docs/mkdocs.yml
+	uv run --with-requirements requirements.txt --directory docs zensical serve

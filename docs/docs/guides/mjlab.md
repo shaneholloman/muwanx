@@ -4,7 +4,18 @@ icon: octicons/arrow-switch-16
 
 # Using mjlab
 
-[mjlab](https://github.com/mujocolab/mjlab){:target="_blank"} is a reinforcement learning framework built on top of MuJoCo. mjswan can visualize mjlab environments directly — there is no need to export or convert anything.
+[mjlab](https://github.com/mujocolab/mjlab){:target="_blank"} is a GPU-accelerated
+reinforcement learning framework built on MuJoCo Warp. mjswan can visualize mjlab tasks
+directly — there is no need to export or convert anything.
+
+An mjlab scene is not just a model: it carries the task's viewer, events, terrain, control
+rate, and — for any policy attached to it — the whole MDP layer. It also supplies the live
+environment that [ONNX tracing](how-it-works.md) needs, so everything on this page works
+without a single `set_trace_env` or `control_dt` of your own.
+
+!!! info "Install"
+    mjlab is a soft dependency: `pip install 'mjswan[examples]'`. It is needed at **build
+    time** only, and nothing about it ships to the browser.
 
 This page walks through three integration levels, from the one-line shortcut to the full manual form.
 
@@ -111,7 +122,7 @@ scene.add_policy_wandb(
 )
 ```
 
-mjswan adapts mjlab config classes automatically (mjlab is a soft dependency). `observations` also accepts the task's whole `env_cfg.observations` dict or a single group — see [Policy Config Format](../notes/policy-config.md), which explains why the key matters.
+mjswan adapts mjlab config classes automatically. `observations` also accepts the task's whole `env_cfg.observations` dict or a single group — see [MDP Terms](policy-config.md), which explains why the key matters.
 
 `add_policy_wandb` accepts a `list[str]` for the run path if you want to bundle checkpoints from multiple runs together. The latest checkpoint (highest training step) is marked as the default.
 
@@ -119,12 +130,13 @@ If you only want the exported `.onnx` artifact (skipping the `.pt → .onnx` con
 
 ## 3. Full manual form
 
-For maximum control — e.g. customising `env_cfg` before building the scene — fall back to mjlab's own `Scene` class and pass `spec` to `add_scene` directly:
+For a model-only viewer of an mjlab task — no policy, no MDP layer — you can go through
+mjlab's own `Scene` and hand the `MjSpec` to plain `add_scene`:
 
 ```python
+import mjswan
 from mjlab.scene import Scene
 from mjlab.tasks.registry import load_env_cfg
-import mjswan
 
 builder = mjswan.Builder()
 project = builder.add_project(name="mjlab Examples")
@@ -141,3 +153,27 @@ project.add_scene(
 
 builder.build().launch()
 ```
+
+!!! warning "This drops everything except the model"
+    A scene built this way has no task attached, so it gets no viewer config, no events, no
+    terrain spawning, no `control_dt`, and no tracing environment — and its policies inherit
+    no term-set defaults. To customise a task *and* keep all of that, edit the config and
+    pass it to `add_scene_mjlab(task_id, env_cfg=...)` as shown
+    [above](#editing-the-config-first). Reach for this form only when you genuinely want
+    just the geometry.
+
+## What an mjlab scene carries over
+
+| From the task | How it is used |
+|---|---|
+| `env_cfg.scene` | the MuJoCo spec, compiled and bundled as `scene.mjz` |
+| `env_cfg.observations` / `actions` / `commands` / `terminations` | defaults for every policy on the scene, [traced to ONNX](how-it-works.md) |
+| `env_cfg.events` | scene-scoped events; `reset_root_state_uniform` is swapped for a spawn on a random flat terrain patch, since the browser runs one env where mjlab trains many spread across the terrain |
+| `env_cfg.sim.timestep × decimation` | `control_dt` |
+| `env_cfg.viewer` | the initial camera |
+| terrain flat-patch table | baked spawn points |
+| the task's **runner** config | which observation group the actor reads, and `clip_actions` |
+| the live env | the tracing target for every term body |
+
+Rewards, curricula, metrics and recorders are training-only and simply ignored — mjswan is
+a playback tool, so they never reach the bundle.

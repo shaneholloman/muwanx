@@ -2,9 +2,10 @@
 icon: octicons/package-16
 ---
 
-# Core API
+# Python API
 
-This page documents every public symbol exported from the `mjswan` package.
+Every public symbol exported from the `mjswan` package. The TypeScript side is documented
+separately in the [Engine API](engine.md).
 
 ---
 
@@ -231,7 +232,7 @@ Attach an ONNX policy to the scene. `observations`, `commands`, `actions`, and `
 | `policy` | `onnx.ModelProto` | — | Loaded ONNX model (e.g. from `onnx.load("policy.onnx")`). |
 | `metadata` | `dict \| None` | `None` | Arbitrary key-value metadata. |
 | `source_path` | `str \| None` | `None` | Path to the source `.onnx` file. Written to `config.json` for reference. |
-| `config_path` | `str \| None` | `None` | Path to a JSON file describing observations / actions / etc. mjswan merges any Python-side `commands`/`observations`/`actions`/`terminations` into this file. See [Policy Config Format](../notes/policy-config.md). |
+| `config_path` | `str \| None` | `None` | Path to a JSON file describing observations / actions / etc. mjswan merges any Python-side `commands`/`observations`/`actions`/`terminations` into this file. See [Policy Config Format](../guides/policy-config.md). |
 | `env_cfg` | `Any \| None` | `None` | mjlab env config to take this policy's unset term sets from, instead of the scene's. Its control rate must match the scene's `control_dt`. |
 | `task_id` | `str \| None` | `None` | mjlab task id used to read the task's runner config (which observation group the actor reads, and `clip_actions`). Defaults to the scene's task. |
 | `observations` | `ObservationGroupCfg \| dict[str, ObservationGroupCfg] \| None` | `None` | A single observation group — mjlab's `env_cfg.observations["actor"]` — or a dict of them keyed by **ONNX input tensor name**. Prefer the single group: the key is an input name the runtime feeds, not a label, and a wrong one fails silently at playback. A `"critic"` group is dropped with a warning (only the actor is exported to ONNX). Accepts both mjswan and mjlab `ObservationGroupCfg` instances. |
@@ -351,9 +352,68 @@ Returns `self` for chaining.
 def set_events(events: Mapping[str, Any]) -> SceneHandle
 ```
 
-Set scene-level reset events. Accepts a dict of `EventTermCfg` instances (mjswan or mjlab). Only events with `mode="reset"` are forwarded to the browser runtime.
+Set scene-level events. Accepts a dict of `EventTermCfg` instances (mjswan or mjlab). All
+three modes are supported: `"startup"` fires once at scene load, `"interval"` on a
+countdown timer, `"reset"` on episode reset. Events are scene-scoped — the runtime keeps one
+event manager per scene across policy switches.
+
+Equivalent to `add_scene(events=...)`.
 
 Returns `self` for chaining.
+
+### SceneHandle.set_trace_env
+
+```python
+def set_trace_env(env: Any) -> SceneHandle
+```
+
+Set the live environment that ONNX tracing runs the scene's term bodies against.
+
+Required for a plain [`add_scene`](#projecthandleadd_scene) scene whose policies carry
+observation or termination terms — without it, the build raises. An
+[`add_scene_mjlab`](#projecthandleadd_scene_mjlab) scene builds its own at build time;
+setting one here pre-empts that.
+
+The env only has to satisfy `env.scene[name].data.<field>` plus the entity write methods
+for write-side terms. [`build_single_entity_trace_env`](#build_single_entity_trace_env)
+builds a minimal one from a model spec.
+
+Returns `self` for chaining.
+
+---
+
+## build_single_entity_trace_env
+
+```python
+mjswan.build_single_entity_trace_env(
+    spec_fn: Callable[[], mujoco.MjSpec],
+    *,
+    entity_name: str = "robot",
+    device: str = "cpu",
+    zero_geom_margins: bool = True,
+    commands: dict[str, Any] | None = None,
+) -> Any
+```
+
+Build a minimal single-entity mjlab environment for ONNX tracing, out of mjlab's own
+`Entity` and `Scene` rather than reimplemented kinematics. It configures no managers and is
+never stepped — it is only the tracer's read/write target. Returns it already `reset()`;
+pass it to [`SceneHandle.set_trace_env`](#scenehandleset_trace_env).
+
+**Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `spec_fn` | `Callable[[], MjSpec]` | — | Zero-argument callable returning a **fresh** `MjSpec` (mjlab's `EntityCfg.spec_fn` contract, so it must not share mutable state). |
+| `entity_name` | `str` | `"robot"` | Must match whatever the traced functions use as `asset_cfg.name`. |
+| `device` | `str` | `"cpu"` | Torch device for the entity's tensors. |
+| `zero_geom_margins` | `bool` | `True` | Zero every geom's contact margin before compiling, which mujoco_warp's collision backend requires of some robot XMLs. Safe here since nothing is simulated. |
+| `commands` | `dict[str, Any] \| None` | `None` | Trace-time stand-ins for commands the browser owns — a `ui_command` has no Python side, so a term doing arithmetic on its value needs a shape to trace against. |
+
+Joint defaults come from the model's first keyframe, matching what the browser resets to,
+so a `*_rel` observation subtracts the same pose on both sides.
+
+**Requires** `mjlab` and `torch` (build-time only).
 
 ### SceneHandle.set_metadata
 
@@ -395,6 +455,22 @@ def add_motion(
 
 Attach a bundled `.npz` reference motion to the policy (used by motion-tracking policies).
 
+**Parameters** (all keyword-only)
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | — | Display name, and the bundled filename stem. Two clips with the same name but different content get a `_1` / `_2` suffix. |
+| `source` | `str` | — | Path to a local `.npz`, copied into `dist/` at build time. |
+| `fps` | `float` | `50.0` | Frame rate of the clip. |
+| `anchor_body_name` | `str` | — | Body the reference trajectory is anchored to. Required. |
+| `body_names` | `tuple[str, ...] \| list[str]` | — | Bodies in the MuJoCo model the dataset's bodies correspond to. Required. |
+| `dataset_joint_names` | `list[str] \| None` | `None` | Joint order in the dataset. Defaults to the policy's `policy_joint_names`. |
+| `default` | `bool` | `False` | Select this motion on load. |
+| `loop` | `bool` | `True` | Restart the clip when it ends. |
+
+Each distinct clip is written once per scene and shared by every policy that uses it, so
+the checkpoints of one run do not each get a copy.
+
 **Returns** — `MotionHandle`
 
 ### PolicyHandle.add_motion_wandb
@@ -416,9 +492,17 @@ def add_motion_wandb(
 ) -> MotionHandle
 ```
 
-Download a motion `.npz` artifact from a W&B run and attach it to the policy. Supply either `run_path="entity/project/run_id"` or the three pieces separately.
+Download a motion `.npz` artifact from a W&B run and attach it to the policy. Supply either
+`run_path="entity/project/run_id"` or `run_id` / `entity` / `project` separately. `name`
+defaults to the artifact's own name; every other parameter behaves as on
+[`add_motion`](#policyhandleadd_motion).
 
 **Returns** — `MotionHandle`
+
+!!! tip "You usually don't need this for an mjlab tracking task"
+    [`add_policy_wandb`](#scenehandleadd_policy_wandb) fetches the run's clip, bundles it,
+    and points mjlab's empty `commands["motion"].motion_file` at it. See
+    [Using mjlab → Tracking tasks](../guides/mjlab.md#tracking-tasks).
 
 ### PolicyHandle.set_metadata
 
@@ -554,6 +638,7 @@ mjswan.Slider(
     default: float = 0.0,
     step: float = 0.01,
     enabled_when: str | None = None,
+    adjustable_range: SliderRangeConfig | None = None,
 )
 ```
 
@@ -567,6 +652,25 @@ Continuous range slider.
 | `default` | Initial value. |
 | `step` | Slider increment. |
 | `enabled_when` | Optional sibling input name that enables this slider (greys it out when the named input is off). |
+| `adjustable_range` | Optional [`SliderRangeConfig`](#sliderrangeconfig) companion slider that rescales this slider's drag range. |
+
+### SliderRangeConfig
+
+```python
+mjswan.SliderRangeConfig(
+    range: tuple[float, float] = (0.0, 2.0),
+    default: float = 1.0,
+    step: float = 0.05,
+    label: str | None = None,  # defaults browser-side to "Max <label>"
+)
+```
+
+Bounds for the companion "Max &lt;label&gt;" slider a `Slider` can declare via
+`adjustable_range`. The control panel renders it beside the value slider and clamps the
+value slider's displayed range to `[-value, value]`, mirroring mjlab's own play GUI.
+
+Purely presentational: it carries no command id, so nothing about it reaches the policy.
+Assumes symmetry around zero, which matches the three velocity axes it exists for.
 
 ### Button
 
@@ -611,6 +715,7 @@ scene.add_policy(name="PD", policy=model, commands={"target": target_cmd})
 
 ```python
 mjswan.velocity_command(
+    *,
     lin_vel_x: tuple[float, float] = (-1.0, 1.0),
     lin_vel_y: tuple[float, float] = (-0.5, 0.5),
     ang_vel_z: tuple[float, float] = (-1.0, 1.0),
@@ -649,6 +754,44 @@ Two things to register:
 
 A term that fails to trace and has neither of these fails the build, with a message naming both options. It is never silently dropped — a missing observation shortens the vector the policy was trained on, and a missing termination or event leaves the browser without a reset condition the task is configured to have.
 
+Three event terms are exempt, because there is provably nothing for the browser to write:
+`randomize_terrain` (one baked terrain, one origin), `encoder_bias` (the runtime applies it
+from the policy config), and a root-state write onto a **fixed-base** entity (which cannot
+move in mjlab either — mjlab's manipulation tasks configure `reset_base` on their arms
+regardless). Startup randomization that perturbs `mjModel` rather than `mjData` — geom
+friction, body COM, geom colors — needs no graph either: the build emits a descriptor and
+the browser applies it once from the seeded PRNG.
+
+See [How the Build Works](../guides/how-it-works.md#a-term-cannot-be-traced) for the
+decision procedure.
+
+---
+
+## Deprecated pre-0.8 names
+
+These aliases still work and warn (class aliases silently), and are scheduled for removal
+in **0.9**.
+
+| Pre-0.8 | Current |
+|---|---|
+| `ProjectHandle.add_mjlab_scene` | [`add_scene_mjlab`](#projecthandleadd_scene_mjlab) |
+| `SceneHandle.add_policy_from_wandb` | [`add_policy_wandb`](#scenehandleadd_policy_wandb) |
+| `SceneHandle.set_viewer_config` | [`set_viewer`](#scenehandleset_viewer) |
+| `SceneHandle.add_splat_section` | [`enable_splat_section`](#scenehandleenable_splat_section) |
+| `mjswanApp` | [`MjswanApp`](#mjswanapp) |
+| `register_obs_func` | [`register_observation`](#mdp-extension-registries) |
+| `register_termination_func` | [`register_termination`](#mdp-extension-registries) |
+| `register_event_func` | [`register_event`](#mdp-extension-registries) |
+| `register_command_term` | [`register_command`](#register_command) |
+| `ObsBinding`, `ObsFunc` | `ObservationBinding` |
+| `TermBinding`, `TermFunc` | `TerminationBinding` |
+| `EventFunc` | `EventBinding` |
+| `MjlabMdpBinding` | `MdpBinding` |
+| `CommandTermSpec` | `CommandBinding` |
+
+Two renamed modules keep their old import paths as well: `mjswan.viewer_config` →
+`mjswan.viewer`, and `mjswan.wandb_utils` → `mjswan.wandb_io`.
+
 ---
 
 ## MjswanApp
@@ -682,6 +825,115 @@ The server automatically sets `Cross-Origin-Opener-Policy: same-origin` and `Cro
 
 Blocks until interrupted with `Ctrl-C`.
 
+### MjswanApp.publish
+
+```python
+def publish(
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+    token: str | None = None,
+    api_base: str | None = None,
+) -> PublishResult
+```
+
+Upload this build's data files to [mjswan Cloud](../guides/publishing.md) and return the
+result, whose `id` gives the hosted page URL. Only data files travel — `config.json`, the
+scene/policy/motion/splat assets and traced graphs — never the compiled JavaScript.
+
+**Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `title` | `str \| None` | first project's name | Simulation title. |
+| `description` | `str \| None` | `None` | Optional description. |
+| `tags` | `list[str] \| None` | `None` | Optional tags. |
+| `token` | `str \| None` | `$MJSWAN_TOKEN` | Access token. |
+| `api_base` | `str \| None` | `$MJSWAN_API_BASE`, then `https://api.mjswan.com` | Cloud API base URL. |
+
+**Raises** — `mjswan.publish.PublishError` on validation failure or server rejection,
+including a build that uses custom-JavaScript MDP terms (`uses_custom_js: true`), which
+Cloud cannot render.
+
+Limits: 50 MB per file, 200 MB total, 64 files.
+
+---
+
+## Action term configs
+
+`mjswan.envs.mdp.actions` mirrors `mjlab.envs.mdp.actions`, so the import pattern
+translates directly. Action is the one manager that is **not** traced to ONNX — it is a
+closed set implemented natively in TypeScript, because it runs once per physics substep.
+
+```python
+from mjswan.envs.mdp.actions import JointPositionActionCfg
+```
+
+| Class | Status |
+|---|---|
+| `JointPositionActionCfg` | Supported. Adds `use_default_offset`, `stiffness`, `damping`. |
+| `JointEffortActionCfg` | Supported. Adds `stiffness`, `damping`. |
+| `MuscleActivationActionCfg` | Supported. Adds `normalize` (default `True`). |
+| `JointVelocityActionCfg` | Raises `NotImplementedError` at build time. |
+| `TendonLengthActionCfg`, `TendonVelocityActionCfg`, `TendonEffortActionCfg` | Raise `NotImplementedError` at build time. |
+| `SiteEffortActionCfg` | Raises `NotImplementedError` at build time. |
+
+The unsupported classes are exported so an mjlab config imports cleanly; the failure is at
+build time, not import time.
+
+Common `BaseActionCfg` fields: `entity_name`, `actuator_names` (regex patterns, default
+`(".*",)`), `scale`, `offset`, `clip` (a `{pattern: (min, max)}` dict), `preserve_order`.
+
+`stiffness` / `damping` are mjswan-specific — the browser computes PD externally for motor
+actuators with `biastype=none`. Each accepts a scalar, a per-joint list aligned with
+`policy_joint_names`, or a dict keyed by joint name. See
+[MDP Terms → Actions](../guides/policy-config.md#actions).
+
+---
+
+## Observation and termination configs
+
+```python
+from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
+from mjswan.managers.termination_manager import TerminationTermCfg
+```
+
+API-compatible with their mjlab counterparts, so an mjlab config assigns straight across.
+
+### ObservationTermCfg
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `func` | `Callable \| ObservationBinding` | — | The term body. Any traceable `func(env, **params) -> Tensor` — including mjlab's own — or a binding naming a hand-written TypeScript class. |
+| `params` | `dict` | `{}` | Forwarded at trace time. `SceneEntityCfg` patterns resolve to static indices baked into the graph. |
+| `scale` | `float \| tuple \| None` | `None` | Element-wise scale, applied after `clip`. |
+| `clip` | `tuple[float, float] \| None` | `None` | Applied before `scale`, matching mjlab's order. |
+| `history_length` | `int` | `0` | Frames to stack. `0` = current frame only. |
+| `history_steps` | `tuple[int, ...] \| None` | `None` | Sparse look-back offsets instead of every frame — `(0, 1, 2, 4, 8, 16)` reaches 17 frames back with 6 values. Takes precedence over `history_length`. |
+| `history_interleaved` | `bool` | `False` | Isaac-style joint-major layout instead of frame-major. |
+
+`noise`, `delay_*`, and `flatten_history_dim` are accepted for mjlab compatibility and
+ignored — there is no training in the browser.
+
+### ObservationGroupCfg
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `terms` | `dict[str, ObservationTermCfg]` | `{}` | Concatenated in declaration order. |
+| `history_length` | `int \| None` | `None` | Group-level override applied to every term. |
+
+`concatenate_terms`, `enable_corruption`, and `flatten_history_dim` are accepted and
+ignored.
+
+### TerminationTermCfg
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `func` | `Callable \| TerminationBinding` | — | The term body. `time_out` is classified native automatically — it reads no time-varying state. |
+| `params` | `dict` | `{}` | Forwarded at trace time. |
+| `time_out` | `bool` | `False` | Marks this as a truncation rather than a terminal failure. |
+
 ---
 
 ## Output structure
@@ -705,11 +957,19 @@ dist/
     ├── manifest.json
     └── assets/
         └── <scene-id>/
-            ├── scene.mjz    ← or scene.mjb (depending on add_scene argument)
-            ├── <policy-id>.onnx
+            ├── scene.mjz          ← or scene.mjb (depending on add_scene argument)
+            ├── <policy-id>.onnx   ← the trained network
             ├── <policy-id>.json   ← present when config_path / commands / observations / actions / terminations are set
-            ├── <motion-id>.npz       ← one per distinct clip in the scene, shared by its policies
+            ├── obs/<group>.onnx   ← traced observation group (usually fused into one graph)
+            ├── term/<name>.onnx   ← traced termination bodies
+            ├── command/<name>.onnx
+            ├── event/<name>.onnx  ← scene-scoped, referenced from config.json
+            ├── <motion-id>.npz    ← one per distinct clip in the scene, shared by its policies
             └── <splat-id>.spz     ← only when source= is used
 ```
 
 Copy `dist/` to any static host (GitHub Pages, Netlify, S3, …) and it works without a server.
+
+`obs/`, `term/` and `command/` are referenced from `<policy-id>.json`; `event/` from
+`config.json`, since events are scene-scoped. See
+[How the Build Works](../guides/how-it-works.md#artifact-layout).

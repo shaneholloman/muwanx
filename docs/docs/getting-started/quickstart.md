@@ -56,11 +56,38 @@ mjswan will:
 
 You should see an interactive 3D view of a green box falling onto a red plane. Click and drag to orbit the camera. Press `Ctrl-C` in the terminal to stop the server.
 
-<!-- MEDIA: suggest a screenshot of the browser showing the falling-box scene with camera orbit controls visible -->
+!!! tip "Even shorter, for a model you already have"
+    ```bash
+    mjswan view robot/scene.xml     # build + launch a viewer, nothing to write
+    mjswan new my-app               # scaffold a project (--template hello-world|policy|mjlab)
+    ```
 
 ## Next steps
 
-- [Core Concepts](core-concepts.md) — understand the Builder → Project → Scene → Policy hierarchy
-- [Examples](examples.md) — copy-paste patterns for policies, multiple projects, and more
-- [CLI](cli.md) — the `mjswan` command: `view`, `serve`, `new`, `demo`, `info`
-- [Deployment](../guides/deployment.md) — host your app on GitHub Pages or Netlify
+<div class="grid cards" markdown>
+
+-   :octicons-light-bulb-16:{ .lg .middle } __[Core Concepts](core-concepts.md)__
+
+    ---
+
+    Builder → Project → Scene → Policy, and what each level owns
+
+-   :octicons-code-16:{ .lg .middle } __[Examples](examples.md)__
+
+    ---
+
+    Copy-paste patterns: policies, splats, multiple projects, headless builds
+
+-   :octicons-arrow-switch-16:{ .lg .middle } __[Using mjlab](../guides/mjlab.md)__
+
+    ---
+
+    Add a trained policy — one line if you trained with mjlab
+
+-   :octicons-rocket-16:{ .lg .middle } __[Deployment](../guides/deployment.md)__
+
+    ---
+
+    Ship it: GitHub Pages, Netlify, or [mjswan Cloud](../guides/publishing.md)
+
+</div>

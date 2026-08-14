@@ -2,6 +2,11 @@
 
 Extracts the MuJoCo model from each mjlab default task and visualizes them
 in the browser using mjswan.
+
+The cartpole tasks look choppier than the rest: mjlab gives them control_dt=0.05
+(timestep 0.01 x decimation 5) against 0.02 elsewhere, and both mjlab's viewer and
+mjswan sample render state once per control step, so their 100 Hz physics substeps
+never reach a frame. Playback is still 1x real time.
 """
 
 from __future__ import annotations

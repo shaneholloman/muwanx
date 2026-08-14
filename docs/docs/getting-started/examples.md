@@ -47,24 +47,76 @@ project.add_scene(
 builder.build().launch()
 ```
 
+## An mjlab task with its trained checkpoints
+
+The shortest path to a policy in a browser, if you trained with
+[mjlab](../guides/mjlab.md). Every `model_*.pt` checkpoint in the W&B run is fetched,
+converted to ONNX, and attached; observations, actions, commands, terminations and the
+control rate all come from the task.
+
+```python
+import mjswan
+
+app = mjswan.Builder.from_mjlab(
+    "Mjlab-Velocity-Flat-Unitree-G1",
+    run_path="<entity>/<project>/<run_id>",
+).build()
+app.launch()
+```
+
 ## Policy with velocity command sliders
 
 ```python
 import mujoco
 import onnx
+
 import mjswan
+from mjlab.envs.mdp import observations as obs_fns
+from mjswan.envs.mdp.actions import JointPositionActionCfg
+from mjswan.managers.observation_manager import (
+    ObservationGroupCfg,
+    ObservationTermCfg,
+)
+from mjswan.trace_env import build_single_entity_trace_env
+
+
+def build_spec() -> mujoco.MjSpec:
+    return mujoco.MjSpec.from_file("robot/scene.xml")
+
 
 builder = mjswan.Builder()
 project = builder.add_project(name="Robot")
 
 scene = project.add_scene(
-    spec=mujoco.MjSpec.from_file("robot/scene.xml"),
+    spec=build_spec(),
     name="G1",
+    control_dt=0.02,  # 50 Hz — required once a scene carries a policy
 )
+scene.set_trace_env(build_single_entity_trace_env(build_spec))
+
 scene.add_policy(
     name="Locomotion",
     policy=onnx.load("robot/locomotion.onnx"),
-    config_path="robot/locomotion.json",
+    policy_joint_names=JOINTS,
+    default_joint_pos=DEFAULT_POSE,
+    observations=ObservationGroupCfg(
+        terms={
+            "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
+            "projected_gravity": ObservationTermCfg(func=obs_fns.projected_gravity),
+            "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+            "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel, scale=0.05),
+            "last_action": ObservationTermCfg(func=obs_fns.last_action),
+            "velocity_cmd": ObservationTermCfg(
+                func=obs_fns.generated_commands,
+                params={"command_name": "velocity"},
+            ),
+        }
+    ),
+    actions={
+        "joint_pos": JointPositionActionCfg(
+            actuator_names=(".*",), scale=0.25, use_default_offset=True
+        )
+    },
     commands={
         "velocity": mjswan.velocity_command(
             lin_vel_x=(-1.5, 1.5),
@@ -77,58 +129,63 @@ scene.add_policy(
 builder.build().launch()
 ```
 
-`config_path` points to a JSON file describing the observation and action convention. See [Policy Config Format](../notes/policy-config.md) for the schema.
+The observation terms are mjlab's own functions; mjswan traces them to ONNX at build time,
+so `mjlab` and `torch` must be installed. `set_trace_env` gives the tracer a live
+environment to read shapes from — an [mjlab scene](../guides/mjlab.md) builds one itself.
+See [MDP Terms](../guides/policy-config.md).
 
 ## Multiple policies on one scene
 
 ```python
-scene = project.add_scene(spec=spec, name="Go2")
+scene = project.add_scene(spec=spec, name="Go2", control_dt=0.02)
+scene.set_trace_env(build_single_entity_trace_env(build_spec))
 
-scene.add_policy(
-    name="Policy A",
-    policy=onnx.load("policy_a.onnx"),
-    config_path="policy_a.json",
-    commands={"velocity": mjswan.velocity_command()},
-)
-
-scene.add_policy(
-    name="Policy B",
-    policy=onnx.load("policy_b.onnx"),
-    config_path="policy_b.json",
-    commands={"velocity": mjswan.velocity_command()},
-)
+for name, path in [("Policy A", "policy_a.onnx"), ("Policy B", "policy_b.onnx")]:
+    scene.add_policy(
+        name=name,
+        policy=onnx.load(path),
+        policy_joint_names=JOINTS,
+        observations=obs,
+        actions=actions,
+        commands={"velocity": mjswan.velocity_command()},
+    )
 ```
 
-The browser UI shows a selector for choosing between policies at runtime.
+The browser UI shows a selector for choosing between policies at runtime. Pass
+`default=True` to pick which one loads first.
 
 ## Custom command inputs
 
-Pass a `commands={...}` dict to `add_policy()`. Each value is a `CommandTermConfig` built with `mjswan.ui_command([...])` (manual UI) or `mjswan.velocity_command(...)` (locomotion shortcut).
+Each value in `commands={...}` is a `CommandTermConfig` built with
+`mjswan.ui_command([...])` (manual UI) or `mjswan.velocity_command(...)` (the locomotion
+shortcut). An observation reads it by the dict key:
+`params={"command_name": "target"}`.
 
 ```python
 scene.add_policy(
-    name="Locomotion",
-    policy=onnx.load("robot/locomotion.onnx"),
-    config_path="robot/locomotion.json",
+    name="PD Hover",
+    policy=onnx.load("hover.onnx"),
+    policy_joint_names=["lift"],
+    observations=obs,
     commands={
-        "velocity": mjswan.ui_command(
+        "target": mjswan.ui_command(
             [
                 mjswan.Slider(
-                    "lin_vel_x", "Forward", range=(-2.0, 2.0), default=0.5, step=0.05
+                    "target_height",
+                    "Target Height (m)",
+                    range=(0.3, 1.8),
+                    default=1.0,
+                    step=0.05,
                 ),
-                mjswan.Slider(
-                    "lin_vel_y", "Lateral", range=(-0.5, 0.5), default=0.0, step=0.05
-                ),
-                mjswan.Slider(
-                    "ang_vel_z", "Yaw Rate", range=(-1.0, 1.0), default=0.0, step=0.05
-                ),
+                mjswan.Checkbox("hold", "Hold Position", default=False),
+                mjswan.Button("recenter", "Recenter"),
             ]
         ),
     },
 )
 ```
 
-See [examples/tutorial/minimum_policy.py](https://github.com/ttktjmt/mjswan/blob/main/examples/tutorial/minimum_policy.py){:target="_blank"} for a full example that builds a policy plus its observation / action / command config entirely from Python — no `config_path` required.
+See [examples/tutorial/minimum_policy.py](https://github.com/ttktjmt/mjswan/blob/main/examples/tutorial/minimum_policy.py){:target="_blank"} for a complete runnable version — a hand-built two-node ONNX policy, one self-authored observation, and a slider, in one file.
 
 ## Multiple projects
 
@@ -217,19 +274,44 @@ scene.add_splat(
 )
 ```
 
-## Headless build (no browser)
+## Headless build (CI-friendly)
+
+`build()` writes `dist/` and returns; `launch()` is the blocking part. Gate it on an
+environment variable so the same script works locally and in CI — the convention the
+bundled examples follow:
 
 ```python
 import os
 
 app = builder.build()
-# dist/ is ready; app.launch() is not called
+if not os.environ.get("MJSWAN_NO_LAUNCH"):
+    app.launch()
 ```
-
-Or without modifying the script:
 
 ```bash
-python build.py
+MJSWAN_NO_LAUNCH=1 MJSWAN_BASE_PATH=/myrepo/ python build.py
 ```
 
-See [Deployment](../guides/deployment.md) for GitHub Pages and CI/CD setup.
+See [Deployment](../guides/deployment.md) for GitHub Pages and CI/CD setup, or
+[Publishing to Cloud](../guides/publishing.md) to skip hosting entirely.
+
+## Setting the camera
+
+```python
+scene.set_viewer(
+    mjswan.ViewerConfig(
+        lookat=(0.0, 0.0, 1.0),
+        distance=3.5,
+        elevation=-30.0,
+        azimuth=45.0,
+        origin_type=mjswan.ViewerConfig.OriginType.WORLD,  # or AUTO / ASSET_ROOT / ASSET_BODY
+    )
+)
+
+# Or from an explicit camera position, letting mjswan compute the spherical params:
+scene.set_viewer(mjswan.ViewerConfig.from_position((2.0, 2.0, 1.5), target=(0, 0, 0.8)))
+```
+
+`origin_type` decides what the camera tracks: `WORLD` pins it, `ASSET_ROOT` follows the
+robot's root, `ASSET_BODY` follows the body named by `body_name`, and `AUTO` picks based on
+the scene.
