@@ -3,15 +3,13 @@ import react from '@vitejs/plugin-react';
 import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
 import path from 'path';
 import fs from 'fs';
+import { minify } from './vite.shared';
 
 // Library build: emits a single self-contained ESM (`dist/mjswan.js`) exposing
 // `createEngine(element, options?)` (the headless engine; no React/Mantine),
 // with every dependency bundled and the MuJoCo / ONNX WASM co-located flat in
 // `dist/` so they resolve relative to the bundle on a public CDN (jsDelivr).
 // See src/engine/ and docs/adr/0004-headless-engine-core.md.
-
-// Set MJSWAN_DEBUG=1 to keep console/debugger statements.
-const isDebug = process.env.MJSWAN_DEBUG === '1';
 
 function getOrtCdnBase(): string {
   // Bake the installed ort version into the bundle so OnnxModule.ts can redirect
@@ -148,13 +146,6 @@ function cssInjectedByJsPlugin(): Plugin {
     },
   };
 }
-
-/**
- * Console stripping, as `Builder(debug=...)` promises. A minifier option, not
- * `esbuild: { drop: [...] }`: Vite 8 is rolldown-based and ignores the deprecated
- * `esbuild` option, which shipped every `console.*` while looking handled.
- */
-const minify = isDebug ? true : { compress: { dropConsole: true, dropDebugger: true } };
 
 export default defineConfig({
   plugins: [

@@ -482,7 +482,7 @@ def serialize_termination(
 ) -> dict[str, Any] | None:
     """Serialize one termination term."""
     from .compile import trace_term
-    from .compile.tracer import slots_json
+    from .compile.tracer import ConstantTerm, slots_json
 
     func = term_cfg.func
     if isinstance(func, TerminationBinding):
@@ -493,20 +493,13 @@ def serialize_termination(
         export = trace_term(
             func, _resolved_params(term_cfg.params, env), env, name=name
         )
-    except ValueError:
-        # No time-varying state read, as with `time_out`; the threshold rides along.
-        entry: dict[str, Any] = {
-            "name": name,
-            "native": "elapsed_s >= episode_length_s",
-            "episode_length_s": float(getattr(env, "max_episode_length_s", 0.0)),
-        }
-        if term_cfg.time_out:
-            entry["time_out"] = True
-        return entry
+    except ConstantTerm:
+        # Narrow: `UntraceableTerm` is a ValueError too, and must fail the build.
+        return _native_termination_entry(name, term_cfg, env)
 
     ref = _onnx_ref("term", name)
     _write_onnx(out_dir, ref, export.onnx_bytes)
-    entry = {
+    entry: dict[str, Any] = {
         "name": name,
         "onnx": ref,
         "input_slots": slots_json(export),

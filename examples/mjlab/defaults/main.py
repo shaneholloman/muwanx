@@ -25,14 +25,15 @@ if __name__ == "__main__" and __package__ is None:
 from . import commands  # noqa: F401 - for command registrations
 from .terminations import register_custom_terminations
 
+# NOTE: Replace these with your own WandB entity and project.
 ENTITY = "ttktjmt-org"
 PROJECT = "mjlab"
 TASK_RUN_ID_MAP: dict[str, str | list[str]] = {
+    "Mjlab-Velocity-Flat-Unitree-G1": "vel-flat-g1",
+    "Mjlab-Velocity-Flat-Unitree-Go1": "vel-flat-go1-v3",
     "Mjlab-Cartpole-Balance": "cartpole-balance-v2",
     "Mjlab-Cartpole-Swingup": "cartpole-swingup",
     "Mjlab-Lift-Cube-Yam": "ajfybu8m",
-    "Mjlab-Velocity-Flat-Unitree-G1": "vel-flat-g1",
-    "Mjlab-Velocity-Flat-Unitree-Go1": "vel-flat-go1-v3",
     "Mjlab-Velocity-Rough-Unitree-G1": ["mowqlkd5", "sif72y3p", "rsb8tc3g", "7veqaznf"],
     "Mjlab-Velocity-Rough-Unitree-Go1": ["basgo8hx", "ad4peite"],
 }
@@ -99,8 +100,6 @@ def main():
     for task_id, wandb_run_id in TASK_RUN_ID_MAP.items():
         env_cfg = load_env_cfg(task_id, play=True)
         register_custom_terminations(env_cfg)
-        # The injection above edits this config, so the scene has to build from the same
-        # object — `load_env_cfg` returns a deepcopy, and a second call would diverge.
         scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
         if viewer_cfg := TASK_VIEWER_CONFIG_MAP.get(task_id):
             scene.set_viewer(viewer_cfg)

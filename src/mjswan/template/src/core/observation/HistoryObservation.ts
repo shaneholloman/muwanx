@@ -13,6 +13,17 @@ import { ObservationBase, type ObservationConfig } from './ObservationBase';
 import type { PolicyState } from '../policy/types';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 
+/** Write `frame` element-major at slot `index` of `count`: `[a_t, a_{t-1}, …, b_t, …]`. */
+export function writeInterleavedFrame(
+  out: Float32Array,
+  frame: Float32Array,
+  width: number,
+  index: number,
+  count: number,
+): void {
+  for (let j = 0; j < width; j++) out[j * count + index] = frame[j];
+}
+
 /** Offsets a term's history is sampled at, or null when it keeps no history. */
 export function historyOffsets(entry: ObservationConfig): number[] | null {
   const sparse = (entry as { history_offsets?: unknown }).history_offsets;
@@ -91,7 +102,7 @@ export class HistoryObservation extends ObservationBase {
       const frame = this.frames[Math.min(this.offsets[i], this.frames.length - 1)];
       if (!frame) continue;
       if (this.interleaved) {
-        for (let j = 0; j < width; j++) out[j * this.offsets.length + i] = frame[j];
+        writeInterleavedFrame(out, frame, width, i, this.offsets.length);
       } else {
         out.set(frame.subarray(0, width), i * width);
       }

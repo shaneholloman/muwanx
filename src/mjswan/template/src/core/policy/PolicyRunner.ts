@@ -4,7 +4,11 @@ import {
   isFusedObservationConfig,
   type FusedObservationConfig,
 } from '../observation/FusedObservation';
-import { HistoryObservation, historyOffsets } from '../observation/HistoryObservation';
+import {
+  HistoryObservation,
+  historyOffsets,
+  writeInterleavedFrame,
+} from '../observation/HistoryObservation';
 import {
   NativeObservation,
   isNativeObservationConfig,
@@ -23,6 +27,25 @@ import type {
   PolicyRunnerContext,
   PolicyState,
 } from './types';
+
+/** A frame-major stack re-laid element-major, as `history_interleaved` asks for. */
+function interleaveStack(
+  buffer: Float32Array,
+  width: number,
+  steps: number,
+): Float32Array {
+  const out = new Float32Array(buffer.length);
+  for (let i = 0; i < steps; i++) {
+    writeInterleavedFrame(
+      out,
+      buffer.subarray(i * width, (i + 1) * width),
+      width,
+      i,
+      steps,
+    );
+  }
+  return out;
+}
 
 export type PolicyModuleConstructor = new (config: PolicyConfig) => PolicyModule;
 export type ObservationConstructor = new (
@@ -144,7 +167,10 @@ export class PolicyRunner {
           }
           buffer.set(frame, 0);
         }
-        outputs[key] = new Float32Array(buffer);
+        // The buffer is frame-major either way; interleaving is an output layout.
+        outputs[key] = history.interleaved
+          ? interleaveStack(buffer, frame.length, history.steps)
+          : new Float32Array(buffer);
       } else {
         outputs[key] = await this.buildFrame(obsList, state);
       }

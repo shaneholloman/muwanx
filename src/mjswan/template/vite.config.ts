@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
 import path from 'path';
 import fs from 'fs';
+import { minify } from './vite.shared';
 
 // Extract version from Python package (source of truth)
 function getVersionFromPython(): string {
@@ -22,7 +23,6 @@ function getVersionFromPython(): string {
 }
 
 const isMt = process.env.MJSWAN_MT === '1';
-const isDebug = process.env.MJSWAN_DEBUG === '1';
 const coiSwPath = path.resolve(__dirname, '_mt/coi-serviceworker.js');
 
 function mtPlugin(enabled: boolean): Plugin | null {
@@ -87,13 +87,6 @@ function gtmPlugin(gtmId: string | undefined) {
     },
   };
 }
-
-/**
- * Console stripping, as `Builder(debug=...)` promises. A minifier option, not
- * `esbuild: { drop: [...] }`: Vite 8 is rolldown-based and ignores the deprecated
- * `esbuild` option, which shipped every `console.*` while looking handled.
- */
-const minify = isDebug ? true : { compress: { dropConsole: true, dropDebugger: true } };
 
 export default defineConfig({
   plugins: [react(), vanillaExtractPlugin(), mtPlugin(isMt), gtmPlugin(process.env.MJSWAN_GTM_ID)],

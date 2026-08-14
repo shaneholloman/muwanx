@@ -4,16 +4,23 @@ name: onnx parity
 # term must reproduce its live mjlab output, every step. The default `test` job
 # cannot carry it — it installs only the `dev` extra and runs `-m "not slow"`, so
 # every parity test is skipped there. This job installs the `examples` extras
-# (mjlab / torch / onnxruntime, ~2 GB) and compiles warp's CPU kernels once, which
-# is why it is not on the per-PR path.
+# (mjlab / torch / onnxruntime, ~2 GB) and compiles warp's CPU kernels once.
 #
-# Runs on demand and weekly. The weekly cadence is aimed at *upstream* drift —
-# mjlab is a fast-moving dependency and a changed term definition would otherwise
-# surface as a mysterious runtime difference rather than a failing check. For a
-# change to the tracer or the serializers, trigger it by hand before merging.
+# On a PR that touches the tracer, the serializers or the resolved dependencies,
+# since those are what can silently change a traced term's numbers. Weekly on top
+# of that, aimed at *upstream* drift: mjlab moves fast, and a changed term
+# definition would otherwise surface as a mysterious runtime difference.
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/mjswan/compile/**"
+      - "src/mjswan/_onnx_build.py"
+      - "src/mjswan/trace_env.py"
+      - "tests/test_onnx_*.py"
+      - "uv.lock"
+      - ".github/workflows/parity.yml"
   schedule:
     # Mondays, 04:00 UTC.
     - cron: "0 4 * * 1"
