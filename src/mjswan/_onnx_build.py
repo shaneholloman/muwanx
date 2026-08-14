@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import warnings
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -1076,6 +1077,33 @@ def serialize_command(
         out_dir,
         resampling_time_range=getattr(pending.mjlab_cfg, "resampling_time_range", None),
         debug_vis=bool(getattr(pending.mjlab_cfg, "debug_vis", False)),
-        ui=pending.ui,
+        ui=pending.ui or _record_command_gui(term, name),
         viz=pending.viz,
     )
+
+
+def _record_command_gui(term: Any, name: str) -> dict[str, Any] | None:
+    """The term's own viewer GUI as a UI descriptor, or ``None``.
+
+    Called after ``trace_command_term``, since ``create_gui`` leaves handles on the
+    term that ``compute()`` reads — the tracer happens not to go through
+    ``compute()``, and running downstream keeps that irrelevant.
+
+    A descriptor is presentation, not policy behaviour, so a term this cannot
+    record still builds.
+    """
+    from .adapters.gui_spy import record_gui
+
+    try:
+        return record_gui(term, name)
+    except Exception as exc:
+        warnings.warn(
+            f"Could not record command term '{name}' GUI from its mjlab "
+            f"`create_gui` ({type(exc).__name__}: {exc}); the browser gets no "
+            "control panel for it. Supply one via "
+            f"mjswan.register_command('{type(term.cfg).__name__}', "
+            "CommandBinding(..., ui=...)).",
+            category=RuntimeWarning,
+            stacklevel=3,
+        )
+        return None

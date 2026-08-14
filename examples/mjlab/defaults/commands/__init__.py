@@ -1,15 +1,12 @@
-"""Mjlab-specific custom command registrations for mjswan examples.
+"""Mjlab-specific command registrations for mjswan examples.
 
-Import this module before calling ``builder.build()`` to register the
-command term bindings used in mjlab tasks.
+Import before ``builder.build()``.
 
-Both commands below are ONNX-traced (ADR 0005 §3): the mjlab cfg is built
-(``cfg.build(env)``) and its ``_resample_command``/``_update_command`` traced
-directly against the scene's live env, run in the browser by the shared
-``OnnxCommand`` handler — there is no per-command TS class anymore.
-``LiftingCommand``'s target-position marker (previously rendered by the
-retired ``LiftingCommand.ts``) is now the generic ``OnnxCommand.viz``
-mechanism instead of a hand-written class.
+``LiftingCommandCfg`` and ``UniformVelocityCommandCfg`` are ONNX-traced (ADR 0005
+§3): the mjlab cfg is built and its ``_resample_command``/``_update_command``
+traced against the scene's live env, then run by the shared ``OnnxCommand``
+handler — no per-command TS class. ``MotionCommandCfg`` stays native, with only
+its reset jitter traced.
 """
 
 from __future__ import annotations
@@ -98,75 +95,8 @@ def _bind_trace_friendly_velocity_override(term: Any) -> None:
     term._update_command = types.MethodType(_tf_update_command, term)
 
 
-def _adjustable(limit: float) -> dict[str, Any]:
-    """A "Max <label>" companion slider reaching up to the task's own limit (§3a).
-
-    mjlab's play GUI pairs every velocity axis with one of these, so a viewer can
-    narrow the drag range for fine control without the config changing. Purely
-    presentational — see :class:`mjswan.SliderRangeConfig`.
-    """
-    return {
-        "min": 0.0,
-        "max": abs(limit),
-        "step": max(abs(limit) / 40.0, 0.01),
-        "default": abs(limit),
-    }
-
-
-def _velocity_ui(cfg: Any) -> dict[str, Any]:
-    """Joystick UI descriptor with slider ranges from this task's own ``cfg.ranges``.
-
-    A static dict can't be reused across tasks with different velocity limits
-    (Go1 vs G1), so this is resolved per-task from the real mjlab cfg, same as
-    the (retired) native ``_serialize_uniform_velocity_command`` did.
-    """
-    ranges = cfg.ranges
-    return {
-        "inputs": [
-            {
-                "type": "checkbox",
-                "name": "enabled",
-                "label": "Joystick",
-                "default": False,
-            },
-            {
-                "type": "slider",
-                "name": "lin_vel_x",
-                "label": "Forward Velocity",
-                "min": ranges.lin_vel_x[0],
-                "max": ranges.lin_vel_x[1],
-                "step": 0.05,
-                "default": max(ranges.lin_vel_x[0], min(0.5, ranges.lin_vel_x[1])),
-                "enabled_when": "enabled",
-                "adjustable_range": _adjustable(ranges.lin_vel_x[1]),
-            },
-            {
-                "type": "slider",
-                "name": "lin_vel_y",
-                "label": "Lateral Velocity",
-                "min": ranges.lin_vel_y[0],
-                "max": ranges.lin_vel_y[1],
-                "step": 0.05,
-                "default": max(ranges.lin_vel_y[0], min(0.0, ranges.lin_vel_y[1])),
-                "enabled_when": "enabled",
-                "adjustable_range": _adjustable(ranges.lin_vel_y[1]),
-            },
-            {
-                "type": "slider",
-                "name": "ang_vel_z",
-                "label": "Yaw Rate",
-                "min": ranges.ang_vel_z[0],
-                "max": ranges.ang_vel_z[1],
-                "step": 0.05,
-                "default": max(ranges.ang_vel_z[0], min(0.0, ranges.ang_vel_z[1])),
-                "enabled_when": "enabled",
-                "adjustable_range": _adjustable(ranges.ang_vel_z[1]),
-            },
-            {"type": "button", "name": "zero", "label": "Zero"},
-        ]
-    }
-
-
+# No `ui=`: the joystick descriptor is recorded from `create_gui` at build time
+# (`mjswan.adapters.gui_spy`).
 register_command(
     "UniformVelocityCommandCfg",
     CommandBinding(
@@ -178,7 +108,6 @@ register_command(
         ],
         command_field="vel_command_b",
         trace_override=_bind_trace_friendly_velocity_override,
-        ui=_velocity_ui,
     ),
 )
 

@@ -88,7 +88,7 @@ TASK_VIEWER_CONFIG_MAP: dict[str, mjswan.ViewerConfig] = {
 
 
 def main():
-    builder = mjswan.Builder()
+    builder = mjswan.Builder(debug=True)
     project = builder.add_project(name="mjlab Tasks")
 
     for task_id, wandb_run_id in TASK_RUN_ID_MAP.items():
