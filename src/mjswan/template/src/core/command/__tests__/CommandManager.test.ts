@@ -242,7 +242,7 @@ describe('CommandManager: debug-vis toggles', () => {
   it('lists only the terms that draw something', async () => {
     const mgr = await managerWith(VIZ_CFG);
     // `ui` draws nothing, so it gets no checkbox.
-    expect(mgr.getDebugVisTerms()).toEqual([{ name: 'twist', enabled: false }]);
+    expect(mgr.getDebugVisTerms()).toEqual([{ name: 'twist', enabled: true }]);
   });
 
   it('omits a term whose task left debug_vis off', async () => {
@@ -257,8 +257,8 @@ describe('CommandManager: debug-vis toggles', () => {
 
   it('toggling reaches the term and is reported back', async () => {
     const mgr = await managerWith(VIZ_CFG);
-    mgr.setDebugVisEnabled('twist', true);
-    expect(mgr.getDebugVisTerms()).toEqual([{ name: 'twist', enabled: true }]);
+    mgr.setDebugVisEnabled('twist', false);
+    expect(mgr.getDebugVisTerms()).toEqual([{ name: 'twist', enabled: false }]);
   });
 
   it('emits so a subscribed panel re-reads the state', async () => {

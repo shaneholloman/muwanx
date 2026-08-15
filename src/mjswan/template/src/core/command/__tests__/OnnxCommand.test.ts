@@ -544,7 +544,7 @@ describe('OnnxCommand: debug-vis marker (generic — replaces LiftingCommand.ts)
     expect(context.scene.children[0].visible).toBe(true);
   });
 
-  it('starts switched off, so a drawing appears only once asked for', async () => {
+  it('starts switched on, as mjlab\'s viewers do', async () => {
     const context = fakeContext();
     const cmd = new OnnxCommand('lift_height', LIFT_VIZ_CFG, context, {
       session: new FakeSession(() => ({
@@ -554,9 +554,8 @@ describe('OnnxCommand: debug-vis marker (generic — replaces LiftingCommand.ts)
     });
     await cmd.step(true);
     cmd.updateDebugVisuals();
-    // Listed in the panel (debug_vis is set), but not drawn until its checkbox is.
-    expect(cmd.debugVisEnabled()).toBe(false);
-    expect(context.scene.children[0].visible).toBe(false);
+    expect(cmd.debugVisEnabled()).toBe(true);
+    expect(context.scene.children[0].visible).toBe(true);
   });
 
   it('hides the drawing while the viewer toggle is off, and brings it back', async () => {

@@ -80,8 +80,8 @@ export class OnnxCommand implements CommandTerm {
   private pendingResample = true;
   private uiValues = new Map<string, number>();
   private readonly visuals: CommandDebugVisuals | null;
-  /** mjlab's `_debug_vis_enabled`, starting off — the panel's Debug Viz turns it on. */
-  private debugVisOn = false;
+  /** mjlab's `_debug_vis_enabled` — starts wherever the task's `debug_vis` put it. */
+  private debugVisOn: boolean;
 
   constructor(
     termName: string,
@@ -96,6 +96,7 @@ export class OnnxCommand implements CommandTerm {
     const commandSpec = config.state_fields.find(s => s.name === config.command_field);
     this.command = new Float32Array(commandSpec ? numel(commandSpec.shape) : 0);
     this.timeLeft = this.sampleResampleTime();
+    this.debugVisOn = config.debug_vis === true;
     for (const input of config.ui?.inputs ?? []) {
       if (input.type === 'slider') this.uiValues.set(input.name, input.default);
       else if (input.type === 'checkbox') this.uiValues.set(input.name, input.default ? 1 : 0);
