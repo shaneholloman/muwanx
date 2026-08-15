@@ -5,6 +5,10 @@ Interactive MuJoCo simulations with ONNX policies running entirely in the browse
 
 __version__ = "0.8.2"
 
+import os
+
+os.environ.setdefault("MUJOCO_GL", "disable")
+
 from .app import MjswanApp
 from .builder import Builder
 from .command import (

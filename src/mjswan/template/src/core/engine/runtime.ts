@@ -364,13 +364,15 @@ export class mjswanRuntime {
   }
 
   async loadEnvironment(scene: ResolvedScene): Promise<void> {
+    // Before the graph swap below, or a running term steps a session it just released.
+    await this.stop();
     this.scenePlugins = scene.plugins ?? {};
     this.terrainData = scene.terrainData ?? null;
     // Needed before `buildSceneFromMjz`, which derives `decimation` from it.
     this.controlDt = scene.controlDt && scene.controlDt > 0 ? scene.controlDt : null;
     // Reseed so two loads of the same scene draw the same randomness.
     this.termRng = new SeededRng(this.termSeed);
-    this.sceneGraphs.clear();
+    await this.sceneGraphs.clear();
     await this.sceneGraphs.load(scene.graphs ?? []);
     if (scene.events && scene.events.length > 0) {
       this.eventManager = new EventManager(
@@ -389,7 +391,6 @@ export class mjswanRuntime {
     } else {
       this.eventManager = null;
     }
-    await this.stop();
 
     // Dispose previous splat/collider before switching scenes
     if (this.splatMesh) {
@@ -708,7 +709,23 @@ export class mjswanRuntime {
     this.loopPromise = null;
   }
 
+  /**
+   * Caught, or an escaping throw leaves `loopPromise` rejected for good — `startLoop`
+   * returns it instead of restarting and `stop()` re-throws it, wedging `loadScene` too.
+   * Stops rather than skips: what reaches here is config, identical next frame.
+   */
   private async mainLoop(): Promise<void> {
+    try {
+      await this.runLoop();
+    } catch (error) {
+      this.running = false;
+      console.error('[mjswanRuntime] simulation loop stopped:', error);
+    } finally {
+      this.loopPromise = null;
+    }
+  }
+
+  private async runLoop(): Promise<void> {
     while (this.running) {
       const loopStart = performance.now();
       const target = this.timestep * this.decimation;
@@ -759,7 +776,6 @@ export class mjswanRuntime {
         await new Promise((resolve) => setTimeout(resolve, sleepTime * 1000));
       }
     }
-    this.loopPromise = null;
   }
 
   async loadPolicyConfig(policy: ResolvedPolicy | null): Promise<void> {
@@ -772,15 +788,14 @@ export class mjswanRuntime {
     this.onnxInferencing = false;
     this.onnxTimeStep = 0;
     this.terminationManager = null;
-    this.policyGraphs.clear();
+    // Before the release below — `setPolicy` runs live.
+    this.commandManager.clear();
+    await this.policyGraphs.clear();
     this.jointBias.clear();
     this.clipActions = null;
     this.raycastSensors = {};
     this.contactSensors = new ContactSensorSet();
     // eventManager, sceneGraphs and terrainData are scene-level; do not clear here.
-
-    // Clear existing commands when switching policies
-    this.commandManager.clear();
 
     if (!policy) {
       return;
@@ -1555,6 +1570,8 @@ export class mjswanRuntime {
     }
     this.onnxInputDict = null;
     this.onnxInferencing = false;
+    await this.policyGraphs.clear();
+    await this.sceneGraphs.clear();
     if (this.splatMesh) {
       disposeSplat(this.splatMesh, this.scene);
       this.splatMesh = null;

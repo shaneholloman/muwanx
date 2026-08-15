@@ -147,7 +147,10 @@ export class OnnxCommand implements CommandTerm {
     if (this.inFlight) return; // skip, never queue
     const resample = this.pendingResample;
     this.pendingResample = false;
-    void this.run(resample);
+    // Caught here and not in `run()`, which `reset()` awaits and whose caller handles it.
+    void this.run(resample).catch((error) => {
+      console.warn(`[OnnxCommand] "${this.cfg.name ?? this.cfg.command_field}" failed:`, error);
+    });
   }
 
   /**

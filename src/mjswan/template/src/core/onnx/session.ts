@@ -9,6 +9,8 @@ import { queueOrtRun } from './runQueue';
 /** Minimal ORT-Web surface a command/event handler needs. */
 export interface OnnxSession {
   run(feeds: Record<string, OnnxTensorLike>): Promise<Record<string, OnnxTensorLike>>;
+  /** Free the backing WASM memory. */
+  release?(): Promise<void>;
 }
 
 export interface OnnxTensorLike {
@@ -114,6 +116,10 @@ class OrtSession implements OnnxSession {
     for (const [name, tensor] of Object.entries(outputs)) result[name] = fromOrtTensor(tensor);
     return result;
   }
+
+  async release(): Promise<void> {
+    await this.session.release();
+  }
 }
 
 /** Create a real ORT-Web-backed session from graph bytes; never fetches. */
@@ -153,7 +159,23 @@ export class OnnxSessionCache {
     return this.sessions.size;
   }
 
-  clear(): void {
+  /**
+   * Released, not just dropped: ORT-Web holds WASM heap that JS GC cannot reach.
+   * Through `queueOrtRun` so a swap mid-inference lands between runs, not during one.
+   */
+  async clear(): Promise<void> {
+    const stale = [...this.sessions.values()];
     this.sessions.clear();
+    if (stale.length === 0) return;
+    await queueOrtRun(async () => {
+      for (const session of stale) {
+        // Warned, not thrown: `dispose()` awaits this and must still finish.
+        try {
+          await session.release?.();
+        } catch (error) {
+          console.warn('[OnnxSessionCache] session release failed:', error);
+        }
+      }
+    });
   }
 }

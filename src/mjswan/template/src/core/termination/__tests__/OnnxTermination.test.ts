@@ -120,6 +120,25 @@ describe('OnnxTermination', () => {
     expect(term.evaluate({} as never)).toBe(true);
   });
 
+  it('warns and keeps evaluating when the graph run rejects', async () => {
+    // `.finally()` re-throws, so an uncaught rejection here is an unhandled one every
+    // frame — and the verdict freezes, which for `false` is an episode that never ends.
+    const session: OnnxSession = { run: () => Promise.reject(new Error('boom')) };
+    const term = new OnnxTermination(runner, FELL_OVER_CFG, {
+      session,
+      readSlot: () => new Float32Array([0, 0, 1]),
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(() => term.evaluate({} as never)).not.toThrow();
+    await settle();
+
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    // The in-flight flag cleared, so the next frame retries rather than wedging.
+    expect(term.evaluate({} as never)).toBe(false);
+  });
+
   it('reset() clears the verdict', async () => {
     const session = new FakeSession(() => Uint8Array.from([1]));
     const term = new OnnxTermination(runner, FELL_OVER_CFG, {

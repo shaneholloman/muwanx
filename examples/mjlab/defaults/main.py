@@ -29,12 +29,12 @@ from .terminations import register_custom_terminations
 ENTITY = "ttktjmt-org"
 PROJECT = "mjlab"
 TASK_RUN_ID_MAP: dict[str, str | list[str]] = {
-    # "Mjlab-Velocity-Flat-Unitree-G1": "vel-flat-g1",
+    "Mjlab-Velocity-Flat-Unitree-G1": "vel-flat-g1",
     "Mjlab-Velocity-Rough-Unitree-G1": ["mowqlkd5", "sif72y3p", "rsb8tc3g", "7veqaznf"],
     "Mjlab-Velocity-Flat-Unitree-Go1": "vel-flat-go1-v3",
-    # "Mjlab-Velocity-Rough-Unitree-Go1": ["basgo8hx", "ad4peite"],
+    "Mjlab-Velocity-Rough-Unitree-Go1": ["basgo8hx", "ad4peite"],
     "Mjlab-Lift-Cube-Yam": "ajfybu8m",
-    # "Mjlab-Cartpole-Balance": "cartpole-balance-v2",
+    "Mjlab-Cartpole-Balance": "cartpole-balance-v2",
     "Mjlab-Cartpole-Swingup": "cartpole-swingup",
 }
 TASK_VIEWER_CONFIG_MAP: dict[str, mjswan.ViewerConfig] = {

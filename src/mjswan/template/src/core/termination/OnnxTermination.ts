@@ -45,9 +45,15 @@ export class OnnxTermination extends TerminationBase {
   evaluate(_state: PolicyState): boolean {
     if (!this.inFlight) {
       this.inFlight = true;
-      void this.step().finally(() => {
-        this.inFlight = false;
-      });
+      // Caught for the same reason the unreadable-slot path warns: the verdict silently
+      // sticks at its last value, and for `false` that means the episode never ends.
+      void this.step()
+        .catch((error) => {
+          console.warn(`[OnnxTermination] "${this.config.name}" failed:`, error);
+        })
+        .finally(() => {
+          this.inFlight = false;
+        });
     }
     return this.done;
   }

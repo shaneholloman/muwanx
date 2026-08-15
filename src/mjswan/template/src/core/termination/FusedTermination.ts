@@ -77,9 +77,14 @@ export class FusedTermination {
   kick(): void {
     if (this.inFlight) return;
     this.inFlight = true;
-    void this.step().finally(() => {
-      this.inFlight = false;
-    });
+    // As in `OnnxTermination`: a swallowed failure freezes every lane's verdict.
+    void this.step()
+      .catch((error) => {
+        console.warn('[FusedTermination] graph failed:', error);
+      })
+      .finally(() => {
+        this.inFlight = false;
+      });
   }
 
   /** Run the graph once and latch every lane. Exposed for deterministic tests. */
