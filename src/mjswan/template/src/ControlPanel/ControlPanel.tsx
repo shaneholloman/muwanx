@@ -23,7 +23,7 @@ import FloatingPanel from './FloatingPanel';
 import { LabeledInput } from './LabeledInput';
 import { CommandSection } from './CommandSection';
 import { SplatSection } from './SplatSection';
-import type { CommandDescriptor } from '../engine';
+import type { CommandDescriptor, DebugVisDescriptor } from '../engine';
 
 export interface SelectOption {
   value: string;
@@ -66,6 +66,10 @@ interface ControlPanelProps {
   commandValues: Record<string, number>;
   /** Write a slider/checkbox command value (engine.commands.set). */
   onCommandChange: (id: string, value: number) => void;
+  /** Command terms with a debug drawing to toggle. */
+  debugVis?: DebugVisDescriptor[];
+  /** Show or hide one term's debug drawing (engine.debugVis.set). */
+  onDebugVisChange?: (term: string, enabled: boolean) => void;
   /** Reset the simulation (engine.reset). */
   onReset?: () => void;
 }
@@ -267,6 +271,8 @@ function ControlPanel(props: ControlPanelProps) {
     commands,
     commandValues,
     onCommandChange,
+    debugVis = [],
+    onDebugVisChange,
     onReset,
   } = props;
 
@@ -661,6 +667,23 @@ function ControlPanel(props: ControlPanelProps) {
                 );
               })}
             </>
+          )}
+
+          {/* Debug Viz — mjlab's own folder, one checkbox per drawing term. */}
+          {debugVis.length > 0 && onDebugVisChange && (
+            <CommandSection label="Debug Viz" expandByDefault={true}>
+              {debugVis.map((term) => (
+                <Box key={term.term} px="xs" pb="0.375em">
+                  <Checkbox
+                    // The section names what is toggled; the term only tells several apart.
+                    label={debugVis.length > 1 ? `Enable ${formatGroupName(term.term)}` : 'Enable'}
+                    checked={term.enabled}
+                    onChange={(event) => onDebugVisChange(term.term, event.currentTarget.checked)}
+                    size="xs"
+                  />
+                </Box>
+              ))}
+            </CommandSection>
           )}
 
           {/* Reset Button - always at bottom */}

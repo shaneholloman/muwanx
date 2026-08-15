@@ -22,16 +22,15 @@ def command_config(
     resampling_time_range: tuple[float, float] | None = None,
     debug_vis: bool = False,
     ui: dict[str, Any] | None = None,
-    viz: dict[str, Any] | None = None,
+    viz: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the ``OnnxCommand`` config entry for ``policy.json`` from a trace.
 
     The term's own id is the outer key the author gives this entry in
     ``PolicyConfig.commands``; ``term_id`` here is only for diagnostics.
 
-    ``ui`` (control-panel inputs) and ``viz`` (a ``state_fields`` entry to render as a
-    sphere marker while ``debug_vis`` is on) are not derivable from the trace — the
-    task author supplies them.
+    ``ui`` (control-panel inputs) and ``viz`` (what mjlab's ``_debug_vis_impl`` draws,
+    shown while ``debug_vis`` is on) are not derivable from the trace.
     """
     cfg: dict[str, Any] = {
         "name": "OnnxCommand",
@@ -61,7 +60,7 @@ def write_command_artifact(
     resampling_time_range: tuple[float, float] | None = None,
     debug_vis: bool = False,
     ui: dict[str, Any] | None = None,
-    viz: dict[str, Any] | None = None,
+    viz: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Write ``<out_dir>/command/<name>.onnx`` and return its config entry."""
     onnx_ref = f"command/{export.name}.onnx"

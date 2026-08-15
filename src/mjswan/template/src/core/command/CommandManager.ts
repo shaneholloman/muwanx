@@ -179,6 +179,25 @@ export class CommandManager {
     }
   }
 
+  /** The terms offering a debug drawing, as mjlab's `create_debug_vis_gui` lists them. */
+  getDebugVisTerms(): Array<{ name: string; enabled: boolean }> {
+    const out: Array<{ name: string; enabled: boolean }> = [];
+    for (const [name, term] of this.terms) {
+      const enabled = term.debugVisEnabled?.();
+      if (enabled != null) out.push({ name, enabled });
+    }
+    return out;
+  }
+
+  setDebugVisEnabled(name: string, enabled: boolean): void {
+    const term = this.terms.get(name);
+    if (!term?.setDebugVisEnabled) return;
+    term.setDebugVisEnabled(enabled);
+    // The next frame would do this, but a paused sim has no next frame.
+    term.updateDebugVisuals?.();
+    this.emit({ type: 'debug_vis', commandId: name, groupName: name });
+  }
+
   /**
    * Reset every term **in config order**, awaiting each: a reset is a resample that may
    * write to the sim, and overlaps must resolve last-writer-wins as mjlab's do.

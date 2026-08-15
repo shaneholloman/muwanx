@@ -27,22 +27,12 @@ from mjswan.command import _serialize_motion_command
 # captured as `entity_write`, and `target_pos` is the only state. ---
 
 
-def _lifting_viz(cfg: Any) -> dict[str, Any]:
-    """Render `target_pos` as a sphere, colored from the task's own cfg.viz."""
-    return {
-        "field": "target_pos",
-        "shape": "sphere",
-        "radius": 0.03,
-        "color": list(cfg.viz.target_color),
-    }
-
-
+# No `viz=`: `mjswan.command.default_viz` supplies the target sphere.
 register_command(
     "LiftingCommandCfg",
     CommandBinding(
         state_fields=["target_pos"],
         command_field="target_pos",
-        viz=_lifting_viz,
     ),
 )
 

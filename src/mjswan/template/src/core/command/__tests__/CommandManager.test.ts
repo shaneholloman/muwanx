@@ -8,6 +8,7 @@
  * rather than throwing and taking down every other command).
  */
 import { describe, expect, it, vi } from 'vitest';
+import * as THREE from 'three';
 
 import { SeededRng } from '../../rng';
 import { OnnxSessionCache, type OnnxSession, type OnnxTensorLike } from '../../onnx/session';
@@ -216,5 +217,56 @@ describe('CommandManager: UiCommand state field', () => {
       getStateField(field: string): Float32Array | null;
     };
     expect(Array.from(term.getStateField('command')!)).toEqual([1, 18]);
+  });
+});
+
+/**
+ * What the Debug Viz panel section lists, mirroring mjlab's `create_debug_vis_gui`:
+ * only terms that draw, toggled through the term itself rather than a UI-side copy.
+ */
+describe('CommandManager: debug-vis toggles', () => {
+  const VIZ_CFG: OnnxCommandConfig = {
+    ...VELOCITY_CFG,
+    debug_vis: true,
+    viz: [{ shape: 'sphere', radius: 0.03, color: [1, 0, 0, 1], origin: { state: 'vel_command_b' } }],
+  };
+
+  async function managerWith(config: OnnxCommandConfig): Promise<CommandManager> {
+    const context = await contextWithSession('command/twist.onnx', fakeSession(() => ({})));
+    context.scene = new THREE.Scene();
+    const mgr = new CommandManager();
+    mgr.initialize({ twist: config, ui: { name: 'UiCommand' } }, context);
+    return mgr;
+  }
+
+  it('lists only the terms that draw something', async () => {
+    const mgr = await managerWith(VIZ_CFG);
+    // `ui` draws nothing, so it gets no checkbox.
+    expect(mgr.getDebugVisTerms()).toEqual([{ name: 'twist', enabled: false }]);
+  });
+
+  it('omits a term whose task left debug_vis off', async () => {
+    const mgr = await managerWith({ ...VIZ_CFG, debug_vis: false });
+    expect(mgr.getDebugVisTerms()).toEqual([]);
+  });
+
+  it('omits a term with no drawing even when debug_vis is on', async () => {
+    const mgr = await managerWith({ ...VELOCITY_CFG, debug_vis: true });
+    expect(mgr.getDebugVisTerms()).toEqual([]);
+  });
+
+  it('toggling reaches the term and is reported back', async () => {
+    const mgr = await managerWith(VIZ_CFG);
+    mgr.setDebugVisEnabled('twist', true);
+    expect(mgr.getDebugVisTerms()).toEqual([{ name: 'twist', enabled: true }]);
+  });
+
+  it('emits so a subscribed panel re-reads the state', async () => {
+    // Without the event the checkbox flips back on the next unrelated refresh.
+    const mgr = await managerWith(VIZ_CFG);
+    const seen: string[] = [];
+    mgr.addEventListener(event => seen.push(event.type));
+    mgr.setDebugVisEnabled('twist', true);
+    expect(seen).toContain('debug_vis');
   });
 });

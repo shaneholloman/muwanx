@@ -462,7 +462,9 @@ describe('OnnxCommand: debug-vis marker (generic — replaces LiftingCommand.ts)
     rand_dim: 7,
     state_fields: [{ name: 'target_pos', shape: [1, 3], dtype: 'float32' }],
     debug_vis: true,
-    viz: { field: 'target_pos', shape: 'sphere', radius: 0.03, color: [1, 0.5, 0, 0.3] },
+    viz: [
+      { shape: 'sphere', radius: 0.03, color: [1, 0.5, 0, 0.3], origin: { state: 'target_pos' } },
+    ],
   };
 
   function fakeContext(): import('../types').CommandTermContext {
@@ -479,7 +481,7 @@ describe('OnnxCommand: debug-vis marker (generic — replaces LiftingCommand.ts)
     expect(context.scene.children[0].visible).toBe(false);
   });
 
-  it('shows and positions the marker at the viz field once debug_vis is on', async () => {
+  it('shows and positions the marker at the viz field once switched on', async () => {
     const context = fakeContext();
     const session = new FakeSession(() => ({
       next_target_pos: { data: new Float32Array([0.4, 0.1, 0.3]), dims: [1, 3] },
@@ -489,6 +491,7 @@ describe('OnnxCommand: debug-vis marker (generic — replaces LiftingCommand.ts)
       rng: new SeededRng(1),
     });
     await cmd.step(true);
+    cmd.setDebugVisEnabled(true);
     cmd.updateDebugVisuals();
     const marker = context.scene.children[0];
     expect(marker.visible).toBe(true);
@@ -510,6 +513,85 @@ describe('OnnxCommand: debug-vis marker (generic — replaces LiftingCommand.ts)
     await cmd.step(true);
     cmd.updateDebugVisuals();
     expect(context.scene.children[0].visible).toBe(false);
+  });
+
+  it('serves an entity-sourced primitive from the same slot reader its graph uses', async () => {
+    // The velocity arrows read `root_link_*`: without `readSlot` reaching the drawing,
+    // they stay hidden while the graph itself keeps running.
+    const context = fakeContext();
+    const cfg: OnnxCommandConfig = {
+      ...VELOCITY_CFG,
+      debug_vis: true,
+      viz: [
+        {
+          shape: 'arrow',
+          color: [0, 0.6, 1, 0.7],
+          width: 0.015,
+          origin: { const: [0, 0, 0] },
+          vector: { entity: 'robot', field: 'root_link_lin_vel_b', scale: 1 },
+        },
+      ],
+    };
+    const cmd = new OnnxCommand('twist', cfg, context, {
+      session: new FakeSession(() => velocityOutputs(0, 0, 0)),
+      rng: new SeededRng(1),
+      readSlot: slot =>
+        slot.field === 'root_link_lin_vel_b' ? new Float32Array([1, 0, 0]) : null,
+    });
+    await cmd.step(true);
+    cmd.setDebugVisEnabled(true);
+    cmd.updateDebugVisuals();
+    expect(context.scene.children[0].visible).toBe(true);
+  });
+
+  it('starts switched off, so a drawing appears only once asked for', async () => {
+    const context = fakeContext();
+    const cmd = new OnnxCommand('lift_height', LIFT_VIZ_CFG, context, {
+      session: new FakeSession(() => ({
+        next_target_pos: { data: new Float32Array([0.4, 0.1, 0.3]), dims: [1, 3] },
+      })),
+      rng: new SeededRng(1),
+    });
+    await cmd.step(true);
+    cmd.updateDebugVisuals();
+    // Listed in the panel (debug_vis is set), but not drawn until its checkbox is.
+    expect(cmd.debugVisEnabled()).toBe(false);
+    expect(context.scene.children[0].visible).toBe(false);
+  });
+
+  it('hides the drawing while the viewer toggle is off, and brings it back', async () => {
+    const context = fakeContext();
+    const cmd = new OnnxCommand('lift_height', LIFT_VIZ_CFG, context, {
+      session: new FakeSession(() => ({
+        next_target_pos: { data: new Float32Array([0.4, 0.1, 0.3]), dims: [1, 3] },
+      })),
+      rng: new SeededRng(1),
+    });
+    await cmd.step(true);
+
+    cmd.setDebugVisEnabled(false);
+    cmd.updateDebugVisuals();
+    expect(context.scene.children[0].visible).toBe(false);
+    expect(cmd.debugVisEnabled()).toBe(false);
+
+    cmd.setDebugVisEnabled(true);
+    cmd.updateDebugVisuals();
+    expect(context.scene.children[0].visible).toBe(true);
+  });
+
+  it('offers no toggle for a term with nothing to draw', () => {
+    // The panel lists on `debugVisEnabled()`, so "nothing to draw" must not read as false.
+    const context = fakeContext();
+    const deps = { session: new FakeSession(() => ({})), rng: new SeededRng(1) };
+    expect(new OnnxCommand('twist', VELOCITY_CFG, context, deps).debugVisEnabled()).toBeNull();
+    expect(
+      new OnnxCommand(
+        'lift_height',
+        { ...LIFT_VIZ_CFG, debug_vis: false },
+        context,
+        deps,
+      ).debugVisEnabled(),
+    ).toBeNull();
   });
 
   it('does not create a marker without a viz descriptor', () => {

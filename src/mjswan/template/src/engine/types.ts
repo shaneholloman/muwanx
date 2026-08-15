@@ -95,6 +95,17 @@ export interface CommandControls {
   trigger(id: string): void;
 }
 
+/** A command term whose debug drawing (mjlab's `debug_vis`) can be shown or hidden. */
+export interface DebugVisDescriptor {
+  /** The term's config key, and the id {@link DebugVisControls.set} takes. */
+  term: string;
+  enabled: boolean;
+}
+
+export interface DebugVisControls {
+  set(term: string, enabled: boolean): void;
+}
+
 /** Immutable snapshot pushed to {@link MjswanEngine.subscribe} listeners. */
 export interface MjswanEngineState {
   phase: 'running' | 'paused';
@@ -103,6 +114,8 @@ export interface MjswanEngineState {
   error: Error | null;
   commands: ReadonlyArray<CommandDescriptor>;
   commandValues: Readonly<Record<string, number>>;
+  /** Terms with a debug drawing to toggle; empty when the policy has none. */
+  debugVis: ReadonlyArray<DebugVisDescriptor>;
   /** Reported so an app recording a session can persist it rather than guess. */
   termSeed: number;
 }
@@ -136,6 +149,7 @@ export interface MjswanEngine {
   // subsystems
   readonly camera: CameraControls;
   readonly commands: CommandControls;
+  readonly debugVis: DebugVisControls;
 
   // state
   getState(): MjswanEngineState;

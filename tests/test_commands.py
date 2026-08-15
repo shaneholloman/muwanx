@@ -223,3 +223,68 @@ class TestMotionRsiRegistration:
         # An author-side re-registration replaces this, so only pin the diagnosing default.
         assert spec.reset_trace in (_motion_rsi_unregistered, spec.reset_trace)
         assert spec.ts_name == "TrackingCommand"
+
+
+class TestDefaultViz:
+    """The drawing restated from mjlab's `_debug_vis_impl`, pinned against its source.
+
+    A drift in scale, axis, or source field still draws a plausible arrow — pointing
+    at the wrong thing.
+    """
+
+    class UniformVelocityCommandCfg:
+        entity_name = "robot"
+
+        class viz:
+            z_offset = 0.2
+            scale = 0.5
+
+    class LiftingCommandCfg:
+        class viz:
+            target_color = (1.0, 0.5, 0.0, 0.3)
+
+    def test_velocity_draws_mjlabs_four_arrows(self):
+        from mjswan.command import default_viz
+
+        primitives = default_viz(self.UniformVelocityCommandCfg())
+        assert [p["shape"] for p in primitives] == ["arrow"] * 4
+        # Commanded pair reads the term's state; actual pair reads the entity.
+        assert [p["vector"].get("state") for p in primitives[:2]] == [
+            "vel_command_b"
+        ] * 2
+        assert [p["vector"].get("field") for p in primitives[2:]] == [
+            "root_link_lin_vel_b",
+            "root_link_ang_vel_b",
+        ]
+        # Linear arrows take xy, angular arrows take z alone.
+        assert primitives[0]["vector"]["components"] == [0, 1, None]
+        assert primitives[1]["vector"]["components"] == [None, None, 2]
+
+    def test_velocity_scales_base_and_vector_as_mjlab_does(self):
+        """mjlab scales `([0, 0, z_offset] + v) * scale`, so the base rises too."""
+        from mjswan.command import default_viz
+
+        primitive = default_viz(self.UniformVelocityCommandCfg())[0]
+        assert primitive["origin"] == {"const": [0.0, 0.0, 0.1]}
+        assert primitive["vector"]["scale"] == 0.5
+        assert primitive["frame"]["entity"] == "robot"
+
+    def test_lifting_takes_its_color_from_the_task_cfg(self):
+        from mjswan.command import default_viz
+
+        assert default_viz(self.LiftingCommandCfg()) == [
+            {
+                "shape": "sphere",
+                "radius": 0.03,
+                "color": [1.0, 0.5, 0.0, 0.3],
+                "origin": {"state": "target_pos"},
+            }
+        ]
+
+    def test_an_unknown_cfg_class_gets_nothing(self):
+        from mjswan.command import default_viz
+
+        class CustomCommandCfg:
+            debug_vis = True
+
+        assert default_viz(CustomCommandCfg()) is None

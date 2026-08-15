@@ -29,7 +29,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple
 
 from ..command import CommandTermConfig as MjswanCommandTermConfig
-from ..command import PendingCommandTrace, PendingResetTrace
+from ..command import PendingCommandTrace, PendingResetTrace, default_viz
 from ..command import _custom_registry as _custom_command_registry
 from ..envs.mdp import actions as _actions_module
 from ..envs.mdp.actions.actions import (
@@ -411,6 +411,8 @@ def _adapt_command_cfg(term: Any) -> MjswanCommandTermConfig:
         assert spec.state_fields is not None and spec.command_field is not None
         ui = spec.ui(term) if callable(spec.ui) else spec.ui
         viz = spec.viz(term) if callable(spec.viz) else spec.viz
+        if viz is None:
+            viz = default_viz(term)
         return MjswanCommandTermConfig(
             term_name="OnnxCommand",
             pending_trace=PendingCommandTrace(

@@ -356,6 +356,8 @@ function AppContent() {
             commands={engineState?.commands ? [...engineState.commands] : []}
             commandValues={engineState?.commandValues ?? {}}
             onCommandChange={(id, value) => engineRef.current?.commands.set(id, value)}
+            debugVis={engineState?.debugVis ? [...engineState.debugVis] : []}
+            onDebugVisChange={(term, enabled) => engineRef.current?.debugVis.set(term, enabled)}
             onReset={() => engineRef.current?.reset()}
           />
         )}

@@ -504,6 +504,39 @@ class TestAdaptCommands:
         assert command.params["anchor_body_name"] == "torso_link"
         assert command.params["body_names"] == ["pelvis", "torso_link"]
 
+    def test_a_traced_command_gets_mjlabs_debug_drawing_without_being_asked(self):
+        """The binding declares no `viz`; the cfg class is mjlab's, so one is derived.
+
+        Otherwise a `debug_vis=True` task the author forgot is silently blank.
+        """
+        from mjswan.command import CommandBinding, _custom_registry, register_command
+
+        cfg_cls = _make_mjlab_class(
+            "LiftingCommandCfg",
+            entity_name="cube",
+            debug_vis=True,
+            viz=SimpleNamespace(target_color=(1.0, 0.5, 0.0, 0.3)),
+        )
+        register_command(
+            "LiftingCommandCfg",
+            CommandBinding(state_fields=["target_pos"], command_field="target_pos"),
+        )
+        try:
+            result = adapt_commands({"lift_height": cfg_cls()})
+        finally:
+            _custom_registry.pop("LiftingCommandCfg", None)
+
+        assert result is not None
+        viz = result["lift_height"].pending_trace.viz
+        assert viz == [
+            {
+                "shape": "sphere",
+                "radius": 0.03,
+                "color": [1.0, 0.5, 0.0, 0.3],
+                "origin": {"state": "target_pos"},
+            }
+        ]
+
     def test_mjswan_types_unchanged(self):
         from mjswan.envs.mdp.actions import JointPositionActionCfg
 

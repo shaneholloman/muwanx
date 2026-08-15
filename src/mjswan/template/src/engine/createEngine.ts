@@ -15,6 +15,7 @@ import type {
   CommandControls,
   CommandDescriptor,
   CreateEngineOptions,
+  DebugVisControls,
   MjswanEngine,
   MjswanEngineState,
   PolicyInput,
@@ -81,6 +82,7 @@ class Engine implements MjswanEngine {
 
   readonly camera: CameraControls;
   readonly commands: CommandControls;
+  readonly debugVis: DebugVisControls;
 
   constructor(runtime: mjswanRuntime) {
     this.runtime = runtime;
@@ -97,6 +99,9 @@ class Engine implements MjswanEngine {
       set: (id, value) => this.runtime.commands.setValue(id, value),
       trigger: (id) => this.runtime.commands.triggerButton(id),
     };
+    this.debugVis = {
+      set: (term, enabled) => this.runtime.commands.setDebugVisEnabled(term, enabled),
+    };
   }
 
   private onCommandEvent: CommandEventListener = () => this.refresh();
@@ -110,6 +115,7 @@ class Engine implements MjswanEngine {
       error: this.error,
       commands: cm.getCommands().map(toDescriptor),
       commandValues: cm.getValues(),
+      debugVis: cm.getDebugVisTerms().map(({ name, enabled }) => ({ term: name, enabled })),
       termSeed: this.runtime.seed,
     };
   }

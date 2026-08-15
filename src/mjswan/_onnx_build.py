@@ -963,11 +963,21 @@ def serialize_command(
         name=name,
         command_field=pending.command_field,
     )
+    debug_vis = bool(getattr(pending.mjlab_cfg, "debug_vis", False))
+    if debug_vis and not pending.viz:
+        warnings.warn(
+            f"Command term '{name}' has debug_vis=True but mjswan knows no debug "
+            "drawing for it, so the browser shows nothing where mjlab's viewer draws. "
+            f"Supply one via mjswan.register_command('{type(pending.mjlab_cfg).__name__}'"
+            ", CommandBinding(..., viz=[...])).",
+            category=RuntimeWarning,
+            stacklevel=3,
+        )
     return write_command_artifact(
         export,
         out_dir,
         resampling_time_range=getattr(pending.mjlab_cfg, "resampling_time_range", None),
-        debug_vis=bool(getattr(pending.mjlab_cfg, "debug_vis", False)),
+        debug_vis=debug_vis,
         ui=pending.ui or _record_command_gui(term, name),
         viz=pending.viz,
     )

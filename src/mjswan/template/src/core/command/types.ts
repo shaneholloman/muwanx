@@ -68,7 +68,13 @@ export function getCommandInputId(groupName: string, inputName: string): string 
   return `${groupName}:${inputName}`;
 }
 
-export type CommandEventType = 'change' | 'reset' | 'button' | 'group_registered' | 'clear';
+export type CommandEventType =
+  | 'change'
+  | 'reset'
+  | 'button'
+  | 'group_registered'
+  | 'clear'
+  | 'debug_vis';
 
 export interface CommandEvent {
   type: CommandEventType;
@@ -101,6 +107,9 @@ export interface CommandTerm {
   reset?(): void | Promise<void>;
   update?(dt: number): void;
   updateDebugVisuals?(): void;
+  /** mjlab's `_debug_vis_enabled`; `null` when the term draws nothing. */
+  debugVisEnabled?(): boolean | null;
+  setDebugVisEnabled?(enabled: boolean): void;
   setValue?(inputName: string, value: number): number | void;
   /** Current value of one UI input, for the panel's mirror of it. */
   getUiValue?(inputName: string): number | undefined;

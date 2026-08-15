@@ -4,7 +4,7 @@
  *
  * The graph owns the math; this owns the native half — the resample timer that sets
  * `resample_mask`, `prev_state` across frames, `rand` drawn from the seeded PRNG, the
- * `entity_write` application, and the `viz` debug marker.
+ * `entity_write` application, and the `viz` debug drawing.
  *
  * A UI override overwrites the command *after* the autonomous computation, which is
  * never skipped, as mjlab does at play time.
@@ -14,12 +14,11 @@
  * A frame arriving mid-flight is skipped, never queued.
  */
 
-import * as THREE from 'three';
 import { SeededRng } from '../rng';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from '../event/entityWrite';
 import { buildFeeds, toFloat32 } from '../onnx/session';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
-import { mjcToThreeCoordinate } from '../scene/coordinate';
+import { CommandDebugVisuals, type VizPrimitive } from './debugViz';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
 
 export type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader };
@@ -32,15 +31,6 @@ export interface OnnxStateFieldSpec {
   init?: number[];
 }
 
-export interface OnnxCommandVizConfig {
-  /** Which `state_fields` entry to render — must be a 3D position. */
-  field: string;
-  shape: 'sphere';
-  radius: number;
-  /** RGBA, each in [0, 1]. */
-  color: [number, number, number, number];
-}
-
 export interface OnnxCommandConfig extends CommandConfigEntry {
   onnx: string;
   command_field: string;
@@ -51,7 +41,8 @@ export interface OnnxCommandConfig extends CommandConfigEntry {
   resampling_time_range?: [number, number];
   rand_ranges?: Array<[number, number]>;
   debug_vis?: boolean;
-  viz?: OnnxCommandVizConfig;
+  /** What mjlab's `_debug_vis_impl` draws, as data — see `debugViz.ts`. */
+  viz?: VizPrimitive[];
 }
 
 export interface OnnxCommandDeps {
@@ -88,7 +79,9 @@ export class OnnxCommand implements CommandTerm {
   /** Set on the first update so the initial frame resamples (reset semantics). */
   private pendingResample = true;
   private uiValues = new Map<string, number>();
-  private readonly marker: THREE.Mesh | null;
+  private readonly visuals: CommandDebugVisuals | null;
+  /** mjlab's `_debug_vis_enabled`, starting off — the panel's Debug Viz turns it on. */
+  private debugVisOn = false;
 
   constructor(
     termName: string,
@@ -107,7 +100,10 @@ export class OnnxCommand implements CommandTerm {
       if (input.type === 'slider') this.uiValues.set(input.name, input.default);
       else if (input.type === 'checkbox') this.uiValues.set(input.name, input.default ? 1 : 0);
     }
-    this.marker = config.viz && context ? this.createMarker(termName, config.viz) : null;
+    this.visuals =
+      config.viz?.length && context
+        ? new CommandDebugVisuals(termName, config.viz, context.scene)
+        : null;
   }
 
   getCommand(): Float32Array {
@@ -176,26 +172,29 @@ export class OnnxCommand implements CommandTerm {
     return pending;
   }
 
-  /** Move the marker to the current `viz.field` value; shown while `debug_vis`. */
+  /** Whether the drawing is on, or `null` when there is none — no control is offered. */
+  debugVisEnabled(): boolean | null {
+    if (!this.visuals || !this.cfg.debug_vis) return null;
+    return this.debugVisOn;
+  }
+
+  setDebugVisEnabled(enabled: boolean): void {
+    this.debugVisOn = enabled;
+  }
+
+  /** Redraw the `viz` primitives from the current state, as mjlab redraws each frame. */
   updateDebugVisuals(): void {
-    if (!this.marker || !this.cfg.viz) return;
-    this.marker.visible = Boolean(this.cfg.debug_vis);
-    if (!this.marker.visible) return;
-    const tensor = this.state.get(this.cfg.viz.field);
-    if (!tensor) return;
-    this.marker.position.copy(mjcToThreeCoordinate(toFloat32(tensor.data)));
+    this.visuals?.update(
+      this.debugVisEnabled() === true,
+      // mjlab's joystick writes into the term's state, so its arrows follow the sliders.
+      field =>
+        field === this.cfg.command_field ? this.getCommand() : this.getStateField(field),
+      this.deps.readSlot,
+    );
   }
 
   dispose(): void {
-    if (!this.marker) return;
-    this.context?.scene.remove(this.marker);
-    this.marker.geometry.dispose();
-    const material = this.marker.material;
-    if (Array.isArray(material)) {
-      for (const entry of material) entry.dispose();
-    } else {
-      material.dispose();
-    }
+    this.visuals?.dispose();
   }
 
   getUiValue(inputName: string): number | undefined {
@@ -266,20 +265,5 @@ export class OnnxCommand implements CommandTerm {
     const range = this.cfg.resampling_time_range;
     if (!range) return Number.POSITIVE_INFINITY; // resample only on reset
     return this.deps.rng.uniform(range[0], range[1]);
-  }
-
-  private createMarker(termName: string, viz: OnnxCommandVizConfig): THREE.Mesh {
-    const geometry = new THREE.SphereGeometry(viz.radius, 20, 12);
-    const material = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(viz.color[0], viz.color[1], viz.color[2]),
-      transparent: true,
-      opacity: viz.color[3],
-      depthWrite: false,
-    });
-    const marker = new THREE.Mesh(geometry, material);
-    marker.name = `mjswan-command-${termName}-viz`;
-    marker.visible = false;
-    this.context!.scene.add(marker);
-    return marker;
   }
 }
