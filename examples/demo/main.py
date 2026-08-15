@@ -24,11 +24,13 @@ from myosuite.envs.myo import myochallenge  # noqa: E402, F401 - for env registr
 
 gym_logger.min_level = _prev_gym_level
 
+import torch  # noqa: E402
+from mjlab.envs.mdp import observations as obs_fns  # noqa: E402
+from mjlab.envs.mdp import terminations as term_fns  # noqa: E402
+from mjlab.managers.scene_entity_config import SceneEntityCfg  # noqa: E402
 from robot_descriptions._descriptions import DESCRIPTIONS  # noqa: E402
 
 import mjswan  # noqa: E402
-from mjswan.envs.mdp import observations as obs_fns  # noqa: E402
-from mjswan.envs.mdp import terminations as term_fns  # noqa: E402
 from mjswan.envs.mdp.actions import (  # noqa: E402
     JointEffortActionCfg,
     JointPositionActionCfg,
@@ -38,30 +40,29 @@ from mjswan.managers.observation_manager import (  # noqa: E402
     ObservationTermCfg,
 )
 from mjswan.managers.termination_manager import TerminationTermCfg  # noqa: E402
+from mjswan.trace_env import build_single_entity_trace_env  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Demo-specific declarative observations (ADR 0003).
-#
-# These are used only by the demo's go2 policies, so they live here as DSL
-# builders rather than core built-ins (the core library carries only generic
-# terms).  Both are ts_src-free, so the demo stays declarative / Cloud-safe.
-# ---------------------------------------------------------------------------
+# --- Demo-specific observations. These scenes have no mjlab task, so each supplies its
+# own trace env via SceneHandle.set_trace_env, and the terms below are written against
+# the same live-env API mjlab's own use. ---
 
 
-def velocity_command_with_oscillators(env, *, command_name: str = "velocity", **_):
-    """Velocity command (3) padded with zeros to 16 dims (oscillator slots)."""
-    del env
-    from mjswan.dsl import command_value, concat, const_vec
-
-    return concat([command_value(command_name), const_vec([0.0] * 13)])
+def joint_pos_abs(env, *, asset_cfg: SceneEntityCfg = SceneEntityCfg(name="robot")):
+    """Absolute joint positions (no default-pose subtraction)."""
+    asset = env.scene[asset_cfg.name]
+    return asset.data.joint_pos[:, asset_cfg.joint_ids]
 
 
 def impedance_command(env, **_):
-    """Impedance command placeholder: 27 zeros."""
+    """Impedance command placeholder: 27 zeros (no trained impedance head in this demo)."""
     del env
-    from mjswan.dsl import const_vec
+    return torch.zeros(1, 27)
 
-    return const_vec([0.0] * 27)
+
+def velocity_command_padding(env, **_):
+    """Zero-padding (13) to fill the oscillator command slots this policy expects."""
+    del env
+    return torch.zeros(1, 13)
 
 
 def _fix_unitree_mujoco_macos() -> None:
@@ -114,105 +115,9 @@ def _fix_unitree_mujoco_macos() -> None:
     )
 
 
-# fmt: off
-_G1_JOINT_SCALE = {
-    "left_hip_pitch_joint":       0.5475464629911068,
-    "left_hip_roll_joint":        0.35066146637882434,
-    "left_hip_yaw_joint":         0.5475464629911068,
-    "left_knee_joint":            0.35066146637882434,
-    "left_ankle_pitch_joint":     0.43857731392336724,
-    "left_ankle_roll_joint":      0.43857731392336724,
-    "right_hip_pitch_joint":      0.5475464629911068,
-    "right_hip_roll_joint":       0.35066146637882434,
-    "right_hip_yaw_joint":        0.5475464629911068,
-    "right_knee_joint":           0.35066146637882434,
-    "right_ankle_pitch_joint":    0.43857731392336724,
-    "right_ankle_roll_joint":     0.43857731392336724,
-    "waist_yaw_joint":            0.5475464629911068,
-    "waist_roll_joint":           0.43857731392336724,
-    "waist_pitch_joint":          0.43857731392336724,
-    "left_shoulder_pitch_joint":  0.43857731392336724,
-    "left_shoulder_roll_joint":   0.43857731392336724,
-    "left_shoulder_yaw_joint":    0.43857731392336724,
-    "left_elbow_joint":           0.43857731392336724,
-    "left_wrist_roll_joint":      0.43857731392336724,
-    "left_wrist_pitch_joint":     0.07450087032950714,
-    "left_wrist_yaw_joint":       0.07450087032950714,
-    "right_shoulder_pitch_joint": 0.43857731392336724,
-    "right_shoulder_roll_joint":  0.43857731392336724,
-    "right_shoulder_yaw_joint":   0.43857731392336724,
-    "right_elbow_joint":          0.43857731392336724,
-    "right_wrist_roll_joint":     0.43857731392336724,
-    "right_wrist_pitch_joint":    0.07450087032950714,
-    "right_wrist_yaw_joint":      0.07450087032950714,
-}
-_G1_JOINT_STIFFNESS = {
-    "left_hip_pitch_joint":       40.17923863450712,
-    "left_hip_roll_joint":        99.09842777666111,
-    "left_hip_yaw_joint":         40.17923863450712,
-    "left_knee_joint":            99.09842777666111,
-    "left_ankle_pitch_joint":     28.50124619574858,
-    "left_ankle_roll_joint":      28.50124619574858,
-    "right_hip_pitch_joint":      40.17923863450712,
-    "right_hip_roll_joint":       99.09842777666111,
-    "right_hip_yaw_joint":        40.17923863450712,
-    "right_knee_joint":           99.09842777666111,
-    "right_ankle_pitch_joint":    28.50124619574858,
-    "right_ankle_roll_joint":     28.50124619574858,
-    "waist_yaw_joint":            40.17923863450712,
-    "waist_roll_joint":           28.50124619574858,
-    "waist_pitch_joint":          28.50124619574858,
-    "left_shoulder_pitch_joint":  14.25062309787429,
-    "left_shoulder_roll_joint":   14.25062309787429,
-    "left_shoulder_yaw_joint":    14.25062309787429,
-    "left_elbow_joint":           14.25062309787429,
-    "left_wrist_roll_joint":      14.25062309787429,
-    "left_wrist_pitch_joint":     16.77832748089279,
-    "left_wrist_yaw_joint":       16.77832748089279,
-    "right_shoulder_pitch_joint": 14.25062309787429,
-    "right_shoulder_roll_joint":  14.25062309787429,
-    "right_shoulder_yaw_joint":   14.25062309787429,
-    "right_elbow_joint":          14.25062309787429,
-    "right_wrist_roll_joint":     14.25062309787429,
-    "right_wrist_pitch_joint":    16.77832748089279,
-    "right_wrist_yaw_joint":      16.77832748089279,
-}
-_G1_JOINT_DAMPING = {
-    "left_hip_pitch_joint":       2.557889775413375,
-    "left_hip_roll_joint":        6.308801853496639,
-    "left_hip_yaw_joint":         2.557889775413375,
-    "left_knee_joint":            6.308801853496639,
-    "left_ankle_pitch_joint":     1.814445686584846,
-    "left_ankle_roll_joint":      1.814445686584846,
-    "right_hip_pitch_joint":      2.557889775413375,
-    "right_hip_roll_joint":       6.308801853496639,
-    "right_hip_yaw_joint":        2.557889775413375,
-    "right_knee_joint":           6.308801853496639,
-    "right_ankle_pitch_joint":    1.814445686584846,
-    "right_ankle_roll_joint":     1.814445686584846,
-    "waist_yaw_joint":            2.557889775413375,
-    "waist_roll_joint":           1.814445686584846,
-    "waist_pitch_joint":          1.814445686584846,
-    "left_shoulder_pitch_joint":  0.907222843292423,
-    "left_shoulder_roll_joint":   0.907222843292423,
-    "left_shoulder_yaw_joint":    0.907222843292423,
-    "left_elbow_joint":           0.907222843292423,
-    "left_wrist_roll_joint":      0.907222843292423,
-    "left_wrist_pitch_joint":     1.06814150219,
-    "left_wrist_yaw_joint":       1.06814150219,
-    "right_shoulder_pitch_joint": 0.907222843292423,
-    "right_shoulder_roll_joint":  0.907222843292423,
-    "right_shoulder_yaw_joint":   0.907222843292423,
-    "right_elbow_joint":          0.907222843292423,
-    "right_wrist_roll_joint":     0.907222843292423,
-    "right_wrist_pitch_joint":    1.06814150219,
-    "right_wrist_yaw_joint":      1.06814150219,
-}
-# fmt: on
-
-
 def _add_g1_scene(project) -> None:
     g1_scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         spec=mujoco.MjSpec.from_file("assets/unitree_g1/scene.xml"),
         name="G1",
     ).set_viewer(
@@ -225,6 +130,11 @@ def _add_g1_scene(project) -> None:
             body_name="torso_link",
         )
     )
+    g1_scene.set_trace_env(
+        build_single_entity_trace_env(
+            lambda: mujoco.MjSpec.from_file("assets/unitree_g1/g1.xml")
+        )
+    )
     g1_scene.add_splat(
         name="Street",
         source="assets/unitree_g1/street.spz",
@@ -234,13 +144,6 @@ def _add_g1_scene(project) -> None:
         control=True,
     )
 
-    g1_actions = {
-        "joint_pos": JointPositionActionCfg(
-            scale=_G1_JOINT_SCALE,
-            stiffness=_G1_JOINT_STIFFNESS,
-            damping=_G1_JOINT_DAMPING,
-        )
-    }
     g1_terminations = {
         "bad_orientation": TerminationTermCfg(
             func=term_fns.bad_orientation, params={"limit_angle": 1.0}
@@ -254,7 +157,6 @@ def _add_g1_scene(project) -> None:
         policy=onnx.load("assets/unitree_g1/locomotion.onnx"),
         name="Locomotion",
         config_path="assets/unitree_g1/locomotion.json",
-        actions=g1_actions,
         terminations=g1_terminations,
         commands={
             "velocity": mjswan.velocity_command(
@@ -264,53 +166,39 @@ def _add_g1_scene(project) -> None:
                 default_lin_vel_y=0.0,
             )
         },
-        observations={
-            "policy": ObservationGroupCfg(
-                terms={
-                    "base_lin_vel": ObservationTermCfg(func=obs_fns.base_lin_vel),
-                    "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
-                    "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity
-                    ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, params={"pos_steps": [0]}
-                    ),
-                    "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
-                    "last_action": ObservationTermCfg(func=obs_fns.last_action),
-                    "velocity_cmd": ObservationTermCfg(
-                        func=obs_fns.generated_commands,
-                        params={"command_name": "velocity"},
-                    ),
-                }
-            )
-        },
+        observations=ObservationGroupCfg(
+            terms={
+                "base_lin_vel": ObservationTermCfg(func=obs_fns.base_lin_vel),
+                "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
+                "projected_gravity": ObservationTermCfg(func=obs_fns.projected_gravity),
+                "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+                "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
+                "last_action": ObservationTermCfg(func=obs_fns.last_action),
+                "velocity_cmd": ObservationTermCfg(
+                    func=obs_fns.generated_commands,
+                    params={"command_name": "velocity"},
+                ),
+            }
+        ),
     )
 
     g1_scene.add_policy(
         policy=onnx.load("assets/unitree_g1/balance.onnx"),
         name="Balance",
         config_path="assets/unitree_g1/balance.json",
-        actions=g1_actions,
         terminations=g1_terminations,
+        # Dict form, not a bare group: `balance.json` declares `in_keys: ["observation"]`,
+        # and the key *is* the ONNX input name. A bare group would land under "policy" and
+        # the runtime would find no input by that name.
         observations={
             "observation": ObservationGroupCfg(
                 terms={
-                    "base_ang_vel": ObservationTermCfg(
-                        func=obs_fns.base_ang_vel, history_length=1
-                    ),
+                    "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity,
-                        history_length=1,
-                        params={"gravity": [0, 0, -1.0]},
+                        func=obs_fns.projected_gravity
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, history_length=1
-                    ),
-                    "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel,
-                        params={"joint_names": "isaac"},
-                        history_length=1,
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+                    "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
                     "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }
             )
@@ -320,6 +208,7 @@ def _add_g1_scene(project) -> None:
 
 def _add_go2_scene(project) -> None:
     go2_scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         name="Go2",
         spec=mujoco.MjSpec.from_file("assets/unitree_go2/scene.xml"),
     ).set_viewer(
@@ -332,6 +221,11 @@ def _add_go2_scene(project) -> None:
             body_name="base",
         )
     )
+    go2_scene.set_trace_env(
+        build_single_entity_trace_env(
+            lambda: mujoco.MjSpec.from_file("assets/unitree_go2/go2.xml")
+        )
+    )
 
     go2_actions = {
         "joint_pos": JointPositionActionCfg(
@@ -340,6 +234,10 @@ def _add_go2_scene(project) -> None:
             damping=0.5,
         )
     }
+    # Two groups, so this stays a dict: `vanilla.json`/`robust.json` declare
+    # `in_keys: ["policy", "is_init", "adapt_hx", "command_"]`. `is_init`/`adapt_hx` are the
+    # recurrent carry the runtime supplies itself; the two observation inputs are ours, and
+    # each key has to match its input name exactly.
     go2_velocity_obs = {
         "policy": ObservationGroupCfg(
             terms={
@@ -350,22 +248,22 @@ def _add_go2_scene(project) -> None:
                     func=obs_fns.joint_pos_rel, history_length=3
                 ),
                 "joint_vel": ObservationTermCfg(
-                    func=obs_fns.joint_vel_rel,
-                    params={"joint_names": "isaac"},
-                    history_length=3,
+                    func=obs_fns.joint_vel_rel, history_length=3
                 ),
                 "prev_actions": ObservationTermCfg(
                     func=obs_fns.last_action,
                     history_length=3,
-                    params={"transpose": True},
+                    history_interleaved=True,
                 ),
             }
         ),
         "command_": ObservationGroupCfg(
             terms={
                 "velocity_cmd": ObservationTermCfg(
-                    func=velocity_command_with_oscillators
+                    func=obs_fns.generated_commands,
+                    params={"command_name": "velocity"},
                 ),
+                "velocity_cmd_pad": ObservationTermCfg(func=velocity_command_padding),
             }
         ),
     }
@@ -375,6 +273,8 @@ def _add_go2_scene(project) -> None:
         policy=onnx.load("assets/unitree_go2/facet.onnx"),
         config_path="assets/unitree_go2/facet.json",
         actions=go2_actions,
+        # Genuinely multi-input (`facet.json`: policy + command + the recurrent carry), which
+        # is what the dict form is for — one group per ONNX input, keyed by its name.
         observations={
             "policy": ObservationGroupCfg(
                 terms={
@@ -382,19 +282,15 @@ def _add_go2_scene(project) -> None:
                         func=obs_fns.projected_gravity, history_length=3
                     ),
                     "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel,
-                        history_length=3,
-                        params={"subtract_default": False},
+                        func=joint_pos_abs, history_length=3
                     ),
                     "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel,
-                        params={"joint_names": "isaac"},
-                        history_length=3,
+                        func=obs_fns.joint_vel_rel, history_length=3
                     ),
                     "prev_actions": ObservationTermCfg(
                         func=obs_fns.last_action,
                         history_length=3,
-                        params={"transpose": True},
+                        history_interleaved=True,
                     ),
                 }
             ),
@@ -428,6 +324,7 @@ def _add_go2_scene(project) -> None:
 
 def _add_go1_scene(project) -> None:
     go1_scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         spec=mujoco.MjSpec.from_file("assets/unitree_go1/go1.xml"),
         name="Go1",
     ).set_viewer(
@@ -440,23 +337,14 @@ def _add_go1_scene(project) -> None:
             body_name="trunk",
         )
     )
-
-    # NOTE: himloco uses an interleaved history format (dict with "interleaved": true)
-    # that is not yet expressible via ObservationGroupCfg. observations remains in himloco.json.
-    go1_scene.add_policy(
-        policy=onnx.load("assets/unitree_go1/himloco.onnx"),
-        name="HiMLoco",
-        config_path="assets/unitree_go1/himloco.json",
-        actions={
-            "joint_pos": JointPositionActionCfg(
-                scale=0.25,
-                stiffness=40.0,
-                damping=1.0,
-            )
-        },
-        commands={"velocity": mjswan.velocity_command()},
+    go1_scene.set_trace_env(
+        build_single_entity_trace_env(
+            lambda: mujoco.MjSpec.from_file("assets/unitree_go1/go1.xml")
+        )
     )
 
+    # HiMLoco is not shown: it asks for an interleaved group history, and the runtime stores
+    # that flag without applying it — the stack it feeds the policy is frame-major regardless.
     go1_scene.add_policy(
         policy=onnx.load("assets/unitree_go1/decap.onnx"),
         name="Decap",
@@ -468,25 +356,22 @@ def _add_go1_scene(project) -> None:
                 damping=0.5,
             )
         },
+        # `decap.json` declares `in_keys: ["obs_history"]`; the key is that input's name.
         observations={
             "obs_history": ObservationGroupCfg(
                 terms={
                     "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity, history_length=1
+                        func=obs_fns.projected_gravity
                     ),
                     "velocity_cmd": ObservationTermCfg(
                         func=obs_fns.generated_commands,
                         params={"command_name": "velocity"},
                         scale=(2.0, 2.0, 0.25),
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, history_length=1
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
                     "joint_vel": ObservationTermCfg(
                         func=obs_fns.joint_vel_rel,
-                        params={"joint_names": "isaac"},
                         scale=0.05,
-                        history_length=1,
                     ),
                     "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
                 }
@@ -496,11 +381,23 @@ def _add_go1_scene(project) -> None:
     )
 
 
+def _anymal_c_trace_spec() -> mujoco.MjSpec:
+    # scene.mjz already carries an "init_state" keyframe from its own Entity build, and
+    # EntityCfg adds one of the same name when wrapping it again — so drop the existing.
+    spec = mujoco.MjSpec.from_zip("assets/anymal_c_velocity/scene.mjz")
+    for key in list(spec.keys):
+        if key.name == "init_state":
+            spec.delete(key)
+    return spec
+
+
 def _add_anymal_c_scene(project) -> None:
     anymal_c_scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         name="ANYmal C Velocity",
         spec=mujoco.MjSpec.from_zip("assets/anymal_c_velocity/scene.mjz"),
     )
+    anymal_c_scene.set_trace_env(build_single_entity_trace_env(_anymal_c_trace_spec))
     anymal_c_scene.add_policy(
         name="velocity 3000 iters",
         policy=onnx.load(
@@ -514,6 +411,8 @@ def _add_anymal_c_scene(project) -> None:
                 damping=1.257,
             )
         },
+        # mjlab's own export names the input `obs`, and the config declares it — so the group
+        # is keyed to match rather than handed over bare.
         observations={
             "obs": ObservationGroupCfg(
                 terms={
@@ -522,9 +421,7 @@ def _add_anymal_c_scene(project) -> None:
                     "projected_gravity": ObservationTermCfg(
                         func=obs_fns.projected_gravity
                     ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, params={"pos_steps": [0]}
-                    ),
+                    "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
                     "joint_vel": ObservationTermCfg(func=obs_fns.joint_vel_rel),
                     "last_action": ObservationTermCfg(func=obs_fns.last_action),
                     "velocity_cmd": ObservationTermCfg(
@@ -588,6 +485,13 @@ def _add_playground_project(builder: mjswan.Builder) -> None:
     # replace this patch with simply: registry.load(env_name, config_overrides={"impl": "jax"})
     _orig_put_model = _mjx.put_model
     _mjx.put_model = lambda m, **kw: _orig_put_model(m, **{**kw, "impl": "jax"})
+
+    # TEMPORARY PATCH:
+    # reacher.py gates on `mujoco.__version__ >= "3.3.0"`, a string compare that is
+    # False for "3.10.0", so it calls the pre-3.3 spec.find_body() that mujoco has
+    # since renamed to spec.body(). Restore the old name as an alias.
+    if not hasattr(mujoco.MjSpec, "find_body"):
+        mujoco.MjSpec.find_body = mujoco.MjSpec.body
     try:
         for env_name in registry.ALL_ENVS:
             if "Sparse" in env_name:
@@ -598,9 +502,8 @@ def _add_playground_project(builder: mjswan.Builder) -> None:
                 xml_content = f.read()
             spec = mujoco.MjSpec.from_string(xml_content, env.model_assets)
 
-            # model_assets is consumed at parse time but not stored in spec.assets.
-            # Remap basename keys (as in env.model_assets) to the effective paths
-            # that spec.to_xml() looks up: dir/file (or just file when dir is empty).
+            # model_assets is consumed at parse time but not stored in spec.assets, so remap its
+            # basename keys to the `dir/file` paths spec.to_xml() looks up.
             mesh_dir = spec.meshdir or ""
             tex_dir = spec.texturedir or ""
 

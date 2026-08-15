@@ -24,5 +24,6 @@ export abstract class ObservationBase<TConfig extends ObservationConfig = Observ
   /** Return a promise that resolves once the observation is ready to compute. */
   preload?(): Promise<void>;
 
-  abstract compute(state: PolicyState): Float32Array | number[];
+  /** This frame's value; a promise for an ONNX term, awaited with the group in parallel. */
+  abstract compute(state: PolicyState): Float32Array | number[] | Promise<Float32Array>;
 }

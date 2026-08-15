@@ -2,6 +2,11 @@
 
 Extracts the MuJoCo model from each mjlab default task and visualizes them
 in the browser using mjswan.
+
+The cartpole tasks look choppier than the rest: mjlab gives them control_dt=0.05
+(timestep 0.01 x decimation 5) against 0.02 elsewhere, and both mjlab's viewer and
+mjswan sample render state once per control step, so their 100 Hz physics substeps
+never reach a frame. Playback is still 1x real time.
 """
 
 from __future__ import annotations
@@ -18,20 +23,19 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "examples.mjlab.defaults"
 
 from . import commands  # noqa: F401 - for command registrations
-from .events import apply_terrain_spawn, register_custom_events
-from .observations import get_policy_observations, register_custom_observations
 from .terminations import register_custom_terminations
 
+# NOTE: Replace these with your own WandB entity and project.
 ENTITY = "ttktjmt-org"
 PROJECT = "mjlab"
 TASK_RUN_ID_MAP: dict[str, str | list[str]] = {
+    "Mjlab-Velocity-Flat-Unitree-G1": "vel-flat-g1",
+    "Mjlab-Velocity-Rough-Unitree-G1": ["mowqlkd5", "sif72y3p", "rsb8tc3g", "7veqaznf"],
+    "Mjlab-Velocity-Flat-Unitree-Go1": "vel-flat-go1-v3",
+    "Mjlab-Velocity-Rough-Unitree-Go1": ["basgo8hx", "ad4peite"],
+    "Mjlab-Lift-Cube-Yam": "ajfybu8m",
     "Mjlab-Cartpole-Balance": "cartpole-balance-v2",
     "Mjlab-Cartpole-Swingup": "cartpole-swingup",
-    "Mjlab-Lift-Cube-Yam": "ajfybu8m",
-    "Mjlab-Velocity-Flat-Unitree-G1": "vel-flat-g1",
-    "Mjlab-Velocity-Flat-Unitree-Go1": "vel-flat-go1-v3",
-    "Mjlab-Velocity-Rough-Unitree-G1": ["mowqlkd5", "sif72y3p", "rsb8tc3g", "7veqaznf"],
-    "Mjlab-Velocity-Rough-Unitree-Go1": ["basgo8hx", "ad4peite"],
 }
 TASK_VIEWER_CONFIG_MAP: dict[str, mjswan.ViewerConfig] = {
     "Mjlab-Cartpole-Balance": mjswan.ViewerConfig(
@@ -90,32 +94,18 @@ TASK_VIEWER_CONFIG_MAP: dict[str, mjswan.ViewerConfig] = {
 
 
 def main():
-    builder = mjswan.Builder()
+    builder = mjswan.Builder(debug=True)
     project = builder.add_project(name="mjlab Tasks")
 
     for task_id, wandb_run_id in TASK_RUN_ID_MAP.items():
         env_cfg = load_env_cfg(task_id, play=True)
-        register_custom_events(env_cfg)
-        register_custom_observations(env_cfg)
         register_custom_terminations(env_cfg)
-        scene = project.add_scene_mjlab(task_id, play=True)
-        # Task-side browser enhancement: spawn the single env on a random flat
-        # terrain patch (no-op for non-terrain tasks).  See events/__init__.py.
-        apply_terrain_spawn(scene)
+        scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg)
         if viewer_cfg := TASK_VIEWER_CONFIG_MAP.get(task_id):
             scene.set_viewer(viewer_cfg)
-        run_ids = wandb_run_id
-        if isinstance(run_ids, str):
-            run_ids = [run_ids]
+        run_ids = [wandb_run_id] if isinstance(wandb_run_id, str) else wandb_run_id
         wandb_paths = [f"{ENTITY}/{PROJECT}/{rid}" for rid in run_ids]
-        scene.add_policy_wandb(
-            wandb_paths,
-            task_id=task_id,
-            observations=get_policy_observations(task_id, env_cfg),
-            commands=env_cfg.commands,
-            actions=env_cfg.actions,
-            terminations=env_cfg.terminations,
-        )
+        scene.add_policy_wandb(wandb_paths)
 
     app = builder.build()
     app.launch()

@@ -23,7 +23,7 @@ import FloatingPanel from './FloatingPanel';
 import { LabeledInput } from './LabeledInput';
 import { CommandSection } from './CommandSection';
 import { SplatSection } from './SplatSection';
-import type { CommandDescriptor } from '../engine';
+import type { CommandDescriptor, DebugVisDescriptor } from '../engine';
 
 export interface SelectOption {
   value: string;
@@ -66,6 +66,10 @@ interface ControlPanelProps {
   commandValues: Record<string, number>;
   /** Write a slider/checkbox command value (engine.commands.set). */
   onCommandChange: (id: string, value: number) => void;
+  /** Command terms with a debug drawing to toggle. */
+  debugVis?: DebugVisDescriptor[];
+  /** Show or hide one term's debug drawing (engine.debugVis.set). */
+  onDebugVisChange?: (term: string, enabled: boolean) => void;
   /** Reset the simulation (engine.reset). */
   onReset?: () => void;
 }
@@ -115,45 +119,101 @@ function SliderControl({
   const dependencyDisabled = command.enabledWhen !== undefined && (enabledWhenValue ?? 0) < 0.5;
   const isDisabled = disabled || dependencyDisabled;
 
+  // A companion "Max <label>" slider, when the build asked for one (brief §3a).
+  // Presentational only: it rescales how far *this* slider can be dragged and is
+  // never sent to the engine, matching mjlab's play GUI. Symmetric around zero.
+  const range = command.adjustableRange;
+  const [reach, setReach] = useState(range?.default ?? 0);
+  const min = range ? -reach : command.min;
+  const max = range ? reach : command.max;
+
+  // Narrowing the reach past the current value would leave the thumb outside the
+  // track, so bring the command with it rather than showing a stale position.
+  useEffect(() => {
+    if (!range) return;
+    const clamped = Math.max(-reach, Math.min(reach, value));
+    if (clamped !== value) onChange(command.id, clamped);
+  }, [range, reach, value, command.id, onChange]);
+
   return (
-    <Box
-      pb="0.5em"
-      px="xs"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-      }}
-    >
-      <Text
-        c="dimmed"
+    <>
+      <Box
+        pb="0.5em"
+        px="xs"
         style={{
-          fontSize: '0.875em',
-          fontWeight: 450,
-          lineHeight: '1.375em',
-          letterSpacing: '-0.75px',
-          width: '50%',
-          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
         }}
       >
-        {command.label}
-      </Text>
-      <Box style={{ width: '50%' }}>
-        <Slider
-          value={value}
-          onChange={(val) => onChange(command.id, val)}
-          min={command.min}
-          max={command.max}
-          step={command.step}
-          size="xs"
-          disabled={isDisabled}
-          styles={{
-            root: { padding: '0' },
-            track: { height: 4 },
-            thumb: { width: 12, height: 12 },
+        <Text
+          c="dimmed"
+          style={{
+            fontSize: '0.875em',
+            fontWeight: 450,
+            lineHeight: '1.375em',
+            letterSpacing: '-0.75px',
+            width: '50%',
+            flexShrink: 0,
           }}
-        />
+        >
+          {command.label}
+        </Text>
+        <Box style={{ width: '50%' }}>
+          <Slider
+            value={value}
+            onChange={(val) => onChange(command.id, val)}
+            min={min}
+            max={max}
+            step={command.step}
+            size="xs"
+            disabled={isDisabled}
+            styles={{
+              root: { padding: '0' },
+              track: { height: 4 },
+              thumb: { width: 12, height: 12 },
+            }}
+          />
+        </Box>
       </Box>
-    </Box>
+      {range && (
+        <Box
+          pb="0.5em"
+          px="xs"
+          style={{ display: 'flex', alignItems: 'center' }}
+        >
+          <Text
+            c="dimmed"
+            style={{
+              fontSize: '0.75em',
+              fontWeight: 400,
+              lineHeight: '1.375em',
+              letterSpacing: '-0.75px',
+              width: '50%',
+              flexShrink: 0,
+              opacity: 0.75,
+            }}
+          >
+            {range.label ?? `Max ${command.label}`}
+          </Text>
+          <Box style={{ width: '50%' }}>
+            <Slider
+              value={reach}
+              onChange={setReach}
+              min={range.min}
+              max={range.max}
+              step={range.step}
+              size="xs"
+              disabled={isDisabled}
+              styles={{
+                root: { padding: '0' },
+                track: { height: 3 },
+                thumb: { width: 10, height: 10 },
+              }}
+            />
+          </Box>
+        </Box>
+      )}
+    </>
   );
 }
 
@@ -211,6 +271,8 @@ function ControlPanel(props: ControlPanelProps) {
     commands,
     commandValues,
     onCommandChange,
+    debugVis = [],
+    onDebugVisChange,
     onReset,
   } = props;
 
@@ -605,6 +667,23 @@ function ControlPanel(props: ControlPanelProps) {
                 );
               })}
             </>
+          )}
+
+          {/* Debug Viz — mjlab's own folder, one checkbox per drawing term. */}
+          {debugVis.length > 0 && onDebugVisChange && (
+            <CommandSection label="Debug Viz" expandByDefault={true}>
+              {debugVis.map((term) => (
+                <Box key={term.term} px="xs" pb="0.375em">
+                  <Checkbox
+                    // The section names what is toggled; the term only tells several apart.
+                    label={debugVis.length > 1 ? `Enable ${formatGroupName(term.term)}` : 'Enable'}
+                    checked={term.enabled}
+                    onChange={(event) => onDebugVisChange(term.term, event.currentTarget.checked)}
+                    size="xs"
+                  />
+                </Box>
+              ))}
+            </CommandSection>
           )}
 
           {/* Reset Button - always at bottom */}

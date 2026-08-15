@@ -4,20 +4,26 @@ Currently supports mjlab as a soft dependency.
 """
 
 from .mjlab_adapter import (
+    DEFAULT_OBS_GROUP_KEY,
+    MjlabRunnerDefaults,
     adapt_actions,
     adapt_commands,
     adapt_observations,
     adapt_terminations,
     resolve_action_scales,
+    resolve_runner_defaults,
 )
 from .mjlab_compat import apply_mjlab_sim_options, ensure_mjlab_extensions
 
 __all__ = [
+    "DEFAULT_OBS_GROUP_KEY",
     "adapt_observations",
     "adapt_actions",
     "adapt_commands",
     "adapt_terminations",
     "resolve_action_scales",
+    "MjlabRunnerDefaults",
+    "resolve_runner_defaults",
     "apply_mjlab_sim_options",
     "ensure_mjlab_extensions",
 ]

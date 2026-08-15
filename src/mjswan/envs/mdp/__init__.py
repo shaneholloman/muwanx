@@ -1,17 +1,15 @@
 """MDP components for mjswan.
 
-Mirrors ``mjlab.envs.mdp``.  Re-exports modules so that the following
-mjlab import patterns translate directly::
+``actions`` mirrors ``mjlab.envs.mdp.actions``: Action stays a closed,
+permanently-native set (ADR 0005 §7), so ``mjswan.envs.mdp.actions`` carries
+real, directly-usable action-term configs, same import pattern as mjlab::
 
-    # mjlab
-    from mjlab.envs.mdp import observations as obs_fns
-    from mjlab.envs.mdp import terminations as term_fns
-    from mjlab.envs.mdp.actions import JointPositionActionCfg
-
-    # mjswan (identical)
-    from mjswan.envs.mdp import observations as obs_fns
-    from mjswan.envs.mdp import terminations as term_fns
     from mjswan.envs.mdp.actions import JointPositionActionCfg
+
+``observations`` / ``terminations`` / ``events`` are different: mjswan reimplements
+none of mjlab's term functions. Pass mjlab's own straight to
+``ObservationTermCfg(func=obs_fns.base_lin_vel)`` and the build traces them. These
+submodules carry only the ``*Binding`` escape hatch and its ``register_*`` registry.
 """
 
 from . import actions, observations, terminations
@@ -19,11 +17,7 @@ from .events import EventBinding
 from .observations import ObservationBinding
 from .terminations import TerminationBinding
 
-# Umbrella type for the mjlab-name → browser-implementation binding layer
-# (see ADR 0003).  Per-kind bindings (ObservationBinding / TerminationBinding /
-# EventBinding, plus mjswan.command.CommandBinding) share this role: resolving
-# an mjlab name to a declarative builder, a ts_src escape hatch, or an
-# unsupported marker.
+# Umbrella type for the mjlab-name → hand-written-TS binding layer.
 MdpBinding = ObservationBinding | TerminationBinding | EventBinding
 
 __all__ = [

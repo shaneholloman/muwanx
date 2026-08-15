@@ -18,13 +18,16 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "examples.mjlab.g1_spinkick"
 
 import mjlab.tasks  # noqa: F401 - populates the mjlab task registry
-from mjlab.tasks.registry import load_env_cfg
 
+# `examples.mjlab.defaults.commands` registers the traced reset graph for
+# `MotionCommandCfg` — the reference-state-initialization jitter (ADR 0005 §3).
+# Without it the command still builds, bound to the native `TrackingCommand`, but
+# with no jitter graph, so every episode would start from the unjittered reference
+# frame where mjlab's play config asks for `joint_position_range=(-0.1, 0.1)`.
+import examples.mjlab.defaults.commands  # noqa: F401
 import mjswan
 
-# Tracking terminations (bad_anchor_pos_z_only, bad_anchor_ori,
-# bad_motion_body_pos_z_only, base_ang_vel_exceed) are declarative built-ins
-# in mjswan.envs.mdp.terminations — no registration needed.
+# The terminations need no registration: they trace straight from mjlab's own functions.
 
 
 def setup_builder() -> mjswan.Builder:
@@ -38,17 +41,12 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder()
 
     project = builder.add_project(name="mjlab Spinkick")
-    scene = project.add_scene_mjlab(task_id, play=True)
+    scene = project.add_scene_mjlab(task_id)
 
-    env_cfg = load_env_cfg(task_id, play=True)
-    scene.add_policy_wandb(
-        run_path,
-        task_id=task_id,
-        observations={"policy": env_cfg.observations["actor"]},
-        commands=env_cfg.commands,
-        actions=env_cfg.actions,
-        terminations=env_cfg.terminations,
-    )
+    # The run supplies everything: the clip (mjlab registers `motion_file=""`, and the
+    # tracing env is built from the bundled copy at build time), and every term set via
+    # the scene's env config.
+    scene.add_policy_wandb(run_path)
 
     return builder
 

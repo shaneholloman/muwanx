@@ -16,7 +16,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import mujoco
 import pytest
 
 import mjswan
@@ -124,10 +123,11 @@ class TestClientBuilderCustomTerms:
         assert terms["terminations"] == {"FooTerm": src.resolve()}
 
     def test_collect_custom_terms_skips_declarative_callable(self, monkeypatch):
-        # A DSL term is a plain callable with no ts_src — must be skipped, not crash.
-        monkeypatch.setattr(
-            obs_fns, "_custom_registry", {"base_lin_vel": obs_fns.base_lin_vel}
-        )
+        # A traced term is a plain callable with no ts_src: skip it, do not crash.
+        def base_lin_vel(env, **params):
+            del env, params
+
+        monkeypatch.setattr(obs_fns, "_custom_registry", {"base_lin_vel": base_lin_vel})
         assert "observations" not in ClientBuilder._collect_custom_terms()
 
 
@@ -206,8 +206,7 @@ class TestBuildPluginsModule:
         assert "mjswan/event" not in code  # no bare imports remain
 
     def test_term_importing_three_reuses_engine_instance(self, tmp_path, monkeypatch):
-        # A term that imports `three` must resolve to the engine's single instance
-        # (global), not a bundled duplicate — else instanceof / raycasting break.
+        # `three` must resolve to the engine's instance; a duplicate breaks instanceof.
         template = Path(mjswan.__file__).parent / "template"
         if not (template / "node_modules" / ".bin" / "esbuild").exists():
             pytest.skip("esbuild not installed (run npm install in template)")
@@ -240,6 +239,46 @@ class TestBuilderValidation:
         with pytest.raises(ValueError, match="Cannot build an empty application"):
             Builder().build(tmp_path / "out")
 
+    def test_scene_with_a_policy_needs_a_control_dt(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        # Nothing about a wrong control rate raises at playback — it just plays at the
+        # wrong speed — so the build refuses to guess.
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene.add_policy(name="Policy", policy=minimal_onnx)
+        with pytest.raises(ValueError, match="has policies but no control_dt"):
+            builder._save_config_json(tmp_path)
+
+    def test_scene_without_a_policy_needs_no_control_dt(self, tmp_path, minimal_model):
+        # A viewer-only scene has no trained rate to match, so this must not raise.
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder._save_config_json(tmp_path)
+
+    def test_non_positive_control_dt_is_rejected(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            name="S", model=minimal_model, control_dt=0.0
+        )
+        scene.add_policy(name="Policy", policy=minimal_onnx)
+        with pytest.raises(ValueError, match="must be a positive number of seconds"):
+            builder._save_config_json(tmp_path)
+
+    def test_control_dt_reaches_the_scene_entry(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            name="S", model=minimal_model, control_dt=0.05
+        )
+        scene.add_policy(name="Policy", policy=minimal_onnx)
+        builder._save_config_json(tmp_path)
+        config = json.loads((tmp_path / "assets" / "config.json").read_text())
+        assert config["projects"][0]["scenes"][0]["controlDt"] == 0.05
+
     def test_policy_filename_rejects_empty_string(self):
         with pytest.raises(ValueError):
             Builder()._policy_filename("")
@@ -268,11 +307,16 @@ class TestFromMjlab:
         from mjswan.project import ProjectHandle
 
         scene_handle = MagicMock(name="SceneHandle")
-        monkeypatch.setattr(
-            ProjectHandle,
-            "add_scene_mjlab",
-            lambda self, task_id, *, play=False: scene_handle,
-        )
+        seen: dict[str, object] = {}
+
+        def _stub(self, task_id, *, play, env_cfg):
+            seen["task_id"], seen["play"], seen["env_cfg"] = task_id, play, env_cfg
+            return scene_handle
+
+        monkeypatch.setattr(ProjectHandle, "add_scene_mjlab", _stub)
+        # Neither keyword has a default here on purpose: the caller always passes both, so a
+        # stub default would hide a regression in what it passes.
+        scene_handle.seen = seen
         return scene_handle
 
     def test_no_run_path_does_not_call_add_policy_wandb(self, monkeypatch):
@@ -295,6 +339,31 @@ class TestFromMjlab:
             run_paths, task_id="go2_flat"
         )
 
+    def test_forwards_play_unresolved(self, monkeypatch):
+        """`play` must arrive as `None`, not as a materialised `True`.
+
+        `add_scene_mjlab` rejects `play` together with `env_cfg`, so a wrapper that
+        resolved the default here would make every `env_cfg=` call trip that guard.
+        Which config `None` ends up meaning is pinned in `test_project.py`, against the
+        real method.
+        """
+        scene_handle = self._patch(monkeypatch)
+        Builder.from_mjlab("go2_flat")
+        assert scene_handle.seen["play"] is None
+        assert scene_handle.seen["env_cfg"] is None
+
+    def test_play_false_still_reaches_the_scene(self, monkeypatch):
+        scene_handle = self._patch(monkeypatch)
+        Builder.from_mjlab("go2_flat", play=False)
+        assert scene_handle.seen["play"] is False
+
+    def test_env_cfg_reaches_the_scene(self, monkeypatch):
+        scene_handle = self._patch(monkeypatch)
+        sentinel = object()
+        Builder.from_mjlab("go2_flat", env_cfg=sentinel)
+        assert scene_handle.seen["env_cfg"] is sentinel
+        assert scene_handle.seen["play"] is None
+
 
 # ===========================================================================
 # L1 — _save_config_json output structure (no frontend build)
@@ -305,13 +374,17 @@ class TestSaveConfigJson:
 
     def test_config_contains_version(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["version"] == mjswan.__version__
 
     def test_config_has_projects_list(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         config = self._read_config(tmp_path)
         assert isinstance(config["projects"], list)
@@ -319,7 +392,9 @@ class TestSaveConfigJson:
 
     def test_project_name_and_id_in_config(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Main Demo").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Main Demo").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         project = self._read_config(tmp_path)["projects"][0]
         assert project["name"] == "Main Demo"
@@ -327,7 +402,9 @@ class TestSaveConfigJson:
 
     def test_config_omits_plugins_when_declarative(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         config = self._read_config(tmp_path)
         assert config["uses_custom_js"] is False
@@ -343,7 +420,9 @@ class TestSaveConfigJson:
             {"e": SimpleNamespace(ts_src="x.ts", ts_name="E")},
         )
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         config = self._read_config(tmp_path)
         assert config["uses_custom_js"] is True
@@ -351,7 +430,9 @@ class TestSaveConfigJson:
 
     def test_scene_path_uses_name2id_with_mjb_for_model(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="My Scene", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="My Scene", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         scene = self._read_config(tmp_path)["projects"][0]["scenes"][0]
         assert scene["name"] == "My Scene"
@@ -359,7 +440,9 @@ class TestSaveConfigJson:
 
     def test_scene_path_uses_mjz_for_spec(self, tmp_path, minimal_spec):
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="My Scene", spec=minimal_spec)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="My Scene", spec=minimal_spec
+        )
         builder._save_config_json(tmp_path)
         scene = self._read_config(tmp_path)["projects"][0]["scenes"][0]
         assert scene["path"] == "my_scene/scene.mjz"
@@ -368,7 +451,9 @@ class TestSaveConfigJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(name="Policy", policy=minimal_onnx)
         builder._save_config_json(tmp_path)
         policy = self._read_config(tmp_path)["projects"][0]["scenes"][0]["policies"][0]
@@ -379,7 +464,9 @@ class TestSaveConfigJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(name="Policy", policy=minimal_onnx).add_motion(
             name="Spin Kick",
             source="motion.npz",
@@ -394,8 +481,12 @@ class TestSaveConfigJson:
 
     def test_multiple_projects_all_present_in_config(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Project A").add_scene(name="S", model=minimal_model)
-        builder.add_project(name="Project B").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Project A").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        builder.add_project(name="Project B").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         projects = self._read_config(tmp_path)["projects"]
         assert len(projects) == 2
@@ -404,9 +495,11 @@ class TestSaveConfigJson:
 
     def test_second_project_auto_id_reflected_in_config(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Main").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Main").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder.add_project(name="MuJoCo Menagerie").add_scene(
-            name="S", model=minimal_model
+            control_dt=0.02, name="S", model=minimal_model
         )
         builder._save_config_json(tmp_path)
         projects = self._read_config(tmp_path)["projects"]
@@ -442,7 +535,9 @@ class TestUsesCustomJsFlag:
     def test_clean_build_is_false(self, tmp_path, minimal_model, monkeypatch):
         self._isolate_registries(monkeypatch)
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["uses_custom_js"] is False
 
@@ -456,7 +551,9 @@ class TestUsesCustomJsFlag:
             ts_name="MyTerm", ts_src="/tmp/whatever.ts"
         )
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["uses_custom_js"] is True
 
@@ -470,7 +567,9 @@ class TestUsesCustomJsFlag:
             ts_name="MyTerm", ts_src="/tmp/whatever.ts"
         )
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["uses_custom_js"] is True
 
@@ -489,14 +588,103 @@ class TestUsesCustomJsFlag:
             )
         )
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["uses_custom_js"] is False
 
 
-# NOTE: the transitional name-collision check (TestNoBuiltinNameShadowing) was
-# removed along with the check itself — after ADR 0003 no MDP category keeps a
-# named built-in, so a ts_src term cannot shadow one.
+# ===========================================================================
+# A live env for tracing, standing in for a task's own when the scene is a raw
+# `add_scene(model=...)`. Satisfies `env.scene[name].data.<field>` with torch tensors.
+def _fake_trace_env():
+    import torch
+
+    class _Data:
+        def __init__(self, **fields):
+            for k, v in fields.items():
+                setattr(self, k, v)
+
+    class _Entity:
+        def __init__(self, data):
+            self.data = data
+
+    class _Scene:
+        def __init__(self, entities):
+            self._entities = entities
+
+        def __getitem__(self, name):
+            return self._entities[name]
+
+    class _ActionTerm:
+        def __init__(self, raw_action):
+            self.raw_action = raw_action
+
+    class _ActionManager:
+        """Two terms, so `last_action(action_name=…)` is a real slice.
+
+        Every buildable mjlab task declares exactly one action term, where a term's
+        slice and the whole vector coincide — so a single-term fake could not tell a
+        correct `action_offset` from a missing one. `arm` takes [0,3) and `gripper`
+        the tail, mirroring `ActionManager.process_action`'s split.
+        """
+
+        def __init__(self):
+            self.action = torch.tensor([[1.0, 2.0, 3.0, 9.0]])
+            self.active_terms = ["arm", "gripper"]
+            self.action_term_dim = [3, 1]
+
+        def get_term(self, name):
+            offset = 0
+            for term_name, dim in zip(self.active_terms, self.action_term_dim):
+                if term_name == name:
+                    return _ActionTerm(self.action[:, offset : offset + dim])
+                offset += dim
+            raise KeyError(name)
+
+    class _Env:
+        def __init__(self, entities):
+            self.scene = _Scene(entities)
+            self.action_manager = _ActionManager()
+
+    data = _Data(
+        joint_pos=torch.tensor([[0.1, 0.2]]),
+        default_joint_pos=torch.tensor([[0.0, 0.0]]),
+        projected_gravity_b=torch.tensor([[0.0, 0.0, -1.0]]),
+        root_link_pos_w=torch.tensor([[0.0, 0.0, 0.5]]),
+    )
+    return _Env({"robot": _Entity(data)})
+
+
+# Named `last_action` because the tracer classifies natives by `func.__name__`.
+def last_action(env, *, action_name=None, **_):
+    if action_name is None:
+        return env.action_manager.action
+    return env.action_manager.get_term(action_name).raw_action
+
+
+def _fake_joint_pos_rel(env, *, entity_name="robot", **_):
+    d = env.scene[entity_name].data
+    return d.joint_pos - d.default_joint_pos
+
+
+def _fake_bad_orientation(env, *, limit_angle, entity_name="robot", **_):
+    import torch
+
+    pg = env.scene[entity_name].data.projected_gravity_b
+    return torch.acos(torch.clamp(-pg[:, 2], -1.0, 1.0)).abs() > limit_angle
+
+
+def _fake_root_height_below_minimum(env, *, minimum_height, entity_name="robot", **_):
+    return env.scene[entity_name].data.root_link_pos_w[:, 2] < minimum_height
+
+
+def _fake_time_out(env, *, max_episode_length=1e9, **_):
+    import torch
+
+    del env, max_episode_length
+    return torch.tensor([False])
 
 
 # ===========================================================================
@@ -533,6 +721,46 @@ class TestSaveWebPolicyJson:
         path = out / project_dir / "assets" / scene_id / f"{policy_id}.json"
         return json.loads(path.read_text())
 
+    def test_spec_scene_config_path_matches_written_file(self, tmp_path, minimal_spec):
+        """`_save_web` frees `scene.spec` right after writing `scene.mjz`, and writes
+        `config.json` after that — the recorded path must still be the `.mjz` on disk,
+        or the app 404s on the scene it just shipped."""
+        builder = Builder()
+        builder.add_project(name="P").add_scene(name="S", spec=minimal_spec)
+        out = self._run(builder, tmp_path)
+
+        scene_path = json.loads((out / "assets" / "config.json").read_text())[
+            "projects"
+        ][0]["scenes"][0]["path"]
+        assert scene_path == "s/scene.mjz"
+        assert (out / "main" / "assets" / scene_path).is_file()
+
+    def test_terms_without_a_trace_env_name_the_missing_call(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """A plain `add_scene` scene has no env to trace against until it is given one.
+
+        The tracer used to reach `None.scene` and raise `AttributeError` from four
+        frames down, which says nothing about the one line the author is missing.
+        """
+
+        def joint_pos(env):
+            return env.scene["robot"].data.joint_pos
+
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={"joint_pos": ObservationTermCfg(func=joint_pos)}
+                )
+            },
+        )
+        with pytest.raises(ValueError, match="set_trace_env"):
+            self._run(builder, tmp_path)
+
     # -----------------------------------------------------------------------
     # no-config_path branch
     # -----------------------------------------------------------------------
@@ -541,7 +769,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -560,29 +790,36 @@ class TestSaveWebPolicyJson:
     def test_no_config_path_terminations_emitted(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             terminations={
-                "time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True),
+                "time_out": TerminationTermCfg(func=_fake_time_out, time_out=True),
             },
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         assert "terminations" in data
         assert "time_out" in data["terminations"]
-        # `time_out` is a DSL term (ADR 0003); time_out flag still set.
+        # A term reading no dynamic entity state is classified native (ADR 0005).
         entry = data["terminations"]["time_out"]
-        assert entry["kind"] == "termination"
-        assert "StepCount" in [n["op"] for n in entry["nodes"]]
+        assert entry["native"] == "elapsed_s >= episode_length_s"
         assert entry["time_out"] is True
 
     def test_no_config_path_both_blocks_emitted(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -591,30 +828,35 @@ class TestSaveWebPolicyJson:
             },
             terminations={
                 "fallen": TerminationTermCfg(
-                    func=term_fns.bad_orientation,
+                    func=_fake_bad_orientation,
                     params={"limit_angle": 1.2},
                 ),
             },
         )
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
         assert "actions" in data
         assert "terminations" in data
         assert data["actions"]["effort"]["type"] == "torque"
-        # `bad_orientation` is a DSL term (ADR 0003).
+        # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["kind"] == "termination"
-        assert "Acos" in [n["op"] for n in fallen["nodes"]]
+        assert fallen["onnx"] == "term/fallen.onnx"
+        assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
 
     def test_no_config_path_actions_absent_when_not_set(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             terminations={
-                "time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True),
+                "time_out": TerminationTermCfg(func=_fake_time_out, time_out=True),
             },
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
@@ -624,7 +866,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -639,7 +883,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(name="Policy", policy=minimal_onnx)
         out = self._run(builder, tmp_path)
         policy_id = name2id("Policy")
@@ -651,7 +897,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -667,7 +915,9 @@ class TestSaveWebPolicyJson:
         motion_file.write_bytes(b"motion-bytes")
 
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -686,7 +936,9 @@ class TestSaveWebPolicyJson:
         assert data["motions"] == [
             {
                 "name": "Spin Kick",
-                "path": "policy_spin_kick.npz",
+                # Scene-scoped and name-derived: no policy prefix, so the checkpoints of
+                # one run reference a single bundled copy.
+                "path": "spin_kick.npz",
                 "fps": 50.0,
                 "anchor_body_name": "torso_link",
                 "body_names": ["pelvis", "torso_link"],
@@ -694,14 +946,78 @@ class TestSaveWebPolicyJson:
                 "default": True,
             }
         ]
-        motion_out = out / "main" / "assets" / "s" / "policy_spin_kick.npz"
+        motion_out = out / "main" / "assets" / "s" / "spin_kick.npz"
         assert motion_out.read_bytes() == b"motion-bytes"
+
+    def test_one_clip_shared_by_several_policies_is_written_once(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """The checkpoints of one run share a clip; a copy each meant N copies of it."""
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        clip = tmp_path / "spin_kick.npz"
+        clip.write_bytes(b"motion-bytes")
+        for name in ("model_0", "model_50"):
+            scene.add_policy(name=name, policy=minimal_onnx).add_motion(
+                name="Spin Kick",
+                source=str(clip),
+                anchor_body_name="torso_link",
+                body_names=("pelvis",),
+            )
+
+        out = self._run(builder, tmp_path)
+        scene_dir = out / "main" / "assets" / "s"
+
+        assert sorted(p.name for p in scene_dir.glob("*.npz")) == ["spin_kick.npz"]
+        for name in ("model_0", "model_50"):
+            assert self._policy_json(out, name)["motions"][0]["path"] == "spin_kick.npz"
+
+    def test_same_name_different_content_gets_a_numbered_suffix(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        for payload in (b"clip-one", b"clip-two"):
+            clip = tmp_path / f"{payload.decode()}.npz"
+            clip.write_bytes(payload)
+            scene.add_policy(
+                name=f"policy_{payload.decode()}", policy=minimal_onnx
+            ).add_motion(
+                name="Motion",
+                source=str(clip),
+                anchor_body_name="b",
+                body_names=("b",),
+            )
+
+        out = self._run(builder, tmp_path)
+        scene_dir = out / "main" / "assets" / "s"
+
+        assert sorted(p.name for p in scene_dir.glob("*.npz")) == [
+            "motion.npz",
+            "motion_1.npz",
+        ]
+        assert (scene_dir / "motion.npz").read_bytes() == b"clip-one"
+        assert (scene_dir / "motion_1.npz").read_bytes() == b"clip-two"
+        paths = {
+            name: self._policy_json(out, name)["motions"][0]["path"]
+            for name in ("policy_clip-one", "policy_clip-two")
+        }
+        assert paths == {
+            "policy_clip-one": "motion.npz",
+            "policy_clip-two": "motion_1.npz",
+        }
 
     def test_no_config_path_commands_emitted_as_command_terms(
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -713,54 +1029,146 @@ class TestSaveWebPolicyJson:
         assert len(data["commands"]["velocity"]["ui"]["inputs"]) == 3
         assert data["commands"]["velocity"]["ui"]["inputs"][0]["name"] == "lin_vel_x"
 
-    def test_joint_observation_terms_are_enriched_from_scene_spec(
-        self, tmp_path, minimal_onnx
+    def test_plain_observation_term_traces_against_live_env(
+        self, tmp_path, minimal_model, minimal_onnx
     ):
-        xml_path = tmp_path / "scene.xml"
-        xml_path.write_text(
-            '<mujoco model="jointed">'
-            "<worldbody>"
-            '<body name="robot/base">'
-            '<geom type="sphere" size="0.05" mass="1"/>'
-            '<body name="robot/link1">'
-            '<joint name="robot/joint1" type="hinge"/>'
-            '<geom type="capsule" fromto="0 0 0 0 0 0.2" size="0.02" mass="1"/>'
-            '<body name="robot/link2">'
-            '<joint name="robot/joint2" type="slide"/>'
-            '<geom type="capsule" fromto="0 0 0 0 0 0.2" size="0.02" mass="1"/>'
-            "</body>"
-            "</body>"
-            "</body>"
-            "</worldbody>"
-            '<keyframe><key name="init" qpos="0.25 -0.5"/></keyframe>'
-            "</mujoco>"
-        )
-        spec = mujoco.MjSpec.from_file(str(xml_path))
-
+        # A plain-callable observation func — mjlab's own or self-authored, treated the
+        # same — is traced against the scene's live env, never reimplemented.
+        pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", spec=spec)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             observations={
                 "policy": ObservationGroupCfg(
                     terms={
-                        "joint_pos": ObservationTermCfg(func=obs_fns.joint_pos_rel),
+                        "joint_pos": ObservationTermCfg(
+                            func=_fake_joint_pos_rel, scale=0.5
+                        ),
                     }
                 ),
             },
         )
 
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
-        joint_pos = data["observations"]["policy"][0]
-        # joint_pos_rel is a DSL term (ADR 0003): joint_names is enriched into
-        # the JointPos source node's attrs, and the keyframe default pose is
-        # subtracted as a ConstVec.
-        assert joint_pos["kind"] == "observation"
-        jp_node = next(n for n in joint_pos["nodes"] if n["op"] == "JointPos")
-        assert jp_node["attrs"]["joint_names"] == ["robot/joint1", "robot/joint2"]
-        const_node = next(n for n in joint_pos["nodes"] if n["op"] == "ConstVec")
-        assert const_node["attrs"]["values"] == [0.25, -0.5]
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
+        # The group fuses: one graph named for it, with `scale` folded in rather than shipped.
+        group = data["observations"]["policy"]
+        assert group["fused"] == "obs/policy.onnx"
+        assert group["layout"] == [{"name": "joint_pos", "size": 2}]
+        assert group["size"] == 2
+        assert "scale" not in group
+        assert (out / "main" / "assets" / "s" / group["fused"]).exists()
+
+    def test_last_action_with_a_term_name_emits_its_slice_offset(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        # The two-action-term shape, through the real Builder. No mjlab task has it, so
+        # otherwise the offset is only ever checked against a stub action manager.
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={
+                        "joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel),
+                        "gripper_action": ObservationTermCfg(
+                            func=last_action, params={"action_name": "gripper"}
+                        ),
+                    }
+                ),
+            },
+        )
+
+        group = self._policy_json(self._run(builder, tmp_path), "Policy")[
+            "observations"
+        ]["policy"]
+        native = next(
+            entry
+            for entry in group["native_inputs"]
+            if entry["name"] == "gripper_action"
+        )
+        assert native["native"] == "prev_action"
+        assert native["action_name"] == "gripper"
+        # `arm` holds [0,3), so `gripper` starts at 3. Without the offset the runtime feeds
+        # `arm`'s first element at `gripper`'s width: right width, wrong term.
+        assert native["action_offset"] == 3
+        assert native["size"] == 1
+        # And the group still fuses around it: the native term is a graph *input*.
+        assert group["layout"] == [
+            {"name": "joint_pos", "size": 2},
+            {"name": "gripper_action", "size": 1},
+        ]
+
+    def test_last_action_naming_no_action_term_fails_the_build(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        # Degrading would hand over the action vector's head — the silent wrong answer.
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={
+                        "joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel),
+                        "grip": ObservationTermCfg(
+                            func=last_action, params={"action_name": "grippr"}
+                        ),
+                    }
+                ),
+            },
+        )
+        with pytest.raises(ValueError, match=r"does not define.*arm, gripper"):
+            self._run(builder, tmp_path)
+
+    def test_per_term_observations_when_the_group_cannot_fuse(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        # A term stacking its own history keeps the per-term path: mjlab stacks before
+        # concatenating, so a fused output would order the group's history differently.
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={
+                        "joint_pos": ObservationTermCfg(
+                            func=_fake_joint_pos_rel, scale=0.5, history_length=3
+                        ),
+                    }
+                ),
+            },
+        )
+
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
+        terms = data["observations"]["policy"]
+        assert isinstance(terms, list)
+        assert terms[0]["onnx"] == "obs/joint_pos.onnx"
+        assert terms[0]["scale"] == 0.5
+        assert terms[0]["history_length"] == 3
 
     # -----------------------------------------------------------------------
     # config_path branch
@@ -774,7 +1182,9 @@ class TestSaveWebPolicyJson:
             json.dumps({"onnx": {"path": "old.onnx"}, "existing_key": "kept"})
         )
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -793,38 +1203,47 @@ class TestSaveWebPolicyJson:
     def test_config_path_terminations_merged_into_existing_config(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(
             json.dumps({"onnx": {"path": "old.onnx"}, "existing_key": "kept"})
         )
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             config_path=str(config_file),
             terminations={
                 "fallen": TerminationTermCfg(
-                    func=term_fns.bad_orientation,
+                    func=_fake_bad_orientation,
                     params={"limit_angle": 0.8},
                 ),
             },
         )
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
         assert "terminations" in data
-        # `bad_orientation` is a DSL term (ADR 0003).
+        # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["kind"] == "termination"
-        assert "Acos" in [n["op"] for n in fallen["nodes"]]
+        assert fallen["onnx"] == "term/fallen.onnx"
+        assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
         assert data["existing_key"] == "kept"
 
     def test_config_path_both_blocks_merged(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "old.onnx"}}))
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -834,20 +1253,19 @@ class TestSaveWebPolicyJson:
             },
             terminations={
                 "height": TerminationTermCfg(
-                    func=term_fns.root_height_below_minimum,
+                    func=_fake_root_height_below_minimum,
                     params={"minimum_height": 0.3},
                 ),
             },
         )
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
         assert data["actions"]["effort"]["type"] == "torque"
         assert data["actions"]["effort"]["scale"] == 1.5
-        # `root_height_below_minimum` is a DSL term (ADR 0003) — emits a
-        # composition graph instead of a legacy {name, params} entry.
+        # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         height_entry = data["terminations"]["height"]
-        assert height_entry["kind"] == "termination"
-        ops = [n["op"] for n in height_entry["nodes"]]
-        assert "RootLinkPosW" in ops and "Lt" in ops
+        assert height_entry["onnx"] == "term/height.onnx"
+        assert (out / "main" / "assets" / "s" / height_entry["onnx"]).exists()
 
     def test_config_path_overwrites_existing_actions_block(
         self, tmp_path, minimal_model, minimal_onnx
@@ -863,7 +1281,9 @@ class TestSaveWebPolicyJson:
             )
         )
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -876,11 +1296,60 @@ class TestSaveWebPolicyJson:
         assert "new_action" in data["actions"]
         assert "old_action" not in data["actions"]
 
+    def test_config_path_action_fields_survive_a_partial_override(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """A term names what it changes; the rest of the authored entry stays.
+
+        For a motor-actuator robot the PD gains live in the policy's own config —
+        the model has none — so a scene that only wants a different offset must not
+        have to restate them.
+        """
+        config_file = tmp_path / "policy_cfg.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "onnx": {"path": "old.onnx"},
+                    "actions": {
+                        "joint_pos": {
+                            "type": "joint_position",
+                            "scale": {"j": 0.5},
+                            "stiffness": {"j": 40.0},
+                            "damping": {"j": 2.5},
+                        }
+                    },
+                }
+            )
+        )
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            config_path=str(config_file),
+            actions={
+                "joint_pos": JointPositionActionCfg(
+                    actuator_names=(".*",), offset={"j": 0.25}
+                )
+            },
+        )
+        entry = self._policy_json(self._run(builder, tmp_path), "Policy")["actions"][
+            "joint_pos"
+        ]
+        assert entry["offset"] == {"j": 0.25}
+        assert entry["stiffness"] == {"j": 40.0}
+        assert entry["damping"] == {"j": 2.5}
+        assert entry["scale"] == {"j": 0.5}
+
     def test_config_path_onnx_path_updated(self, tmp_path, minimal_model, minimal_onnx):
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "stale.onnx"}}))
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -896,7 +1365,9 @@ class TestSaveWebPolicyJson:
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "stale.onnx"}}))
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -915,7 +1386,9 @@ class TestSaveWebPolicyJson:
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(json.dumps({"onnx": {"path": "old.onnx"}}))
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -933,7 +1406,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -950,7 +1425,9 @@ class TestSaveWebPolicyJson:
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -966,69 +1443,80 @@ class TestSaveWebPolicyJson:
     def test_timeout_termination_time_out_flag(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             terminations={
-                "time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True),
+                "time_out": TerminationTermCfg(func=_fake_time_out, time_out=True),
             },
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         term = data["terminations"]["time_out"]
-        # `time_out` is a DSL term (ADR 0003); time_out flag still set.
-        assert term["kind"] == "termination"
-        assert "StepCount" in [n["op"] for n in term["nodes"]]
+        # A term reading no dynamic entity state is classified native (ADR 0005).
+        assert term["native"] == "elapsed_s >= episode_length_s"
         assert term.get("time_out") is True
 
     def test_bad_orientation_params_serialized(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        pytest.importorskip("torch")
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             terminations={
                 "fallen": TerminationTermCfg(
-                    func=term_fns.bad_orientation,
+                    func=_fake_bad_orientation,
                     params={"limit_angle": 1.57},
                 ),
             },
         )
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
-        # `bad_orientation` is a DSL term (ADR 0003); params are inlined as
-        # Const nodes during trace.
+        out = self._run(builder, tmp_path)
+        data = self._policy_json(out, "Policy")
+        # Traced to ONNX, with `limit_angle` closed over by the function, not serialized.
         fallen = data["terminations"]["fallen"]
-        assert fallen["kind"] == "termination"
-        consts = [n["attrs"]["value"] for n in fallen["nodes"] if n["op"] == "Const"]
-        assert 1.57 in consts
+        assert fallen["onnx"] == "term/fallen.onnx"
+        assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
         assert "time_out" not in fallen
 
 
 # ===========================================================================
-# L3 slow — full build pipeline (triggers frontend compilation)
-# Run with: pytest -m slow
+# L3 slow — full build pipeline (triggers frontend compilation) Run with: pytest -m slow
 # ===========================================================================
 @pytest.mark.slow
 class TestFullBuild:
     def test_build_creates_assets_config_json(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert (tmp_path / "out" / "assets" / "config.json").exists()
 
     def test_build_with_model_creates_mjb_file(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         scene_dir = tmp_path / "out" / "main" / "assets" / "scene"
         assert (scene_dir / "scene.mjb").exists()
 
     def test_build_with_spec_creates_mjz_file(self, tmp_path, minimal_spec):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="Scene", spec=minimal_spec)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", spec=minimal_spec
+        )
         builder.build(tmp_path / "out")
         scene_dir = tmp_path / "out" / "main" / "assets" / "scene"
         assert (scene_dir / "scene.mjz").exists()
@@ -1037,31 +1525,36 @@ class TestFullBuild:
         self, tmp_path, minimal_model
     ):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert (tmp_path / "out" / "main").is_dir()
 
     def test_build_project_with_id_uses_id_as_directory(self, tmp_path, minimal_model):
         builder = Builder()
         builder.add_project(name="Test", id="demo").add_scene(
-            name="S", model=minimal_model
+            control_dt=0.02, name="S", model=minimal_model
         )
         builder.build(tmp_path / "out")
         assert (tmp_path / "out" / "demo").is_dir()
 
     def test_build_returns_mjswan_app_instance(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         app = builder.build(tmp_path / "out")
         assert isinstance(app, mjswan.MjswanApp)
 
     def test_build_output_excludes_dev_and_test_files(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         out = tmp_path / "out"
         builder.build(out)
-        # Dev/test scaffolding (harness, e2e, configs, type shims, fixtures) must
-        # not ship in the published SPA.
+        # Dev/test scaffolding must not ship in the published SPA.
         for leaked in (
             "e2e",
             "harness.html",
@@ -1119,7 +1612,9 @@ class TestMtHeaders:
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
         monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
         builder = Builder(mt=False)
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         out = tmp_path / "out"
         builder._save_web(out)
         assert not (out / "_headers").exists()
@@ -1129,7 +1624,9 @@ class TestMtHeaders:
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
         monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
         builder = Builder(mt=True)
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         out = tmp_path / "out"
         builder._save_web(out)
         headers_file = out / "_headers"
@@ -1150,7 +1647,9 @@ class TestMtHeaders:
         monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
 
         builder = Builder(mt=False)
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         out = tmp_path / "out"
         builder._save_web(out)
 
@@ -1158,18 +1657,21 @@ class TestMtHeaders:
 
 
 # ===========================================================================
-# L3 slow — Phase 4: cache reuse + custom-JS runtime plugin module
-# Run with: pytest -m slow
+# L3 slow — Phase 4: cache reuse + custom-JS runtime plugin module Run with: pytest -m slow
 # ===========================================================================
 @pytest.mark.slow
 class TestFullBuildPhase4:
     def test_second_build_reuses_cached_frontend(self, tmp_path, minimal_model, capsys):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder.build(tmp_path / "out1")  # warms the cache
         capsys.readouterr()
         builder2 = Builder()
-        builder2.add_project(name="Test").add_scene(name="S", model=minimal_model)
+        builder2.add_project(name="Test").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder2.build(tmp_path / "out2")  # identical inputs → no frontend rebuild
         assert "Reusing cached frontend build" in capsys.readouterr().out
         assert (tmp_path / "out2" / "assets" / "config.json").exists()
@@ -1197,7 +1699,9 @@ class TestFullBuildPhase4:
         )
         out = tmp_path / "out"
         builder = Builder()
-        builder.add_project(name="P").add_scene(name="S", model=minimal_model)
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
         builder.build(out)
 
         config = json.loads((out / "assets" / "config.json").read_text())
@@ -1209,26 +1713,31 @@ class TestFullBuildPhase4:
 
 
 # ===========================================================================
-# L3 slow — full mt=True build (triggers frontend compilation)
-# Run with: pytest -m slow
+# L3 slow — full mt=True build (triggers frontend compilation) Run with: pytest -m slow
 # ===========================================================================
 @pytest.mark.slow
 class TestFullBuildMt:
     def test_mt_false_no_headers_file(self, tmp_path, minimal_model):
         builder = Builder(mt=False)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert not (tmp_path / "out" / "_headers").exists()
 
     def test_mt_false_no_coi_serviceworker(self, tmp_path, minimal_model):
         builder = Builder(mt=False)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert not (tmp_path / "out" / "coi-serviceworker.js").exists()
 
     def test_mt_true_writes_headers_file(self, tmp_path, minimal_model):
         builder = Builder(mt=True)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         headers = tmp_path / "out" / "_headers"
         assert headers.exists()
@@ -1238,13 +1747,17 @@ class TestFullBuildMt:
 
     def test_mt_true_emits_coi_serviceworker(self, tmp_path, minimal_model):
         builder = Builder(mt=True)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         assert (tmp_path / "out" / "coi-serviceworker.js").exists()
 
     def test_mt_true_injects_sw_script_into_html(self, tmp_path, minimal_model):
         builder = Builder(mt=True)
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         html = (tmp_path / "out" / "index.html").read_text()
         assert "coi-serviceworker.js" in html
@@ -1255,7 +1768,9 @@ class TestFullBuildMt:
 class TestFullBuildGtmId:
     def test_gtm_snippet_injected_into_all_html_files(self, tmp_path, minimal_model):
         builder = Builder(gtm_id="GTM-SAMPLE123")
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         out = tmp_path / "out"
         for html_file in [out / "index.html", out / "main" / "index.html"]:
@@ -1266,7 +1781,9 @@ class TestFullBuildGtmId:
 
     def test_no_gtm_without_gtm_id(self, tmp_path, minimal_model):
         builder = Builder()
-        builder.add_project(name="Test").add_scene(name="Scene", model=minimal_model)
+        builder.add_project(name="Test").add_scene(
+            control_dt=0.02, name="Scene", model=minimal_model
+        )
         builder.build(tmp_path / "out")
         html = (tmp_path / "out" / "index.html").read_text()
         assert "googletagmanager.com" not in html

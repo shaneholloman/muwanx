@@ -9,7 +9,6 @@ import sys
 import mjlab.tasks  # noqa: F401 - populates the mjlab task registry
 import mujoco
 import src.tasks  # noqa: F401
-from mjlab.tasks.registry import load_env_cfg
 
 import mjswan
 
@@ -29,7 +28,7 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder()
 
     project = builder.add_project(name="Unitree RL")
-    scene = project.add_scene_mjlab(task_id, play=True)
+    scene = project.add_scene_mjlab(task_id)
 
     # Customize skybox
     mjspec = scene._config.spec
@@ -44,15 +43,8 @@ def setup_builder() -> mjswan.Builder:
         height=512,
     )
 
-    env_cfg = load_env_cfg(task_id, play=True)
-    scene.add_policy_wandb(
-        run_paths,
-        task_id=task_id,
-        observations={"policy": env_cfg.observations["actor"]},
-        commands=env_cfg.commands,
-        actions=env_cfg.actions,
-        terminations=env_cfg.terminations,
-    )
+    # Every term set defaults to the scene's `env_cfg`, and `task_id` to the scene's task.
+    scene.add_policy_wandb(run_paths)
 
     return builder
 

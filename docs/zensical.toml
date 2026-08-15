@@ -1,9 +1,10 @@
 [project]
 site_name = "mjswan"
-site_description = "Documentation for the mjswan project."
+site_description = "Real-time interactive MuJoCo simulation with ONNX policy control, in the browser."
 site_url = "https://mjswan.readthedocs.io/"
 repo_name = "ttktjmt/mjswan"
 repo_url = "https://github.com/ttktjmt/mjswan"
+edit_uri = "edit/main/docs/docs/"
 copyright = "&copy;2026 mjswan Contributors"
 
 nav = [
@@ -14,19 +15,20 @@ nav = [
     { "Core Concepts" = "getting-started/core-concepts.md" },
     { "Examples" = "getting-started/examples.md" },
     { "CLI" = "getting-started/cli.md" },
-    { "Using mjlab" = "getting-started/mjlab.md" },
   ]},
   { "Guides" = [
+    { "Using mjlab" = "guides/mjlab.md" },
+    { "MDP Terms" = "guides/policy-config.md" },
+    { "How the Build Works" = "guides/how-it-works.md" },
     { "Deployment" = "guides/deployment.md" },
+    { "Publishing to Cloud" = "guides/publishing.md" },
+    { "Embedding" = "guides/embedding.md" },
   ]},
   { "API Reference" = [
-    { "Core API" = "api/core.md" },
+    { "Python API" = "api/core.md" },
+    { "Engine API (TypeScript)" = "api/engine.md" },
   ]},
-  { "Notes" = [
-    { "Embeddings" = "notes/embeddings.md" },
-    { "Policy Config" = "notes/policy-config.md" },
-    { "Resources" = "notes/resources.md" },
-  ]},
+  { "Resources" = "resources.md" },
 ]
 
 # ----------------------------------------------------------------------------
@@ -36,21 +38,31 @@ nav = [
 language = "en"
 features = [
   "search.highlight",
+  "content.action.edit",
+  "content.action.view",
   "content.tabs.link",
   "content.tooltips",
   "content.code.annotate",
   "content.code.copy",
   "content.code.select",
+  "content.lazy",
+  "navigation.tabs",
+  "navigation.tabs.sticky",
   "navigation.indexes",
   "navigation.sections",
   "navigation.expand",
+  "navigation.instant",
+  "navigation.instant.progress",
   "navigation.path",
+  "navigation.tracking",
   "navigation.top",
   "navigation.footer",
+  "toc.follow",
 ]
 
-[project.theme.icon]
-logo = "simple/readthedocs"
+# The header is dark in both palettes, so assets/logo.svg is a fixed-white copy of
+# the project logo rather than the prefers-color-scheme one the app ships.
+logo = "assets/logo.svg"
 
 [project.theme.font]
 text = "Roboto"
@@ -77,10 +89,14 @@ toggle.name = "Switch to dark mode"
 # ----------------------------------------------------------------------------
 [project.markdown_extensions.admonition]
 [project.markdown_extensions.attr_list]
+[project.markdown_extensions.def_list]
+[project.markdown_extensions.footnotes]
 [project.markdown_extensions.md_in_html]
 
+[project.markdown_extensions.pymdownx.tasklist]
+custom_checkbox = true
+
 [project.markdown_extensions.pymdownx.details]
-[project.markdown_extensions.pymdownx.superfences]
 [project.markdown_extensions.pymdownx.inlinehilite]
 [project.markdown_extensions.pymdownx.snippets]
 [project.markdown_extensions.pymdownx.blocks.caption]
@@ -97,5 +113,29 @@ pygments_lang_class = true
 [project.markdown_extensions.pymdownx.tabbed]
 alternate_style = true
 
+# `mermaid` fences render as diagrams instead of highlighted code.
+[[project.markdown_extensions.pymdownx.superfences.custom_fences]]
+name = "mermaid"
+class = "mermaid"
+format = "pymdownx.superfences.fence_code_format"
+
 [project.markdown_extensions.toc]
 permalink = true
+
+# ----------------------------------------------------------------------------
+# Extra
+# ----------------------------------------------------------------------------
+[[project.extra.social]]
+icon = "simple/github"
+link = "https://github.com/ttktjmt/mjswan"
+name = "mjswan on GitHub"
+
+[[project.extra.social]]
+icon = "simple/pypi"
+link = "https://pypi.org/project/mjswan"
+name = "mjswan on PyPI"
+
+[[project.extra.social]]
+icon = "simple/npm"
+link = "https://www.npmjs.com/package/mjswan"
+name = "mjswan on npm"

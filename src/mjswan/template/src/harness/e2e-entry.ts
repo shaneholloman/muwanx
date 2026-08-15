@@ -16,6 +16,8 @@ export interface HarnessOutcome {
   /** True if the captured frame has luminance spread (not a flat/blank canvas). */
   nonBlank?: boolean;
   luminanceRange?: [number, number];
+  /** The seed the engine reports back, for the ADR 0005 §2 replay path. */
+  termSeed?: number;
 }
 
 declare global {
@@ -24,6 +26,9 @@ declare global {
   }
 }
 
+/** Arbitrary but not the built-in default, so a dropped option is visible. */
+const HARNESS_SEED = 0xc0ffee;
+
 async function main(): Promise<void> {
   const element = document.getElementById('app');
   if (!element) throw new Error('missing #app');
@@ -31,7 +36,8 @@ async function main(): Promise<void> {
   const sceneUrl = new URLSearchParams(location.search).get('scene') ?? '/fixtures/container.mjz';
   const states: MjswanEngineState[] = [];
 
-  const engine = await createEngine(element);
+  // Caller-chosen, so the test checks the value survives option → runtime → snapshot.
+  const engine = await createEngine(element, { termSeed: HARNESS_SEED });
   engine.subscribe((state) => states.push(state));
 
   const model = await (await fetch(sceneUrl)).arrayBuffer();
@@ -60,6 +66,7 @@ async function main(): Promise<void> {
 
   window.__harness = {
     ok: true,
+    termSeed: engine.getState().termSeed,
     running: states.some((s) => s.phase === 'running'),
     nonBlank: max - min > 8,
     luminanceRange: [min, max],

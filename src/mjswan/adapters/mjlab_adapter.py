@@ -10,16 +10,14 @@ need to be importable for mjswan to function.
 
 Mapping strategy
 ----------------
-Because mjswan sentinels and classes **share the same names** as their
-mjlab counterparts, the adapter resolves mappings dynamically via
-``getattr`` on the mjswan modules — no hardcoded registries required.
-
-* **Observation / termination functions**: ``func.__name__`` is looked
-  up directly on ``mjswan.envs.mdp.observations`` /
-  ``mjswan.envs.mdp.terminations``.
+* **Observation / termination / event functions**: mjlab's own function object is
+  traced against the scene's live env at build time. An author can override what gets
+  traced via ``register_observation`` / ``register_termination`` / ``register_event``.
+* **Commands**: ``type(cfg).__name__`` is looked up in the command registry, which
+  either traces the built term or maps it to a permanently-native TS class.
 * **Action configs**: ``type(cfg).__name__`` is looked up on
-  ``mjswan.envs.mdp.actions``, and dataclass fields are copied
-  automatically.
+  ``mjswan.envs.mdp.actions`` and dataclass fields are copied. Actions stay a fixed,
+  native, non-traced set.
 """
 
 from __future__ import annotations
@@ -27,15 +25,13 @@ from __future__ import annotations
 import dataclasses
 import re
 import warnings
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, NamedTuple
 
 from ..command import CommandTermConfig as MjswanCommandTermConfig
+from ..command import PendingCommandTrace, PendingResetTrace, default_viz
 from ..command import _custom_registry as _custom_command_registry
 from ..envs.mdp import actions as _actions_module
-from ..envs.mdp import events as _events_module
-from ..envs.mdp import observations as _obs_module
-from ..envs.mdp import terminations as _term_module
 from ..envs.mdp.actions.actions import (
     ActionTermCfg as MjswanActionTermCfg,
 )
@@ -62,65 +58,26 @@ def _is_from_mjlab(obj: Any) -> bool:
     return module.startswith("mjlab")
 
 
-# ---------------------------------------------------------------------------
-# Observation adaptation
-# ---------------------------------------------------------------------------
+# --- Observation adaptation ---
 
 
-def _adapt_obs_func(func: Any, term_name: str | None = None) -> ObservationBinding:
-    """Convert an mjlab observation callable to an mjswan ``ObservationBinding`` sentinel.
+def _adapt_obs_func(
+    func: Any, term_name: str | None = None
+) -> ObservationBinding | Callable[..., Any]:
+    """Resolve the function an observation term's ONNX graph is traced from.
 
-    If *func* is already an mjswan ``ObservationBinding`` it is returned as-is, so
-    mjswan sentinels can be passed directly inside mjlab ``ObservationTermCfg``
-    for functions that have no mjlab equivalent.
-
-    Otherwise, looks up ``func.__name__`` directly on
-    ``mjswan.envs.mdp.observations``.  When the function name resolves to an
-    unsupported sentinel (e.g. ``builtin_sensor`` used for standard state
-    observations in some mjlab tasks), ``term_name`` is tried as a fallback so
-    that terms like ``base_lin_vel`` and ``base_ang_vel`` are resolved
-    correctly even though their underlying mjlab function is ``builtin_sensor``.
+    An ``ObservationBinding`` passes through, then any ``register_observation``
+    override for this function or term name, then mjlab's own function — which the
+    build traces directly.
     """
     if isinstance(func, ObservationBinding):
         return func
     name = getattr(func, "__name__", None)
-    sentinel = getattr(_obs_module, name, None) if name else None
-    if (
-        name
-        and name in _custom_registry
-        and (
-            not isinstance(sentinel, ObservationBinding)
-            or sentinel.unsupported_reason is not None
-        )
-    ):
-        return _custom_registry[name]
-    if isinstance(sentinel, ObservationBinding) and sentinel.unsupported_reason is None:
-        return sentinel
-    # DSL callable (ADR 0003) — pass through; the build will trace it.
-    if callable(sentinel):
-        return sentinel  # type: ignore[return-value]
-    # Fall back to term name when the function name is missing or unsupported
-    if term_name:
-        if term_name in _custom_registry:
-            return _custom_registry[term_name]
-        fallback = getattr(_obs_module, term_name, None)
-        if isinstance(fallback, ObservationBinding):
-            return fallback
-        if callable(fallback):
-            return fallback  # type: ignore[return-value]
-    if isinstance(sentinel, ObservationBinding):
-        return sentinel
-    # Fall back to user-registered custom sentinels
     if name and name in _custom_registry:
         return _custom_registry[name]
     if term_name and term_name in _custom_registry:
         return _custom_registry[term_name]
-    raise ValueError(
-        f"No mjswan mapping for mjlab observation function '{name}'. "
-        f"Ensure a matching ObservationBinding sentinel exists in "
-        f"mjswan.envs.mdp.observations, or register one with "
-        f"mjswan.envs.mdp.observations.register_observation()."
-    )
+    return func
 
 
 def _sanitize_obs_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -163,11 +120,22 @@ def _sanitize_obs_params(params: dict[str, Any]) -> dict[str, Any]:
 def _adapt_obs_term(
     term: Any, term_name: str | None = None
 ) -> MjswanObservationTermCfg:
-    """Convert a single mjlab ``ObservationTermCfg`` to mjswan."""
+    """Convert a single mjlab ``ObservationTermCfg`` to mjswan.
+
+    Params are sanitized only for an ``ObservationBinding``, whose params go verbatim
+    into the browser JSON. A traced func keeps the real ``SceneEntityCfg`` mjlab's own
+    function expects.
+    """
     raw_params = dict(getattr(term, "params", None) or {})
+    func = _adapt_obs_func(term.func, term_name=term_name)
+    params = (
+        _sanitize_obs_params(raw_params)
+        if isinstance(func, ObservationBinding)
+        else raw_params
+    )
     return MjswanObservationTermCfg(
-        func=_adapt_obs_func(term.func, term_name=term_name),
-        params=_sanitize_obs_params(raw_params),
+        func=func,
+        params=params,
         scale=getattr(term, "scale", None),
         clip=getattr(term, "clip", None),
         history_length=getattr(term, "history_length", 0) or 0,
@@ -188,64 +156,176 @@ def _adapt_obs_group(group: Any) -> MjswanObservationGroupCfg:
     )
 
 
+#: Groups belonging to networks that never leave training. Only the actor is exported,
+#: so these have no input to feed and are dropped rather than traced and bundled.
+_TRAINING_ONLY_OBS_GROUPS = frozenset({"critic"})
+
+#: The key a single observation group lands under — an ONNX input name, not a label:
+#: ``OnnxModule`` defaults ``in_keys`` to ``['policy']``, and an input it cannot find
+#: leaves the policy silently inert.
+DEFAULT_OBS_GROUP_KEY = "policy"
+
+#: mjlab's name for the group its actor network reads, and the fallback when no runner
+#: config says otherwise (a hand-built ``env_cfg`` has none).
+_MJLAB_ACTOR_GROUP = "actor"
+
+
+def _is_obs_group(value: Any) -> bool:
+    """Whether *value* is a single observation group rather than a dict of them."""
+    if isinstance(value, MjswanObservationGroupCfg):
+        return True
+    # A group carries `terms`; a dict of groups does not.
+    return not isinstance(value, Mapping) and hasattr(value, "terms")
+
+
+def _select_policy_group(
+    observations: Mapping[str, Any],
+    policy_groups: tuple[str, ...] | None,
+) -> Mapping[str, Any]:
+    """Reduce an mjlab-shaped group dict to the one group the policy's ONNX input reads.
+
+    mjlab keys ``observations`` by *network* name; mjswan keys it by *ONNX input* name.
+    Only a dict that is plainly the former is remapped — a policy whose input really is
+    called ``"obs_history"``, or a multi-input one, keeps the keys it declares.
+
+    *policy_groups* (``rl_cfg.obs_groups["actor"]``) wins over the ``"actor"`` name, but
+    only when it names a key actually present: remapping on the strength of a task id
+    alone would break a policy whose input is named something else.
+    """
+    if not observations:
+        return observations
+
+    if policy_groups and not set(policy_groups).isdisjoint(observations):
+        if len(policy_groups) != 1:
+            # rsl-rl concatenates several groups per network; mjswan feeds one vector
+            # per ONNX input, and taking the first would silently shorten it.
+            raise ValueError(
+                "The task's runner config feeds its actor network "
+                f"{len(policy_groups)} concatenated observation groups "
+                f"({', '.join(map(repr, policy_groups))}). mjswan feeds one group per "
+                "ONNX input and cannot concatenate them, so pass the single group the "
+                "exported policy actually takes: "
+                "`observations=env_cfg.observations[<name>]`."
+            )
+        return {DEFAULT_OBS_GROUP_KEY: observations[policy_groups[0]]}
+
+    if _MJLAB_ACTOR_GROUP in observations:
+        return {DEFAULT_OBS_GROUP_KEY: observations[_MJLAB_ACTOR_GROUP]}
+    return observations
+
+
 def adapt_observations(
-    observations: dict[str, Any] | None,
+    observations: Mapping[str, Any] | Any | None,
+    *,
+    policy_groups: tuple[str, ...] | None = None,
 ) -> dict[str, MjswanObservationGroupCfg] | None:
     """Adapt observation groups, converting mjlab types if detected.
 
-    If the values are already ``mjswan.ObservationGroupCfg`` instances they
-    are returned as-is.  mjlab ``ObservationGroupCfg`` instances are
-    converted transparently.
+    Accepts three shapes, because the caller should not have to know which key the
+    runtime will look for:
+
+    * a **single** group — mjlab's ``env_cfg.observations["actor"]`` — which lands
+      under :data:`DEFAULT_OBS_GROUP_KEY`;
+    * mjlab's whole ``env_cfg.observations`` dict, from which the policy's group is
+      selected (see :func:`_select_policy_group`) and the rest dropped;
+    * a dict already keyed by ONNX input name, passed through as-is.
+
+    mjlab groups convert transparently, mjswan ones pass through, and a group named for
+    a training-only network (:data:`_TRAINING_ONLY_OBS_GROUPS`) is dropped with a
+    warning.
+
+    *policy_groups* is the task's ``rl_cfg.obs_groups["actor"]``, consulted only for the
+    dict form.
     """
     if observations is None:
         return None
-    return {
-        key: group
-        if isinstance(group, MjswanObservationGroupCfg)
-        else _adapt_obs_group(group)
-        if _is_from_mjlab(group)
-        else group
-        for key, group in observations.items()
-    }
+    if _is_obs_group(observations):
+        observations = {DEFAULT_OBS_GROUP_KEY: observations}
+    else:
+        observations = _select_policy_group(observations, policy_groups)
+
+    # `Any`-valued while filling: the last branch passes a duck-typed group through.
+    adapted: dict[str, Any] = {}
+    for key, group in observations.items():
+        if key in _TRAINING_ONLY_OBS_GROUPS:
+            warnings.warn(
+                f"Dropping observation group {key!r}: mjlab exports only the actor "
+                "network, so no ONNX input consumes it. Pass just the policy's own "
+                'group — `observations=env_cfg.observations["actor"]`.',
+                category=RuntimeWarning,
+                stacklevel=3,
+            )
+            continue
+        if isinstance(group, MjswanObservationGroupCfg):
+            adapted[key] = group
+        elif _is_from_mjlab(group):
+            adapted[key] = _adapt_obs_group(group)
+        else:
+            adapted[key] = group
+    return adapted
 
 
-# ---------------------------------------------------------------------------
-# Termination adaptation
-# ---------------------------------------------------------------------------
+class MjlabRunnerDefaults(NamedTuple):
+    """What an mjlab task's *runner* config contributes to browser playback.
+
+    Everything else on it is training-only or already inside the exported ONNX.
+    """
+
+    policy_obs_groups: tuple[str, ...] | None
+    """``obs_groups["actor"]``: which observation group(s) the actor network reads."""
+
+    clip_actions: float | None
+    """The symmetric bound rsl-rl clamps the policy's raw output to."""
 
 
-def _adapt_term_func(func: Any, term_name: str | None = None) -> TerminationBinding:
-    """Convert an mjlab termination callable to an mjswan ``TerminationBinding`` sentinel.
+_NO_RUNNER_DEFAULTS = MjlabRunnerDefaults(policy_obs_groups=None, clip_actions=None)
 
-    If *func* is already an mjswan ``TerminationBinding`` it is returned as-is, so
-    mjswan sentinels can be passed directly inside mjlab ``TerminationTermCfg``
-    for functions that have no mjlab equivalent.
 
-    Otherwise, looks up ``func.__name__`` directly on
-    ``mjswan.envs.mdp.terminations``.  When the function is a closure (e.g.
-    ``_fn``), *term_name* is tried as a fallback against ``_custom_term_registry``
-    so tasks can register by dict key rather than by function name.
+def resolve_runner_defaults(task_id: str | None) -> MjlabRunnerDefaults:
+    """Read an mjlab task's runner config for the two fields playback needs.
+
+    All-``None`` when the task is unknown or mjlab is absent, leaving the caller on the
+    ``"actor"`` group name with the action unclamped.
+    """
+    if task_id is None:
+        return _NO_RUNNER_DEFAULTS
+    try:
+        from mjlab.tasks.registry import load_rl_cfg
+    except ImportError:
+        return _NO_RUNNER_DEFAULTS
+    try:
+        rl_cfg = load_rl_cfg(task_id)
+    except (KeyError, AttributeError):
+        return _NO_RUNNER_DEFAULTS
+
+    obs_groups = getattr(rl_cfg, "obs_groups", None)
+    groups = obs_groups.get("actor") if isinstance(obs_groups, Mapping) else None
+    clip = getattr(rl_cfg, "clip_actions", None)
+    return MjlabRunnerDefaults(
+        policy_obs_groups=tuple(groups) if groups else None,
+        clip_actions=float(clip) if clip is not None else None,
+    )
+
+
+# --- Termination adaptation ---
+
+
+def _adapt_term_func(
+    func: Any, term_name: str | None = None
+) -> TerminationBinding | Callable[..., Any]:
+    """Resolve the function a termination term's ONNX graph is traced from.
+
+    Same resolution order as :func:`_adapt_obs_func`. *term_name* also covers closures,
+    which can only be registered by their dict key.
     """
     if isinstance(func, TerminationBinding):
         return func
     name = getattr(func, "__name__", None)
-    sentinel = getattr(_term_module, name, None) if name else None
-    if isinstance(sentinel, TerminationBinding):
-        return sentinel
-    # DSL callable (ADR 0003) — pass through; the build will trace it.
-    if callable(sentinel):
-        return sentinel  # type: ignore[return-value]
     if name and name in _custom_term_registry:
         return _custom_term_registry[name]
-    # Fall back to term_name when the function name is a closure (e.g. '_fn')
     if term_name and term_name in _custom_term_registry:
         return _custom_term_registry[term_name]
-    raise ValueError(
-        f"No mjswan mapping for mjlab termination function '{name}'. "
-        f"Ensure a matching TerminationBinding sentinel exists in "
-        f"mjswan.envs.mdp.terminations, or register one with "
-        f"mjswan.envs.mdp.terminations.register_termination()."
-    )
+    return func
 
 
 def _sanitize_termination_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -276,11 +356,20 @@ def _sanitize_termination_params(params: dict[str, Any]) -> dict[str, Any]:
 def _adapt_term_cfg(
     term: Any, term_name: str | None = None
 ) -> MjswanTerminationTermCfg:
-    """Convert a single mjlab ``TerminationTermCfg`` to mjswan."""
+    """Convert a single mjlab ``TerminationTermCfg`` to mjswan.
+
+    As in :func:`_adapt_obs_term`, params are sanitized only for the binding path.
+    """
     raw_params = dict(getattr(term, "params", None) or {})
+    func = _adapt_term_func(term.func, term_name=term_name)
+    params = (
+        _sanitize_termination_params(raw_params)
+        if isinstance(func, TerminationBinding)
+        else raw_params
+    )
     return MjswanTerminationTermCfg(
-        func=_adapt_term_func(term.func, term_name=term_name),
-        params=_sanitize_termination_params(raw_params),
+        func=func,
+        params=params,
         time_out=getattr(term, "time_out", False),
     )
 
@@ -301,9 +390,7 @@ def adapt_terminations(
     }
 
 
-# ---------------------------------------------------------------------------
-# Command adaptation
-# ---------------------------------------------------------------------------
+# --- Command adaptation ---
 
 
 def _adapt_command_cfg(term: Any) -> MjswanCommandTermConfig:
@@ -320,8 +407,37 @@ def _adapt_command_cfg(term: Any) -> MjswanCommandTermConfig:
             f"Register one with mjswan.register_command()."
         )
 
+    if spec.is_onnx_traced:
+        assert spec.state_fields is not None and spec.command_field is not None
+        ui = spec.ui(term) if callable(spec.ui) else spec.ui
+        viz = spec.viz(term) if callable(spec.viz) else spec.viz
+        if viz is None:
+            viz = default_viz(term)
+        return MjswanCommandTermConfig(
+            term_name="OnnxCommand",
+            pending_trace=PendingCommandTrace(
+                mjlab_cfg=term,
+                state_fields=spec.state_fields,
+                command_field=spec.command_field,
+                trace_override=spec.trace_override,
+                ui=ui,
+                viz=viz,
+            ),
+        )
+
+    assert spec.serializer is not None
     serialized = dict(spec.serializer(term))
-    return MjswanCommandTermConfig(term_name=spec.ts_name, params=serialized)
+    # A native term may still own a reset-time graph for its randomization.
+    reset_trace = spec.reset_trace(term) if spec.reset_trace is not None else None
+    return MjswanCommandTermConfig(
+        term_name=spec.ts_name,
+        params=serialized,
+        pending_reset_trace=(
+            PendingResetTrace(func=reset_trace[0], params=reset_trace[1])
+            if reset_trace is not None
+            else None
+        ),
+    )
 
 
 def adapt_commands(
@@ -351,14 +467,11 @@ def adapt_commands(
     return adapted
 
 
-# ---------------------------------------------------------------------------
-# Action adaptation
-# ---------------------------------------------------------------------------
+# --- Action adaptation ---
 
 
 _ACTION_CLASS_ALIASES: dict[str, str] = {
-    # myosuite ships its own muscle action cfg outside mjlab's class hierarchy.
-    # Translate it to mjswan's MuscleActivationActionCfg.
+    # myosuite's muscle action cfg sits outside mjlab's hierarchy; translate it.
     "MyoMuscleActivationActionCfg": "MuscleActivationActionCfg",
 }
 
@@ -387,7 +500,6 @@ def _adapt_action_cfg(term: Any) -> MjswanActionTermCfg | None:
         )
         return None
 
-    # Copy all matching dataclass fields from the mjlab instance
     kwargs: dict[str, Any] = {}
     entity_name = getattr(term, "entity_name", None)
     for f in dataclasses.fields(mjswan_cls):
@@ -397,8 +509,7 @@ def _adapt_action_cfg(term: Any) -> MjswanActionTermCfg | None:
         if val is not dataclasses.MISSING:
             kwargs[f.name] = val
 
-    # mjlab namespaces actuator names as "{entity_name}/{name}"; prefix them
-    # so they match the fully-qualified policy_joint_names at runtime.
+    # Prefixed with the entity name, as mjlab does, to match policy_joint_names.
     if entity_name and "actuator_names" in kwargs:
         raw = kwargs["actuator_names"]
         if isinstance(raw, (list, tuple)):
@@ -467,28 +578,24 @@ def resolve_action_scales(
             setattr(term, "offset", _resolve(offset))
 
 
-# ---------------------------------------------------------------------------
-# Event adaptation
-# ---------------------------------------------------------------------------
+# --- Event adaptation ---
 
 
-def _adapt_event_func(func: Any) -> EventBinding:
-    """Convert an mjlab event callable to an mjswan ``EventBinding`` sentinel."""
+def _adapt_event_func(
+    func: Any, term_name: str | None = None
+) -> EventBinding | Callable[..., Any]:
+    """Resolve the function an event term's ONNX graph is traced from.
+
+    See :func:`_adapt_obs_func` — same resolution order.
+    """
     if isinstance(func, EventBinding):
         return func
     name = getattr(func, "__name__", None)
-    sentinel = getattr(_events_module, name, None) if name else None
-    if isinstance(sentinel, EventBinding):
-        return sentinel
-    # DSL mutation builder (ADR 0003) — pass through; the build will trace it.
-    if callable(sentinel):
-        return sentinel  # type: ignore[return-value]
     if name and name in _custom_event_registry:
         return _custom_event_registry[name]
-    raise ValueError(
-        f"No mjswan mapping for mjlab event function '{name}'. "
-        f"Register one with mjswan.envs.mdp.events.register_event()."
-    )
+    if term_name and term_name in _custom_event_registry:
+        return _custom_event_registry[term_name]
+    return func
 
 
 def _sanitize_event_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -520,51 +627,58 @@ def _sanitize_event_params(params: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _adapt_event_cfg(term: Any) -> MjswanEventTermCfg | None:
+def _adapt_event_cfg(term: Any, term_name: str | None = None) -> MjswanEventTermCfg:
     """Convert a single mjlab ``EventTermCfg`` to mjswan.
 
-    Only ``mode="reset"`` events are meaningful for the browser runtime.
+    Covers all three modes. As in :func:`_adapt_obs_term`, params are sanitized only
+    for the binding path.
     """
-    mode = getattr(term, "mode", "reset")
-    if mode != "reset":
-        return None
-    try:
-        func = _adapt_event_func(term.func)
-    except ValueError as exc:
-        warnings.warn(str(exc), category=RuntimeWarning, stacklevel=3)
-        return None
+    func = _adapt_event_func(term.func, term_name=term_name)
     raw_params = dict(getattr(term, "params", None) or {})
-    params = _sanitize_event_params(raw_params)
-    return MjswanEventTermCfg(func=func, mode=mode, params=params)
+    params = (
+        _sanitize_event_params(raw_params)
+        if isinstance(func, EventBinding)
+        else raw_params
+    )
+    return MjswanEventTermCfg(
+        func=func,
+        mode=getattr(term, "mode", "reset"),
+        params=params,
+        interval_range_s=getattr(term, "interval_range_s", None),
+        is_global_time=getattr(term, "is_global_time", False),
+        min_step_count_between_reset=getattr(
+            term, "min_step_count_between_reset", None
+        ),
+    )
 
 
 def adapt_events(
     events: Mapping[str, Any] | None,
-) -> list[dict[str, Any]] | None:
+) -> dict[str, MjswanEventTermCfg] | None:
     """Adapt event configs, converting mjlab types if detected.
 
-    Returns a list of serialized event dicts ready for JSON output,
-    filtering to ``mode="reset"`` only.
+    Serialization (ONNX tracing included) happens later, at build time, once the scene's
+    live env and output directory are known.
     """
     if not events:
         return None
-    result: list[dict[str, Any]] = []
+    result: dict[str, MjswanEventTermCfg] = {}
     for key, term in events.items():
         if isinstance(term, MjswanEventTermCfg):
-            if term.mode == "reset":
-                result.append(term.to_dict())
+            result[key] = term
         elif _is_from_mjlab(term):
-            adapted = _adapt_event_cfg(term)
-            if adapted is not None:
-                result.append(adapted.to_dict())
+            result[key] = _adapt_event_cfg(term, term_name=key)
         # non-mjlab, non-mjswan entries are skipped
     return result or None
 
 
 __all__ = [
+    "DEFAULT_OBS_GROUP_KEY",
     "adapt_events",
     "adapt_observations",
     "adapt_actions",
     "adapt_terminations",
     "resolve_action_scales",
+    "MjlabRunnerDefaults",
+    "resolve_runner_defaults",
 ]

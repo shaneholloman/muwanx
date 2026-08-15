@@ -1,11 +1,28 @@
+import type { OnnxInputSlot } from '../onnx/session';
+
 export type EventConfig = {
   name: string;
   params?: Record<string, unknown>;
+  /** Set for an ONNX-backed event; without `mode`/`onnx` it is a reset-only plugin term. */
+  mode?: 'startup' | 'reset' | 'interval';
+  /** Set by the build for a term it could not trace; `reason` says why. */
+  native?: boolean;
+  reason?: string;
+  onnx?: string;
+  rand_dim?: number;
+  input_slots?: OnnxInputSlot[];
+  write_targets?: unknown[];
+  rand_ranges?: Array<[number, number]>;
+  interval_range_s?: [number, number];
+  is_global_time?: boolean;
+  min_step_count_between_reset?: number;
 };
 
 export type EventContext = {
-  mjModel: import('mujoco').MjModel;
-  mjData: import('mujoco').MjData;
+  mjModel: import('mujoco').MjModel | null;
+  mjData: import('mujoco').MjData | null;
+  /** Only a model-field randomization needs it, to call `mj_setConst`. */
+  mujoco?: import('mujoco').MainModule | null;
   terrainData?: TerrainData | null;
 };
 

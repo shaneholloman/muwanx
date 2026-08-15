@@ -11,6 +11,7 @@ import type { Bytes } from '../core/utils/bytes';
 import type { ViewerConfig } from '../core/engine/viewer_config';
 import type { EventConfig, TerrainData } from '../core/event/EventBase';
 import type { SplatConfig, SplatTransform } from '../core/scene/splat';
+import { eventGraphRefs, policyGraphRefs } from '../core/onnx/graphRefs';
 import type { PolicyInput, SceneInput, SplatInput } from '../engine/types';
 
 /** Maps a build-relative asset path (e.g. `main/assets/humanoid/scene.mjz`) to bytes. */
@@ -32,6 +33,8 @@ interface ConfigScene {
   camera?: ViewerConfig;
   events?: EventConfig[];
   terrainData?: TerrainData;
+  /** Seconds per control step, from the task (mjlab's `timestep * decimation`). */
+  controlDt?: number;
 }
 interface ConfigProject {
   name: string;
@@ -80,9 +83,8 @@ export interface Catalog {
   /** All projects in the build; the app chooses the active one. First is default. */
   projects: ProjectCatalog[];
   /**
-   * Build-relative path to the author custom-MDP plugin ESM, when present. The
-   * app (trusted contexts only) dynamically imports it and passes the exports
-   * as {@link EnginePlugins}; mjswan Cloud ignores it (ADR 0004 §10).
+   * Path to the author custom-MDP plugin ESM, if any. A trusted app imports it and passes
+   * the exports as {@link EnginePlugins}; mjswan Cloud ignores it.
    */
   pluginsPath?: string;
 }
@@ -107,10 +109,13 @@ function projectAsset(project: ConfigProject, rel: string): string {
   return `${dirName(project)}/assets/${rel}`.replace(/\/+/g, '/');
 }
 
-/** Join an asset path referenced *inside* policy.json, relative to its directory. */
-function policyAsset(policyConfigPath: string, assetPath: string): string {
-  const lastSlash = policyConfigPath.lastIndexOf('/');
-  const dir = lastSlash >= 0 ? policyConfigPath.slice(0, lastSlash + 1) : '';
+/**
+ * Join a path referenced *inside* another file, relative to that file's directory:
+ * policy.json's onnx/motion/graph paths, and a scene's event graphs.
+ */
+function siblingOf(filePath: string, assetPath: string): string {
+  const lastSlash = filePath.lastIndexOf('/');
+  const dir = lastSlash >= 0 ? filePath.slice(0, lastSlash + 1) : '';
   return `${dir}${assetPath}`.replace(/\/+/g, '/');
 }
 
@@ -167,17 +172,35 @@ async function buildPolicy(
   if (!onnxRel) {
     throw new Error(`mjswan/manifest: policy "${policy.name}" config missing onnx.path.`);
   }
-  const onnx = source(policyAsset(configPath, onnxRel));
+  const onnx = source(siblingOf(configPath, onnxRel));
 
   const motions = Array.isArray(config.motions)
     ? (config.motions as Array<{ name: string; path: string; default?: boolean }>).map((m) => ({
         name: m.name,
-        data: source(policyAsset(configPath, m.path)),
+        data: source(siblingOf(configPath, m.path)),
         default: m.default,
       }))
     : [];
 
-  return { config, onnx, motions };
+  return { config, onnx, graphs: graphBytes(policyGraphRefs(config), configPath, source), motions };
+}
+
+/**
+ * Byte sources for a config's traced term graphs, keyed by the path the config
+ * refers to them by (ADR 0005 §4).
+ *
+ * The keys stay config-relative — that is what the runtime looks a session up by
+ * — while the source is asked for the build-relative path, same as any other
+ * policy-adjacent asset.
+ */
+function graphBytes(
+  refs: string[],
+  configPath: string,
+  source: ByteSource,
+): Record<string, Bytes> {
+  const graphs: Record<string, Bytes> = {};
+  for (const ref of refs) graphs[ref] = source(siblingOf(configPath, ref));
+  return graphs;
 }
 
 function toSceneEntry(project: ConfigProject, scene: ConfigScene, source: ByteSource): SceneEntry {
@@ -210,13 +233,17 @@ function toSceneEntry(project: ConfigProject, scene: ConfigScene, source: ByteSo
       const splatName = opts?.splat;
       const splat =
         splatName == null ? undefined : scene.splats?.find((s) => s.name === splatName);
+      // Event graphs sit beside the model, so they resolve relative to it, not policy.json.
+      const modelPath = scenePath(project, scene);
       return {
-        model: source(scenePath(project, scene)),
+        model: source(modelPath),
         policy: policy ? await buildPolicy(project, policy, source) : null,
         splat: splat ? buildSplat(project, splat, source) : null,
         viewer: scene.camera,
         events: scene.events,
         terrainData: scene.terrainData,
+        controlDt: scene.controlDt,
+        graphs: graphBytes(eventGraphRefs(scene.events), modelPath, source),
       };
     },
   };

@@ -77,11 +77,21 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder(debug=True)
 
     project = builder.add_project(name="MuscleMimic Fullbody")
-    scene = project.add_scene_mjlab(task_id, play=True)
+
+    # TODO: adopt the single-config shape the other mjlab examples use — load `env_cfg`
+    # and inject `mimic_deviation` above this line, pass `env_cfg=` here, and drop the
+    # term sets from `add_policy_wandb`. Building the scene first means it never sees
+    # the injected config, hence the explicit term sets below.
+    #
+    # Converting makes mjlab's own `TerminationManager` see `mimic_deviation`'s extra
+    # params. That should be fine (params are validated at `compute()`, and the trace
+    # env is never stepped), but `myoMimicFullbody-v0` is not installed in CI, so run
+    # the example once afterwards.
+    scene = project.add_scene_mjlab(task_id)
 
     env_cfg = load_env_cfg(task_id, play=True)
 
-    # Inject clip_url/site_names/fps/thresholds into mimic_deviation (mjlab closure carries no params).
+    # mjlab's `mimic_deviation` closure carries no params, so inject them here.
     mimic_dev = env_cfg.terminations.get("mimic_deviation")
     if mimic_dev is not None:
         mimic_dev.params = {
@@ -94,10 +104,11 @@ def setup_builder() -> mjswan.Builder:
         }
 
     # mimic_lookahead is registered as unsupported and will be skipped by the builder.
+    # The four term sets are explicit only because of the load order — see the TODO above.
     policy_handles = scene.add_policy_wandb(
         run_paths,
         task_id=task_id,
-        observations={"policy": env_cfg.observations["actor"]},
+        observations=env_cfg.observations["actor"],
         commands=env_cfg.commands,
         actions=env_cfg.actions,
         terminations=env_cfg.terminations,
@@ -125,8 +136,9 @@ def setup_builder() -> mjswan.Builder:
         if num_actions > 0:
             handle._config.policy_num_actions = num_actions
 
-        # Rewrite the filesystem path to the bundled relative URL "{policy_id}_mimic_clip.npz".
-        clip_motion_url = f"{name2id(handle._config.name)}_mimic_clip.npz"
+        # Rewrite the filesystem path to the bundled relative URL. Scene-scoped and
+        # name-derived, so every checkpoint points at the one copy.
+        clip_motion_url = f"{name2id(mimic_clip.name)}.npz"
         if (
             handle._config.terminations
             and "mimic_deviation" in handle._config.terminations

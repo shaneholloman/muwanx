@@ -6,13 +6,15 @@ managing projects containing multiple scenes.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import mujoco
 
 from .adapters import apply_mjlab_sim_options, ensure_mjlab_extensions
-from .scene import SceneConfig, SceneHandle
+from .envs.mdp.events import apply_terrain_spawn
+from .scene import SceneConfig, SceneHandle, _env_cfg_control_dt
 from .utils import collect_spec_assets
 from .viewer import ViewerConfig
 
@@ -62,6 +64,8 @@ class ProjectHandle:
         model: mujoco.MjModel | None = None,
         spec: mujoco.MjSpec | None = None,
         metadata: dict[str, Any] | None = None,
+        control_dt: float | None = None,
+        events: Mapping[str, Any] | None = None,
     ) -> SceneHandle:
         """Add a MuJoCo scene to this project.
 
@@ -81,6 +85,18 @@ class ProjectHandle:
             model: MuJoCo model for the scene (saved as .mjb).
             spec: MuJoCo spec for the scene (saved as .mjz).
             metadata: Optional metadata dictionary for the scene.
+            control_dt: Seconds per control step — the rate the policy acts at,
+                mjlab's ``timestep * decimation``. Required once the scene carries a
+                policy: the model supplies only the physics ``timestep``, so nothing
+                else can supply this, and a wrong control rate produces no error at
+                playback — only a policy running at a speed it was not trained for.
+                :meth:`add_scene_mjlab` fills it in from the task.
+            events: Optional dict of ``EventTermCfg`` instances (mjswan or mjlab).
+                Equivalent to calling :meth:`~mjswan.scene.SceneHandle.set_events`
+                afterwards. Events are scene-scoped rather than per-policy: the runtime
+                builds one ``EventManager`` per scene and keeps it across policy
+                switches, and ``mode="startup"`` fires once at scene load, before any
+                policy is chosen (ADR 0004 §10, ADR 0005 brief §4).
 
         Returns:
             SceneHandle for adding policies and further configuration.
@@ -113,11 +129,22 @@ class ProjectHandle:
             model=model,
             spec=spec,
             metadata=metadata,
+            control_dt=None if control_dt is None else float(control_dt),
         )
         self._config.scenes.append(scene_config)
-        return SceneHandle(scene_config, self)
+        handle = SceneHandle(scene_config, self)
+        if events:
+            handle.set_events(events)
+        return handle
 
-    def add_scene_mjlab(self, task_id: str, *, play: bool = False) -> SceneHandle:
+    def add_scene_mjlab(
+        self,
+        task_id: str,
+        *,
+        play: bool | None = None,
+        env_cfg: Any | None = None,
+        events: Mapping[str, Any] | None = None,
+    ) -> SceneHandle:
         """Add a MuJoCo scene from an mjlab task.
 
         Loads the task's MuJoCo spec from the mjlab task registry and adds it
@@ -125,9 +152,23 @@ class ProjectHandle:
 
         Args:
             task_id: mjlab task identifier (e.g. ``"go2_flat"``).
-            play: Whether to load mjlab's play/evaluation config instead of the
-                training config. This is useful for demos that should match
-                mjlab's randomized play terrain layout.
+            play: Which of the task's two registered configs to load, as mjlab's
+                ``load_env_cfg(task_id, play=...)`` does.
+
+                Unset means **play**, unlike mjlab's own default: the training config
+                sets ``episode_length_s`` to 10-20 s, so a viewer built from it resets
+                the robot every few seconds while someone is watching. Pass ``False``
+                to reproduce training-time conditions.
+
+                Mutually exclusive with ``env_cfg``, which is already one of the two.
+            env_cfg: Pre-loaded (and possibly edited) env config, loaded with the
+                ``play`` you want. A tracking task does not need this — the builder aims
+                mjlab's empty ``motion_file`` at the clip it bundles.
+
+                The scene keeps whichever config it used, and its policies default their
+                term sets off it, so this is also how those defaults pick up your edits.
+            events: Scene events, overriding the task's own ``env_cfg.events``. Omit to
+                take the task's (the usual case); pass ``{}`` for a scene with none.
 
         Returns:
             SceneHandle for further configuration (add_policy, add_splat, etc.)
@@ -136,7 +177,7 @@ class ProjectHandle:
             ```python
             builder = mjswan.Builder()
             project = builder.add_project(name="My App")
-            scene = project.add_scene_mjlab("go2_flat", play=True)
+            scene = project.add_scene_mjlab("go2_flat")
             app = builder.build()
             ```
         """
@@ -149,27 +190,52 @@ class ProjectHandle:
                 "Install it with: pip install mjlab"
             ) from e
 
+        if env_cfg is not None and play is not None:
+            raise ValueError(
+                "Provide either 'play' or 'env_cfg', not both. `env_cfg` is already one "
+                "of the task's two registered configs, so `play` has nothing left to "
+                "select — load it as `load_env_cfg(task_id, play=...)` instead."
+            )
+
         ensure_mjlab_extensions()
-        env_cfg = load_env_cfg(task_id, play=play)
+        if env_cfg is None:
+            env_cfg = load_env_cfg(task_id, play=True if play is None else play)
+        # Always 1: `num_envs` only sets the batch dimension, `Scene.spec` is the same
+        # either way, and traced graphs carry a dynamic batch axis.
         env_cfg.scene.num_envs = 1
         scene = Scene(env_cfg.scene, device="cpu")
         scene.spec.assets.update(_collect_mjlab_scene_assets(env_cfg.scene))
         apply_mjlab_sim_options(scene.spec, getattr(env_cfg, "sim", None))
         handle = self.add_scene(spec=scene.spec, name=task_id)
+        # Kept so policies on this scene can default their term sets off the same config
+        # the scene (and its tracing env) was built from.
+        handle._config.mjlab_env_cfg = env_cfg
+        handle._config.mjlab_task_id = task_id
+
+        # The trace env comes later, from `builder._scene_trace_env`: a tracking task
+        # cannot build one until its clip has been written into the bundle.
+        # Rates differ per task — Cartpole 0.05, locomotion 0.02 — so read it here.
+        control_dt = _env_cfg_control_dt(env_cfg)
+        if control_dt is None:
+            raise ValueError(
+                f"Could not read a control rate off task {task_id!r}'s env config "
+                "(sim.mujoco.timestep * decimation). Pass `control_dt` to add_scene "
+                "and build the scene manually."
+            )
+        handle._config.control_dt = control_dt
         viewer_cfg = _adapt_mjlab_viewer_config(getattr(env_cfg, "viewer", None))
         if viewer_cfg is not None:
             handle.set_viewer(viewer_cfg)
         terrain_data = _extract_terrain_data(scene)
         if terrain_data:
-            # Expose terrain spawn positions as data.  Using them to override
-            # the spawn event (patch-based spawning) is a task-side concern —
-            # the spawn event itself is a mjswan browser enhancement, not an
-            # mjlab term — so core only surfaces the data here.  See
-            # examples/mjlab/defaults/events for the task-side wiring.
             handle._config.terrain_data = terrain_data
-        events = getattr(env_cfg, "events", None)
-        if events:
-            handle.set_events(events)
+        scene_events = (
+            events if events is not None else getattr(env_cfg, "events", None)
+        )
+        if scene_events:
+            handle.set_events(scene_events)
+        # After both: it rewrites an adapted event term using the patch table.
+        apply_terrain_spawn(handle._config)
         return handle
 
 

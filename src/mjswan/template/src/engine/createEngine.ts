@@ -7,7 +7,7 @@
  * snapshot for `subscribe`. No React, no catalog, no config.json, no fetch.
  */
 import { mjswanRuntime, type ResolvedPolicy, type ResolvedScene, type ResolvedSplat } from '../core/engine/runtime';
-import { resolveBytes } from '../core/utils/bytes';
+import { type Bytes, resolveBytes } from '../core/utils/bytes';
 import type { CommandDefinition, CommandEventListener } from '../core/command';
 import type { PolicyConfig } from '../core/policy/types';
 import type {
@@ -15,6 +15,7 @@ import type {
   CommandControls,
   CommandDescriptor,
   CreateEngineOptions,
+  DebugVisControls,
   MjswanEngine,
   MjswanEngineState,
   PolicyInput,
@@ -27,14 +28,35 @@ function toDescriptor(def: CommandDefinition): CommandDescriptor {
   const config = def.config;
   const base = { id: def.id, group: def.groupName, type: config.type, label: config.label };
   return config.type === 'slider'
-    ? { ...base, min: config.min, max: config.max, step: config.step, enabledWhen: config.enabled_when }
+    ? {
+        ...base,
+        min: config.min,
+        max: config.max,
+        step: config.step,
+        enabledWhen: config.enabled_when,
+        adjustableRange: config.adjustable_range,
+      }
     : base;
+}
+
+/**
+ * Resolve traced term graphs to bytes, in parallel. Eager unlike motions: a graph is
+ * needed the moment its manager is constructed, and they are small.
+ */
+async function resolveGraphs(
+  graphs: Record<string, Bytes> | undefined,
+): Promise<Array<{ name: string; data: ArrayBuffer }>> {
+  const entries = Object.entries(graphs ?? {});
+  return Promise.all(
+    entries.map(async ([name, bytes]) => ({ name, data: await resolveBytes(bytes) })),
+  );
 }
 
 async function resolvePolicy(input: PolicyInput): Promise<ResolvedPolicy> {
   return {
     config: input.config as PolicyConfig,
     onnx: await resolveBytes(input.onnx),
+    graphs: await resolveGraphs(input.graphs),
     // Motion bytes stay lazy — loaded on demand when a motion is selected.
     motions: (input.motions ?? []).map((m) => ({ name: m.name, data: m.data, default: m.default })),
     plugins: input.plugins,
@@ -60,12 +82,12 @@ class Engine implements MjswanEngine {
 
   readonly camera: CameraControls;
   readonly commands: CommandControls;
+  readonly debugVis: DebugVisControls;
 
   constructor(runtime: mjswanRuntime) {
     this.runtime = runtime;
     this.state = this.buildState();
-    // The runtime's CommandManager outlives individual loads, so one listener
-    // covers all command-value changes (policy load, reset, auto-termination).
+    // The CommandManager outlives individual loads, so one listener covers every change.
     this.runtime.commands.addEventListener(this.onCommandEvent);
 
     this.camera = {
@@ -76,6 +98,9 @@ class Engine implements MjswanEngine {
     this.commands = {
       set: (id, value) => this.runtime.commands.setValue(id, value),
       trigger: (id) => this.runtime.commands.triggerButton(id),
+    };
+    this.debugVis = {
+      set: (term, enabled) => this.runtime.commands.setDebugVisEnabled(term, enabled),
     };
   }
 
@@ -90,6 +115,8 @@ class Engine implements MjswanEngine {
       error: this.error,
       commands: cm.getCommands().map(toDescriptor),
       commandValues: cm.getValues(),
+      debugVis: cm.getDebugVisTerms().map(({ name, enabled }) => ({ term: name, enabled })),
+      termSeed: this.runtime.seed,
     };
   }
 
@@ -117,6 +144,8 @@ class Engine implements MjswanEngine {
         viewer: input.viewer ?? null,
         events: input.events ?? null,
         terrainData: input.terrainData ?? null,
+        controlDt: input.controlDt ?? null,
+        graphs: await resolveGraphs(input.graphs),
         plugins: input.plugins,
       };
       await this.runtime.loadEnvironment(scene);
@@ -132,8 +161,16 @@ class Engine implements MjswanEngine {
   }
 
   async setPolicy(input: PolicyInput | null): Promise<void> {
-    await this.runtime.loadPolicyConfig(input ? await resolvePolicy(input) : null);
-    this.refresh();
+    // Records and rethrows like `loadScene`. `refresh()` runs either way, so a rejected
+    // `setPolicy` still leaves the snapshot describing what is loaded — on failure, nothing.
+    try {
+      await this.runtime.loadPolicyConfig(input ? await resolvePolicy(input) : null);
+    } catch (err) {
+      this.error = err instanceof Error ? err : new Error(String(err));
+      throw err;
+    } finally {
+      this.refresh();
+    }
   }
 
   async setSplat(input: SplatInput | null): Promise<void> {
@@ -192,7 +229,7 @@ class Engine implements MjswanEngine {
 
 /**
  * Prepare an engine (MuJoCo WASM + WebGL) in `element`, then `loadScene(...)`.
- * `multithreaded` lazily loads `mujoco/mt` (needs COOP/COEP; the app's call).
+ * `multithreaded` lazily loads `mujoco/mt`, which needs COOP/COEP — the app's call.
  */
 export async function createEngine(
   element: HTMLElement,
@@ -200,5 +237,5 @@ export async function createEngine(
 ): Promise<MjswanEngine> {
   const mujocoModule = options.multithreaded ? await import('mujoco/mt') : await import('mujoco');
   const mujoco = await mujocoModule.default();
-  return new Engine(new mjswanRuntime(mujoco, element));
+  return new Engine(new mjswanRuntime(mujoco, element, options.termSeed));
 }

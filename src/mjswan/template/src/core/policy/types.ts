@@ -10,7 +10,7 @@ export type PolicyRunnerContext = {
   mjModel: MjModel | null;
   mjData: MjData | null;
   scene?: Scene | null;
-  /** Instance-scoped command manager; DSL command primitives read it via the runner. */
+  /** Instance-scoped command manager; command-state input slots read it via the runner. */
   commandManager?: CommandManager;
 };
 
@@ -48,19 +48,11 @@ export type ActionConfigEntry = {
   [key: string]: unknown;
 };
 
-export type TerminationConfigEntry =
-  | {
-    name: string;
-    params?: Record<string, unknown>;
-    time_out?: boolean;
-  }
-  | {
-    kind: 'termination';
-    nodes: import('../dsl/types').DslNode[];
-    output: string;
-    params?: Record<string, unknown>;
-    time_out?: boolean;
-  };
+export type TerminationConfigEntry = {
+  name: string;
+  params?: Record<string, unknown>;
+  time_out?: boolean;
+};
 
 export type PolicyConfig = {
   policy_module?: string;
@@ -72,9 +64,15 @@ export type PolicyConfig = {
   stiffness?: number[] | number;
   damping?: number[] | number;
   control_type?: string;
+  /**
+   * Symmetric bound on the raw policy output, mirroring rsl-rl's
+   * `RslRlVecEnvWrapper`. It clamps before `env.step`, so the clamped vector is what
+   * the action terms and any `last_action` observation see — not `ActionConfigEntry.clip`,
+   * which bounds `raw * scale + offset` per target.
+   */
+  clip_actions?: number;
   onnx?: {
-    // ONNX weights arrive as bytes via PolicyInput.onnx; only the io-key metadata
-    // is read from policy.json.
+    // Weights arrive as bytes via PolicyInput.onnx; policy.json holds only the io keys.
     meta?: {
       in_keys?: string[];
       out_keys?: (string | string[])[];

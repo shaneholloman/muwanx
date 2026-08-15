@@ -6,6 +6,10 @@ icon: octicons/rocket-16
 
 mjswan produces a fully static site — the output of `builder.build()` can be served from any static host without a backend. This page covers the common hosting options and the configuration that changes between them.
 
+!!! tip "Or skip hosting entirely"
+    [`mjswan publish`](publishing.md) uploads a build's data files to mjswan Cloud and hands
+    back a URL — no static host, no `base_path`, no headers to configure.
+
 ## The `base_path` setting
 
 When your site lives at the root of a domain (`https://example.com/`), the default `base_path="/"` works without any changes.
@@ -73,8 +77,6 @@ jobs:
 !!! note
     Replace `myrepo` with your actual repository name. The Pages source should be set to the `gh-pages` branch (created automatically by `peaceiris/actions-gh-pages`).
 
-<!-- MEDIA: suggest a screenshot of GitHub Pages settings showing the branch/folder configuration -->
-
 ## Netlify
 
 Drop the `dist/` directory into [Netlify Drop](https://app.netlify.com/drop) for an instant preview URL, or connect your Git repository for automatic deployments.
@@ -87,6 +89,17 @@ For CI builds, set the build command and publish directory:
 | Publish directory | `dist` |
 
 No `base_path` change is needed when deploying to a Netlify root domain.
+
+## Cloudflare Pages
+
+Same shape as Netlify, and the same `_headers` file works — mjswan writes one when
+`mt=True`. Point the project at your repo with build command `python build.py` and build
+output directory `dist`. The
+[GentleHumanoid](https://mjswan-gentlehumanoid.pages.dev/){:target="_blank"} and
+[MuscleMimic](https://mjswan-musclemimic.pages.dev/){:target="_blank"} demos are deployed
+this way.
+
+No `base_path` change is needed on a `*.pages.dev` root domain.
 
 ## Cross-Origin Isolation headers for multi-threading
 
@@ -143,3 +156,15 @@ project.add_scene(model=mujoco.MjModel.from_xml_path("scene.xml"), name="My Scen
 # Smaller output — prefer this for large deployments
 project.add_scene(spec=mujoco.MjSpec.from_file("scene.xml"), name="My Scene")
 ```
+
+`mjswan info dist` prints a per-scene, per-policy size breakdown, which is the fastest way
+to find what is actually large:
+
+```bash
+mjswan info dist
+```
+
+The traced MDP graphs are negligible by comparison — a whole observation group is typically
+a few kilobytes. Meshes, textures, `.onnx` checkpoints and `.spz` splats are what add up.
+For splats specifically, `url=` instead of `source=` keeps the file out of the build
+entirely ([Core Concepts → Splat](../getting-started/core-concepts.md#splat)).

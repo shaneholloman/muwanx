@@ -124,6 +124,29 @@ class TestLibBuild:
         code = (lib_dist / "mjswan.js").read_text()
         assert "Warning: React" not in code and "@mantine" not in code
 
+    def test_our_console_messages_are_stripped(self, lib_dist: Path):
+        """`Builder(debug=False)` promises a console-quiet bundle; assert the artifact.
+
+        Greps the bundle rather than the config, because the config lied once already:
+        `esbuild: {drop: ['console']}` stopped working at Vite 8 and every `console.*`
+        shipped anyway. The tags come from the sources, so a new one is covered the day
+        it is written.
+
+        mjswan's own messages only — a dependency taking a reference
+        (`console.log.bind(console)`) is not a call and cannot be dropped.
+        """
+        tag = re.compile(r"console\.\w+\(\s*[`'\"]?\s*(\[[A-Za-z][A-Za-z0-9_]*\])")
+        tags = {
+            match
+            for source in (TEMPLATE_DIR / "src").rglob("*.ts")
+            if "__tests__" not in source.parts
+            for match in tag.findall(source.read_text())
+        }
+        assert len(tags) > 5, f"the scan found only {tags} — it stopped matching"
+
+        code = (lib_dist / "mjswan.js").read_text()
+        assert [t for t in sorted(tags) if t in code] == []
+
     def test_no_unfolded_process_env_node_env(self, lib_dist: Path):
         """The bundle must be browser-self-contained: no unfolded `process`.
 

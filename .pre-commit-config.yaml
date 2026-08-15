@@ -9,8 +9,9 @@ repos:
       - id: end-of-file-fixer
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version.
-    rev: v0.14.9
+    # Keep in step with the `ruff==` pin in pyproject's dev extra. Two different
+    # ruff versions here and in CI means the hook can pass while CI fails.
+    rev: v0.16.0
     hooks:
       # Run the linter.
       - id: ruff
@@ -22,6 +23,14 @@ repos:
 
   - repo: local
     hooks:
+      # .npmrc is committed, so a credential landing in it is a public leak.
+      # Tokens belong in ~/.npmrc (where `npm login` puts them) or CI secrets.
+      - id: npmrc-no-secrets
+        name: no credentials in .npmrc
+        language: pygrep
+        entry: (?i)(_auth|_password|username|token)
+        files: (^|/)\.npmrc$
+
       - id: pytest-fast
         name: pytest (L1/L2, no slow)
         entry: .venv/bin/pytest -m "not slow" --tb=short -q

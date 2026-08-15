@@ -108,6 +108,7 @@ def publish_cmd(
     dist_dir: Annotated[
         Path, typer.Argument(help="Path to a built mjswan dist directory.")
     ],
+    *,
     title: Annotated[
         Optional[str],
         typer.Option(help="Simulation title. Defaults to the first project's name."),
@@ -144,8 +145,7 @@ def publish_cmd(
         console.print(f"[red]Error:[/red] Directory not found: {dist_dir}")
         raise typer.Exit(1)
 
-    # Auto-login when there is no token to use (no flag, no env, no stored
-    # session). The browser flow runs first, then publish proceeds normally.
+    # No flag, env or stored session: run the browser login first, then publish.
     import os
 
     from mjswan import auth

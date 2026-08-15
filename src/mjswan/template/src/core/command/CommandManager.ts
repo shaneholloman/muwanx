@@ -1,5 +1,6 @@
 import { CustomCommands } from './custom_commands';
 import { TrackingCommand } from './TrackingCommand';
+import { OnnxCommand, type OnnxCommandConfig } from './OnnxCommand';
 import {
   getCommandInputId,
   type CheckboxCommandConfig,
@@ -14,6 +15,11 @@ import {
   type CommandsConfig,
   type SliderCommandConfig,
 } from './types';
+
+/** True for a config entry naming the shared `OnnxCommand` handler. */
+function isOnnxCommandConfig(entry: CommandConfigEntry): entry is OnnxCommandConfig {
+  return entry.name === 'OnnxCommand';
+}
 
 type ValueCommandConfig = SliderCommandConfig | CheckboxCommandConfig;
 
@@ -54,6 +60,11 @@ class UiCommand implements CommandTerm {
     return { inputs: this.inputs };
   }
 
+  /** The UI value as a `{command, field: 'command'}` slot; browser-only, so it binds here. */
+  getStateField(field: string): Float32Array | null {
+    return field === 'command' ? this.getCommand() : null;
+  }
+
   reset(): void {
     for (const input of this.inputs) {
       if (input.type === 'slider') {
@@ -62,6 +73,10 @@ class UiCommand implements CommandTerm {
         this.values.set(input.name, input.default ? 1.0 : 0.0);
       }
     }
+  }
+
+  getUiValue(inputName: string): number | undefined {
+    return this.values.get(inputName);
   }
 
   setValue(inputName: string, value: number): number {
@@ -110,6 +125,13 @@ export class CommandManager {
     };
 
     for (const [groupName, entry] of Object.entries(commandsConfig)) {
+      if (isOnnxCommandConfig(entry)) {
+        const term = this.buildOnnxCommand(groupName, entry, context);
+        if (!term) continue;
+        this.terms.set(groupName, term);
+        this.registerUi(groupName, term);
+        continue;
+      }
       const Term = registry[entry.name];
       if (!Term) {
         throw new Error(`Unknown command term: ${entry.name}`);
@@ -118,6 +140,31 @@ export class CommandManager {
       this.terms.set(groupName, term);
       this.registerUi(groupName, term);
     }
+  }
+
+  /**
+   * `OnnxCommand` bypasses the class registry: one shared handler needing a session and
+   * rng that `new Term(name, config, context)` has no room for. Warns and skips, so one
+   * missing session spares the others — and the skipped term leaves `termNames()`, so an
+   * observation reading it fails to bind rather than reading zeros.
+   */
+  private buildOnnxCommand(
+    groupName: string,
+    entry: OnnxCommandConfig,
+    context: CommandTermContext
+  ): OnnxCommand | null {
+    const session = context.onnxSessions?.get(entry.onnx);
+    if (!session || !context.rng) {
+      console.warn(
+        `[CommandManager] OnnxCommand "${groupName}" needs onnxSessions/rng in context; skipping.`
+      );
+      return null;
+    }
+    return new OnnxCommand(groupName, entry, context, {
+      session,
+      rng: context.rng,
+      readSlot: context.readOnnxSlot,
+    });
   }
 
   update(dt: number): void {
@@ -132,9 +179,32 @@ export class CommandManager {
     }
   }
 
-  resetTerms(): void {
+  /** The terms offering a debug drawing, as mjlab's `create_debug_vis_gui` lists them. */
+  getDebugVisTerms(): Array<{ name: string; enabled: boolean }> {
+    const out: Array<{ name: string; enabled: boolean }> = [];
+    for (const [name, term] of this.terms) {
+      const enabled = term.debugVisEnabled?.();
+      if (enabled != null) out.push({ name, enabled });
+    }
+    return out;
+  }
+
+  setDebugVisEnabled(name: string, enabled: boolean): void {
+    const term = this.terms.get(name);
+    if (!term?.setDebugVisEnabled) return;
+    term.setDebugVisEnabled(enabled);
+    // The next frame would do this, but a paused sim has no next frame.
+    term.updateDebugVisuals?.();
+    this.emit({ type: 'debug_vis', commandId: name, groupName: name });
+  }
+
+  /**
+   * Reset every term **in config order**, awaiting each: a reset is a resample that may
+   * write to the sim, and overlaps must resolve last-writer-wins as mjlab's do.
+   */
+  async resetTerms(): Promise<void> {
     for (const term of this.terms.values()) {
-      term.reset?.();
+      await term.reset?.();
     }
     this.syncValuesFromTerms();
     this.emit({ type: 'reset', commandId: '*' });
@@ -169,9 +239,19 @@ export class CommandManager {
     return result;
   }
 
+  /**
+   * The named term's current vector, or an empty one. A consumer whose *config* names a
+   * term must validate it against `termNames()` at construction: an unvalidated miss is
+   * zero-padded, handing the policy a block of zeros it was never trained on.
+   */
   getCommand(groupName: string): Float32Array {
     const term = this.terms.get(groupName);
     return term ? term.getCommand() : new Float32Array(0);
+  }
+
+  /** Names in registration order, for binding-time validation by a consumer. */
+  termNames(): string[] {
+    return Array.from(this.terms.keys());
   }
 
   getTerm(groupName: string): CommandTerm | undefined {
@@ -180,16 +260,6 @@ export class CommandManager {
 
   getContext(): CommandTermContext | null {
     return this.context;
-  }
-
-  getVelocityCommand(): Float32Array {
-    if (this.terms.has('velocity')) {
-      return this.getCommand('velocity');
-    }
-    if (this.terms.has('twist')) {
-      return this.getCommand('twist');
-    }
-    return new Float32Array([0.5, 0.0, 0.0]);
   }
 
   setValue(id: string, value: number): void {
@@ -226,8 +296,8 @@ export class CommandManager {
     });
   }
 
-  resetToDefaults(): void {
-    this.resetTerms();
+  resetToDefaults(): Promise<void> {
+    return this.resetTerms();
   }
 
   addEventListener(listener: CommandEventListener): void {
@@ -278,12 +348,8 @@ export class CommandManager {
       this.commands.set(id, { id, groupName, config: input });
       this.commandGroups.get(groupName)!.push(id);
       if (input.type === 'slider' || input.type === 'checkbox') {
-        const current = term.getCommand();
-        const valueIndex = inputs
-          .filter((entry): entry is ValueCommandConfig => entry.type === 'slider' || entry.type === 'checkbox')
-          .findIndex(entry => entry.name === input.name);
         const fallback = input.type === 'checkbox' ? (input.default ? 1.0 : 0.0) : input.default;
-        this.values.set(id, current[valueIndex] ?? fallback);
+        this.values.set(id, term.getUiValue?.(input.name) ?? fallback);
       }
     }
     this.emit({
@@ -293,24 +359,19 @@ export class CommandManager {
     });
   }
 
+  /**
+   * Re-read what the panel shows, after a reset moved the terms.
+   *
+   * By input name: a term's command vector is not its UI vector (an `OnnxCommand`'s is
+   * the policy's), so pairing them by position showed one input's value under another.
+   */
   private syncValuesFromTerms(): void {
     for (const [id, command] of this.commands) {
       if (command.config.type !== 'slider' && command.config.type !== 'checkbox') {
         continue;
       }
-      const term = this.terms.get(command.groupName);
-      if (!term) {
-        continue;
-      }
-      const inputs = term.getUiConfig?.()?.inputs ?? [];
-      const valueInputs = inputs.filter(
-        (entry): entry is ValueCommandConfig => entry.type === 'slider' || entry.type === 'checkbox'
-      );
-      const index = valueInputs.findIndex(entry => entry.name === command.config.name);
-      if (index >= 0) {
-        const current = term.getCommand();
-        this.values.set(id, current[index] ?? this.values.get(id) ?? 0.0);
-      }
+      const value = this.terms.get(command.groupName)?.getUiValue?.(command.config.name);
+      if (value !== undefined) this.values.set(id, value);
     }
   }
 

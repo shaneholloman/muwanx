@@ -48,11 +48,8 @@ jobs:
       - name: Setup Node.js for template build
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '24' # Bundles npm >= 11.5.1, required by trusted publishing
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@latest # Trusted publishing requires npm >= 11.5.1
 
       - name: Build web template
         working-directory: src/mjswan/template

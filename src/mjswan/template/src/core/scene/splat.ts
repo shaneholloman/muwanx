@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SplatMesh, getSplatFileType } from '@sparkjsdev/spark';
+import { SplatMesh, SparkRenderer, getSplatFileType } from '@sparkjsdev/spark';
 export type { SplatMesh };
 
 /** Spherical splat placement, in the splat's own frame. Public engine input. */
@@ -75,4 +75,13 @@ export function loadSplat(
 export function disposeSplat(splat: SplatMesh, scene: THREE.Scene): void {
   scene.remove(splat);
   splat.dispose?.();
+  // Spark keeps drawing its last async sort, which never completes if the mesh
+  // leaves mid-sort, so `scene.remove` alone leaves the splat on screen for good.
+  // Dropping the renderer too is safe: the next SplatMesh installs a fresh one.
+  for (const child of [...scene.children]) {
+    if (child instanceof SparkRenderer) {
+      scene.remove(child);
+      child.defaultView.dispose();
+    }
+  }
 }

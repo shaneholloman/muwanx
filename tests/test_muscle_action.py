@@ -240,7 +240,9 @@ class TestBuilderMuscleValidation:
 
     def _make_builder(self, model, actions, minimal_onnx):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=model
+        )
         scene.add_policy(name="Policy", policy=minimal_onnx, actions=actions)
         return builder
 
@@ -286,7 +288,9 @@ class TestBuilderMuscleValidation:
         self, tmp_path, muscle_spec, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", spec=muscle_spec)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", spec=muscle_spec
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
@@ -322,16 +326,18 @@ class TestBuilderMuscleRoundTrip:
         self, tmp_path, muscle_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=muscle_model)
-        handle = scene.add_policy(
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=muscle_model
+        )
+        scene.add_policy(
             name="Policy",
             policy=minimal_onnx,
             policy_joint_names=[],
+            policy_num_actions=2,
+            initial_qpos=[0.1, 0.2],
+            initial_qvel=[0.0, 0.0],
             actions={"muscles": MuscleActivationActionCfg(actuator_names=("m1", "m2"))},
         )
-        handle._config.policy_num_actions = 2
-        handle._config.initial_qpos = [0.1, 0.2]
-        handle._config.initial_qvel = [0.0, 0.0]
 
         builder._save_web(tmp_path / "out")
         data = json.loads(
@@ -349,7 +355,9 @@ class TestBuilderMuscleRoundTrip:
         self, tmp_path, muscle_model, minimal_onnx
     ):
         builder = Builder()
-        scene = builder.add_project(name="P").add_scene(name="S", model=muscle_model)
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=muscle_model
+        )
         scene.add_policy(
             name="Policy",
             policy=minimal_onnx,

@@ -5,6 +5,10 @@ Interactive MuJoCo simulations with ONNX policies running entirely in the browse
 
 __version__ = "0.8.2"
 
+import os
+
+os.environ.setdefault("MUJOCO_GL", "disable")
+
 from .app import MjswanApp
 from .builder import Builder
 from .command import (
@@ -18,6 +22,7 @@ from .command import (
     CommandUiConfig,
     Slider,
     SliderConfig,
+    SliderRangeConfig,
     register_command,
     ui_command,
     velocity_command,
@@ -38,6 +43,7 @@ from .policy import PolicyConfig, PolicyHandle
 from .project import ProjectConfig, ProjectHandle
 from .scene import SceneConfig, SceneHandle
 from .splat import SplatConfig, SplatHandle
+from .trace_env import build_single_entity_trace_env
 from .viewer import ViewerConfig
 
 __all__ = [
@@ -57,9 +63,8 @@ __all__ = [
     "SplatConfig",
     "PolicyConfig",
     "MotionConfig",
-    # MDP bindings (mjlab-name → browser impl; see ADR 0003).
-    # Pre-0.8 register_*_func / register_command_term names remain as deprecated
-    # function aliases via _compat (the *Binding class aliases were removed).
+    # MDP bindings (mjlab-name → browser impl). Pre-0.8 register_*_func /
+    # register_command_term names survive as deprecated aliases via _compat.
     "MdpBinding",
     "ObservationBinding",
     "register_observation",
@@ -77,6 +82,7 @@ __all__ = [
     # Commands
     "Slider",
     "SliderConfig",
+    "SliderRangeConfig",
     "Button",
     "ButtonConfig",
     "Checkbox",
@@ -88,6 +94,8 @@ __all__ = [
     "register_command",
     "ui_command",
     "velocity_command",
+    # ONNX tracing (ADR 0005)
+    "build_single_entity_trace_env",
 ]
 
 # Deprecated pre-0.8 aliases (methods, classes, modules). Remove in 0.9.

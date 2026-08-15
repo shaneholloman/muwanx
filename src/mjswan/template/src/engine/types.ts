@@ -1,10 +1,6 @@
 /**
- * Public API surface for the headless mjswan engine (`createEngine`).
- *
- * This is the contract every layer builds against; see
- * docs/adr/0004-headless-engine-core.md §9. The engine runs one simulation at a
- * time, takes bytes directly (no fetching), and exposes switch verbs whose names
- * match the real cost (loadScene = rebuild; setPolicy/setSplat/setMotion = live).
+ * Public API surface for the headless engine. One simulation at a time, bytes in directly
+ * rather than fetched, and verbs named for their cost: `loadScene` rebuilds, the rest are live.
  */
 import type { CameraView, ViewerConfig } from '../core/engine/viewer_config';
 import type { EventConfig, TerrainData } from '../core/event/EventBase';
@@ -12,8 +8,7 @@ import type { Bytes } from '../core/utils/bytes';
 import type { SplatTransform } from '../core/scene/splat';
 import type { EnginePlugins } from '../core/plugins';
 
-// Bytes: asset bytes in hand or a lazy loader. SplatTransform: spherical splat placement.
-// EnginePlugins: custom MDP term constructors (trusted-only; ADR 0004 §10).
+// Bytes: asset bytes or a lazy loader. EnginePlugins: custom MDP terms, trusted-only.
 export type { Bytes, SplatTransform, EnginePlugins };
 
 export interface SplatInput {
@@ -32,6 +27,13 @@ export interface PolicyInput {
   /** Parsed policy.json; opaque to the app, interpreted by the engine. */
   config: object;
   onnx: Bytes;
+  /**
+   * Traced term-body graphs, keyed by the path the config refers to them by
+   * (`"obs/joint_pos.onnx"`). The engine never fetches, so the app delivers the bytes —
+   * `mjswan/manifest` fills this in, `policyGraphRefs(config)` enumerates what to load.
+   * A missing entry warns and skips that term.
+   */
+  graphs?: Record<string, Bytes>;
   motions?: MotionInput[];
   /** Policy-scoped custom terms (observations / terminations / commands). */
   plugins?: EnginePlugins;
@@ -45,6 +47,10 @@ export interface SceneInput {
   /** Declarative reset events (e.g. terrain randomization) + their terrain data. */
   events?: EventConfig[];
   terrainData?: TerrainData;
+  /** mjlab's `timestep * decimation`; the model carries only the physics timestep. */
+  controlDt?: number;
+  /** Traced event-term graphs (`"event/push_robot.onnx"`), as {@link PolicyInput.graphs}. */
+  graphs?: Record<string, Bytes>;
   /** Scene-scoped custom terms (events). */
   plugins?: EnginePlugins;
 }
@@ -71,11 +77,33 @@ export interface CommandDescriptor {
   step?: number;          // slider only
   /** Slider only: name of a sibling checkbox that gates this control. */
   enabledWhen?: string;
+  /** Slider only: a presentational companion that rescales this slider's drag range. */
+  adjustableRange?: SliderRangeControl;
+}
+
+/** Bounds of an {@link CommandDescriptor.adjustableRange} companion slider. */
+export interface SliderRangeControl {
+  min: number;
+  max: number;
+  step: number;
+  default: number;
+  label?: string;
 }
 
 export interface CommandControls {
   set(id: string, value: number): void;
   trigger(id: string): void;
+}
+
+/** A command term whose debug drawing (mjlab's `debug_vis`) can be shown or hidden. */
+export interface DebugVisDescriptor {
+  /** The term's config key, and the id {@link DebugVisControls.set} takes. */
+  term: string;
+  enabled: boolean;
+}
+
+export interface DebugVisControls {
+  set(term: string, enabled: boolean): void;
 }
 
 /** Immutable snapshot pushed to {@link MjswanEngine.subscribe} listeners. */
@@ -86,11 +114,20 @@ export interface MjswanEngineState {
   error: Error | null;
   commands: ReadonlyArray<CommandDescriptor>;
   commandValues: Readonly<Record<string, number>>;
+  /** Terms with a debug drawing to toggle; empty when the policy has none. */
+  debugVis: ReadonlyArray<DebugVisDescriptor>;
+  /** Reported so an app recording a session can persist it rather than guess. */
+  termSeed: number;
 }
 
 export interface CreateEngineOptions {
   /** Load `mujoco/mt` (SharedArrayBuffer; requires COOP/COEP). Default false. */
   multithreaded?: boolean;
+  /**
+   * Seed for the one PRNG every traced term's `rand` comes from. Pass the value read back
+   * from {@link MjswanEngineState.termSeed} to re-run a recorded session.
+   */
+  termSeed?: number;
 }
 
 /** A headless, instance-scoped simulation engine. Create with {@link createEngine}. */
@@ -112,6 +149,7 @@ export interface MjswanEngine {
   // subsystems
   readonly camera: CameraControls;
   readonly commands: CommandControls;
+  readonly debugVis: DebugVisControls;
 
   // state
   getState(): MjswanEngineState;

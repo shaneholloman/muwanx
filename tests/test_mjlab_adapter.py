@@ -9,6 +9,8 @@ with the same attributes that the adapter inspects, placed in a fake
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,6 +20,7 @@ from mjswan.adapters.mjlab_adapter import (
     adapt_commands,
     adapt_observations,
     adapt_terminations,
+    resolve_runner_defaults,
 )
 from mjswan.envs.mdp.observations import ObservationBinding
 from mjswan.envs.mdp.terminations import TerminationBinding
@@ -111,9 +114,8 @@ FakeMjlabJointEffortActionCfg = _make_mjlab_class(
     damping=None,
 )
 
-# myosuite4's `MyoMuscleActivationActionCfg` is standalone (not a dataclass and
-# does not inherit BaseActionCfg), so we mirror only the fields the adapter
-# inspects: `entity_name` and `actuator_names`.
+# `MyoMuscleActivationActionCfg` is standalone (no dataclass, no BaseActionCfg),
+# so mirror only the fields the adapter inspects.
 FakeMyoMuscleActivationActionCfg = _make_mjlab_class(
     "MyoMuscleActivationActionCfg",
     entity_name="robot",
@@ -183,7 +185,10 @@ class TestAdaptObservations:
         assert term.scale == 0.5
         assert term.history_length == 3
 
-    def test_mjlab_asset_cfg_joint_scope_preserved(self):
+    def test_mjlab_asset_cfg_kept_intact_for_tracing(self):
+        # A plain (non-Binding) func is traced to ONNX at build time (ADR 0005) via `func(env,
+        # **params)` — params must reach the tracer unchanged, including the real `asset_cfg`
+        # object mjlab's own function expects, not a flattened entity_name/joint_names stand-in.
         mjlab_func = _make_mjlab_obs_func("joint_pos_rel")
         asset_cfg = FakeMjlabSceneEntityCfg(
             name="robot", joint_names=("joint1", "joint2")
@@ -196,29 +201,83 @@ class TestAdaptObservations:
         result = adapt_observations({"policy": mjlab_group})
         assert result is not None
         term = result["policy"].terms["jp"]
-        assert term.params["entity_name"] == "robot"
-        assert term.params["joint_names"] == ["joint1", "joint2"]
+        assert term.params["asset_cfg"] is asset_cfg
 
-    def test_unknown_mjlab_obs_func_raises(self):
+    def test_any_mjlab_obs_func_passes_through_for_tracing(self):
+        # ADR 0005: there is no mjswan-side mirror to resolve by name — any mjlab function
+        # (however unfamiliar) is passed straight through and traced to ONNX at build time.
         mjlab_func = _make_mjlab_obs_func("nonexistent_function")
         mjlab_term = FakeMjlabObsTermCfg(func=mjlab_func)
         mjlab_group = FakeMjlabObsGroupCfg(terms={"x": mjlab_term})
 
-        with pytest.raises(ValueError, match="No mjswan mapping"):
-            adapt_observations({"policy": mjlab_group})
+        result = adapt_observations({"policy": mjlab_group})
+        assert result is not None
+        assert result["policy"].terms["x"].func is mjlab_func
 
     def test_multiple_groups(self):
-        # `base_ang_vel` and `projected_gravity` are DSL terms (ADR 0003) —
-        # the adapter resolves them to callables.
+        # The adapter resolves these to callables.
         f1 = _make_mjlab_obs_func("base_ang_vel")
         f2 = _make_mjlab_obs_func("projected_gravity")
         g1 = FakeMjlabObsGroupCfg(terms={"ang": FakeMjlabObsTermCfg(func=f1)})
         g2 = FakeMjlabObsGroupCfg(terms={"grav": FakeMjlabObsTermCfg(func=f2)})
 
-        result = adapt_observations({"policy": g1, "critic": g2})
+        # Two keys a multi-input policy could actually consume; a group named for a
+        # training-only mjlab network is a different case, covered below.
+        result = adapt_observations({"policy": g1, "adapt_hx": g2})
         assert result is not None
         assert callable(result["policy"].terms["ang"].func)
-        assert callable(result["critic"].terms["grav"].func)
+        assert callable(result["adapt_hx"].terms["grav"].func)
+
+
+class TestObservationGroupKey:
+    """The dict key is the ONNX input name, so the adapter — not the caller — owns it.
+
+    `OnnxModule` defaults `in_keys` to `["policy"]` and warns-and-returns on an input it
+    cannot find, so a group under mjlab's own name (`"actor"`) yields a policy that never
+    acts, with no build-time error. Hence: hand in the group, not a key for it.
+    """
+
+    def test_single_mjlab_group_lands_under_policy_key(self):
+        func = _make_mjlab_obs_func("base_ang_vel")
+        group = FakeMjlabObsGroupCfg(terms={"ang": FakeMjlabObsTermCfg(func=func)})
+
+        result = adapt_observations(group)
+
+        assert result is not None
+        assert list(result) == ["policy"]
+        assert isinstance(result["policy"], ObservationGroupCfg)
+        assert callable(result["policy"].terms["ang"].func)
+
+    def test_single_mjswan_group_lands_under_policy_key(self):
+        group = ObservationGroupCfg(
+            terms={"ang": ObservationTermCfg(func=ObservationBinding(ts_name="X"))}
+        )
+
+        result = adapt_observations(group)
+
+        assert result is not None
+        # The same object: an mjswan group needs no conversion, only a key.
+        assert result == {"policy": group}
+        assert result["policy"] is group
+
+    def test_dict_form_still_passes_keys_through(self):
+        group = ObservationGroupCfg(terms={})
+        assert adapt_observations({"custom_input": group}) == {"custom_input": group}
+
+    def test_training_only_group_is_dropped_with_warning(self):
+        actor = ObservationGroupCfg(terms={})
+        critic = ObservationGroupCfg(terms={})
+
+        with pytest.warns(RuntimeWarning, match="critic"):
+            result = adapt_observations({"policy": actor, "critic": critic})
+
+        # mjlab exports only the actor, so a critic group has no input to feed — leaving
+        # it in would trace it, bundle it, and evaluate it every control step for nothing.
+        assert result == {"policy": actor}
+
+    def test_a_group_of_only_training_terms_leaves_nothing(self):
+        with pytest.warns(RuntimeWarning, match="critic"):
+            assert adapt_observations({"critic": ObservationGroupCfg(terms={})}) == {}
 
     def test_tracking_observation_functions_are_mapped(self):
         motion_anchor = _make_mjlab_obs_func("motion_anchor_pos_b")
@@ -233,11 +292,126 @@ class TestAdaptObservations:
                 )
             }
         )
-        # Tracking observations are DSL terms (ADR 0003) — the adapter
-        # resolves them to callables instead of ObservationBinding sentinels.
+        # The adapter resolves these to callables, not ObservationBinding sentinels.
         assert result is not None
         assert callable(result["policy"].terms["anchor"].func)
         assert callable(result["policy"].terms["body"].func)
+
+
+class TestMjlabGroupDictSelection:
+    """An mjlab `env_cfg.observations` is keyed by *network*; mjswan's by *ONNX input*.
+
+    Two namespaces that look alike, so the adapter remaps the one it can recognise and
+    keeps its hands off the one it cannot. Getting that boundary wrong in either
+    direction is silent at build time: an unrecognised key means no ONNX input to feed,
+    and a wrongly-remapped one means the wrong vector on the right input.
+    """
+
+    def test_whole_mjlab_dict_reduces_to_the_actor_group(self):
+        actor = ObservationGroupCfg(terms={})
+        critic = ObservationGroupCfg(terms={})
+
+        result = adapt_observations({"actor": actor, "critic": critic})
+
+        assert result == {"policy": actor}
+
+    def test_actor_only_dict_is_renamed(self):
+        actor = ObservationGroupCfg(terms={})
+        assert adapt_observations({"actor": actor}) == {"policy": actor}
+
+    def test_a_dict_without_an_actor_is_left_alone(self):
+        # `examples/demo` relies on this: `balance.json` declares `in_keys: ["observation"]`,
+        # `decap.json` `["obs_history"]`, ANYmal's `["obs"]`. Remapping any of them to
+        # "policy" would leave the runtime looking for an input nothing supplies.
+        for key in ("observation", "obs", "obs_history"):
+            group = ObservationGroupCfg(terms={})
+            assert adapt_observations({key: group}) == {key: group}
+
+    def test_a_multi_input_dict_is_left_alone(self):
+        # Facet: `in_keys: ["command", "policy", ...]` — two real inputs, both ours.
+        policy = ObservationGroupCfg(terms={})
+        command = ObservationGroupCfg(terms={})
+        result = adapt_observations({"policy": policy, "command": command})
+        assert result == {"policy": policy, "command": command}
+
+    def test_runner_obs_groups_win_over_the_actor_name(self):
+        # A task free to name its groups anything; `obs_groups["actor"]` is the only thing
+        # that actually knows which one the exported network reads.
+        proprio = ObservationGroupCfg(terms={})
+        privileged = ObservationGroupCfg(terms={})
+
+        result = adapt_observations(
+            {"proprio": proprio, "privileged": privileged},
+            policy_groups=("proprio",),
+        )
+
+        assert result == {"policy": proprio}
+
+    def test_runner_obs_groups_beat_a_literal_actor_key(self):
+        actor = ObservationGroupCfg(terms={})
+        other = ObservationGroupCfg(terms={})
+        result = adapt_observations(
+            {"actor": actor, "other": other}, policy_groups=("other",)
+        )
+        assert result == {"policy": other}
+
+    def test_concatenated_groups_are_refused_not_truncated(self):
+        # rsl-rl lets one network read several groups concatenated. mjswan feeds one vector
+        # per input, so silently taking the first would mean a short observation and a
+        # policy fed garbage — the one case that has to be loud.
+        with pytest.raises(ValueError, match="cannot concatenate"):
+            adapt_observations(
+                {
+                    "a": ObservationGroupCfg(terms={}),
+                    "b": ObservationGroupCfg(terms={}),
+                },
+                policy_groups=("a", "b"),
+            )
+
+    def test_a_dict_sharing_no_key_with_the_task_is_left_alone(self):
+        # A task id is not evidence that *this* dict is the task's. On an mjlab scene a
+        # policy may still carry a config declaring `in_keys: ["observation"]`, and
+        # remapping it because the task calls its group "proprio" would break it.
+        group = ObservationGroupCfg(terms={})
+        assert adapt_observations(
+            {"observation": group}, policy_groups=("proprio",)
+        ) == {"observation": group}
+
+    def test_a_literal_actor_key_still_wins_when_the_task_names_another(self):
+        actor = ObservationGroupCfg(terms={})
+        assert adapt_observations({"actor": actor}, policy_groups=("proprio",)) == {
+            "policy": actor
+        }
+
+    def test_an_empty_dict_selects_nothing_rather_than_failing(self):
+        # `observations={}` is how a policy says it has none; a task id must not turn
+        # that into an error.
+        assert adapt_observations({}, policy_groups=("actor",)) == {}
+
+    def test_concatenated_groups_only_raise_for_the_tasks_own_dict(self):
+        # No overlap with the task's group names, so this is somebody else's dict and the
+        # concatenation the task does is none of its business.
+        group = ObservationGroupCfg(terms={})
+        assert adapt_observations({"policy": group}, policy_groups=("a", "b")) == {
+            "policy": group
+        }
+
+    def test_a_single_group_ignores_policy_groups(self):
+        # Already unambiguous: there is one group, and it is the policy's.
+        group = ObservationGroupCfg(terms={})
+        assert adapt_observations(group, policy_groups=("anything",)) == {
+            "policy": group
+        }
+
+    def test_mjlab_groups_in_the_dict_are_still_converted(self):
+        func = _make_mjlab_obs_func("base_ang_vel")
+        actor = FakeMjlabObsGroupCfg(terms={"ang": FakeMjlabObsTermCfg(func=func)})
+
+        result = adapt_observations({"actor": actor, "critic": actor})
+
+        assert result is not None
+        assert list(result) == ["policy"]
+        assert isinstance(result["policy"], ObservationGroupCfg)
 
 
 # ===================================================================
@@ -257,8 +431,7 @@ class TestAdaptTerminations:
         assert result["time_out"] is cfg
 
     def test_mjlab_term_converted(self):
-        # `bad_orientation` is a DSL term (ADR 0003) — the adapter
-        # resolves it to a callable instead of a TerminationBinding sentinel.
+        # The adapter resolves this to a callable, not a TerminationBinding sentinel.
         mjlab_func = _make_mjlab_term_func("bad_orientation")
         mjlab_cfg = FakeMjlabTermTermCfg(
             func=mjlab_func,
@@ -284,7 +457,8 @@ class TestAdaptTerminations:
         assert result["timeout"].time_out is True
         assert callable(result["timeout"].func)
 
-    def test_mjlab_term_strips_asset_cfg_from_params(self):
+    def test_mjlab_term_keeps_asset_cfg_intact_for_tracing(self):
+        # As with observations, a plain func's params reach the tracer unflattened.
         mjlab_func = _make_mjlab_term_func("bad_orientation")
         asset_cfg = FakeMjlabSceneEntityCfg(name="robot", body_names=("torso_link",))
         mjlab_cfg = FakeMjlabTermTermCfg(
@@ -296,18 +470,16 @@ class TestAdaptTerminations:
         result = adapt_terminations({"fallen": mjlab_cfg})
         assert result is not None
         term = result["fallen"]
-        assert term.params == {
-            "limit_angle": 1.0,
-            "entity_name": "robot",
-            "body_names": ["torso_link"],
-        }
+        assert term.params == {"limit_angle": 1.0, "asset_cfg": asset_cfg}
 
-    def test_unknown_mjlab_term_func_raises(self):
+    def test_any_mjlab_term_func_passes_through_for_tracing(self):
+        # No mjswan-side mirror: any mjlab function passes straight through to the tracer.
         mjlab_func = _make_mjlab_term_func("nonexistent_term")
         mjlab_cfg = FakeMjlabTermTermCfg(func=mjlab_func)
 
-        with pytest.raises(ValueError, match="No mjswan mapping"):
-            adapt_terminations({"x": mjlab_cfg})
+        result = adapt_terminations({"x": mjlab_cfg})
+        assert result is not None
+        assert result["x"].func is mjlab_func
 
 
 # ===================================================================
@@ -331,6 +503,39 @@ class TestAdaptCommands:
         assert command.term_name == "TrackingCommand"
         assert command.params["anchor_body_name"] == "torso_link"
         assert command.params["body_names"] == ["pelvis", "torso_link"]
+
+    def test_a_traced_command_gets_mjlabs_debug_drawing_without_being_asked(self):
+        """The binding declares no `viz`; the cfg class is mjlab's, so one is derived.
+
+        Otherwise a `debug_vis=True` task the author forgot is silently blank.
+        """
+        from mjswan.command import CommandBinding, _custom_registry, register_command
+
+        cfg_cls = _make_mjlab_class(
+            "LiftingCommandCfg",
+            entity_name="cube",
+            debug_vis=True,
+            viz=SimpleNamespace(target_color=(1.0, 0.5, 0.0, 0.3)),
+        )
+        register_command(
+            "LiftingCommandCfg",
+            CommandBinding(state_fields=["target_pos"], command_field="target_pos"),
+        )
+        try:
+            result = adapt_commands({"lift_height": cfg_cls()})
+        finally:
+            _custom_registry.pop("LiftingCommandCfg", None)
+
+        assert result is not None
+        viz = result["lift_height"].pending_trace.viz
+        assert viz == [
+            {
+                "shape": "sphere",
+                "radius": 0.03,
+                "color": [1.0, 0.5, 0.0, 0.3],
+                "origin": {"state": "target_pos"},
+            }
+        ]
 
     def test_mjswan_types_unchanged(self):
         from mjswan.envs.mdp.actions import JointPositionActionCfg
@@ -410,28 +615,22 @@ class TestAdaptCommands:
 
 
 class TestAdaptedSerialization:
-    """Ensure adapted objects serialize correctly via to_dict() / to_list()."""
+    """Ensure adapted plain-callable terms defer to ONNX tracing (ADR 0005)."""
 
-    def test_adapted_obs_serializes(self):
-        # ``last_action`` is a DSL observation (ADR 0003) — the adapter passes
-        # the callable through and serialization emits a composition graph
-        # (with PrevAction as the source op) instead of a legacy named entry.
+    def test_adapted_obs_to_dict_requires_tracing(self):
+        # A plain-callable func (mjlab's own, resolved by the adapter with no mirror lookup)
+        # cannot be serialized via to_dict()/to_list() directly — it must be traced to ONNX
+        # against a live env at build time (mjswan._onnx_build.serialize_observation_group).
         mjlab_func = _make_mjlab_obs_func("last_action")
         mjlab_term = FakeMjlabObsTermCfg(func=mjlab_func)
         mjlab_group = FakeMjlabObsGroupCfg(terms={"la": mjlab_term})
 
         result = adapt_observations({"policy": mjlab_group})
         assert result is not None
-        entries = result["policy"].to_list()
-        assert len(entries) == 1
-        assert entries[0]["kind"] == "observation"
-        assert "name" not in entries[0]
-        assert "PrevAction" in [n["op"] for n in entries[0]["nodes"]]
+        with pytest.raises(TypeError, match="serialize_observation_group"):
+            result["policy"].to_list()
 
-    def test_adapted_term_serializes(self):
-        # ``root_height_below_minimum`` is a DSL term (ADR 0003) — the
-        # adapter passes the callable through and serialization emits a
-        # composition graph instead of a legacy {name, params} entry.
+    def test_adapted_term_to_dict_requires_tracing(self):
         mjlab_func = _make_mjlab_term_func("root_height_below_minimum")
         mjlab_cfg = FakeMjlabTermTermCfg(
             func=mjlab_func,
@@ -440,10 +639,8 @@ class TestAdaptedSerialization:
 
         result = adapt_terminations({"fallen": mjlab_cfg})
         assert result is not None
-        d = result["fallen"].to_dict()
-        assert d["kind"] == "termination"
-        ops = [n["op"] for n in d["nodes"]]
-        assert "RootLinkPosW" in ops and "Lt" in ops
+        with pytest.raises(TypeError, match="serialize_termination"):
+            result["fallen"].to_dict()
 
     def test_adapted_action_serializes(self):
         mjlab_cfg = FakeMjlabJointPositionActionCfg(
@@ -504,10 +701,9 @@ class TestMuscleActionAdaptation:
         assert d["actuator_names"] == ["robot/m1", "robot/m2"]
 
     def test_normalize_defaults_to_true_when_source_lacks_field(self):
-        # MyoMuscleActivationActionCfg has no `normalize` field and always
-        # applies the sigmoid mapping in upstream; the adapted cfg must keep
-        # the mjswan default (normalize=True), which serializes as the key
-        # being omitted (default-suppression).
+        # MyoMuscleActivationActionCfg has no `normalize` field and always applies the sigmoid
+        # mapping in upstream; the adapted cfg must keep the mjswan default (normalize=True),
+        # which serializes as the key being omitted (default-suppression).
         mjlab_cfg = FakeMyoMuscleActivationActionCfg(
             entity_name="robot",
             actuator_names=("m1",),
@@ -534,12 +730,90 @@ class TestMuscleActionAdaptation:
         assert result["muscles"].offset == 0.0
 
     def test_class_name_alias_dispatch(self):
-        # The adapter looks up the source class name in _ACTION_CLASS_ALIASES.
-        # If the source class is renamed upstream, this test would catch the
-        # break by failing dispatch.
+        # The adapter looks up the source class name in _ACTION_CLASS_ALIASES. If the source
+        # class is renamed upstream, this test would catch the break by failing dispatch.
         mjlab_cfg = FakeMyoMuscleActivationActionCfg()
         assert type(mjlab_cfg).__name__ == "MyoMuscleActivationActionCfg"
 
         result = adapt_actions({"muscles": mjlab_cfg})
         assert result is not None
         assert "muscles" in result
+
+
+# ===================================================================
+# Tests: mjlab runner config (rl_cfg) — the two fields playback needs
+# ===================================================================
+
+
+class TestResolveRunnerDefaults:
+    """`obs_groups` and `clip_actions` live on the *runner* config, not the env config.
+
+    Everything else on it is training-only or already inside the exported ONNX — rsl-rl
+    bakes the observation normalizer into the graph ahead of the MLP, so playback does
+    not have to reproduce it.
+    """
+
+    @staticmethod
+    def _install(monkeypatch, rl_cfg):
+        module = ModuleType("mjlab.tasks.registry")
+        setattr(module, "load_rl_cfg", lambda task_id: rl_cfg)
+        monkeypatch.setitem(sys.modules, "mjlab", ModuleType("mjlab"))
+        monkeypatch.setitem(sys.modules, "mjlab.tasks", ModuleType("mjlab.tasks"))
+        monkeypatch.setitem(sys.modules, "mjlab.tasks.registry", module)
+
+    def test_reads_obs_groups_and_clip_actions(self, monkeypatch):
+        rl_cfg = SimpleNamespace(
+            obs_groups={"actor": ("actor",), "critic": ("critic",)}, clip_actions=100.0
+        )
+        self._install(monkeypatch, rl_cfg)
+
+        result = resolve_runner_defaults("some-task")
+
+        assert result.policy_obs_groups == ("actor",)
+        assert result.clip_actions == 100.0
+
+    def test_clip_actions_zero_survives(self, monkeypatch):
+        # A real bound, and the one a truthiness check would eat.
+        self._install(
+            monkeypatch,
+            SimpleNamespace(obs_groups={"actor": ("actor",)}, clip_actions=0.0),
+        )
+        assert resolve_runner_defaults("t").clip_actions == 0.0
+
+    def test_a_task_may_name_its_actor_group_anything(self, monkeypatch):
+        self._install(
+            monkeypatch,
+            SimpleNamespace(obs_groups={"actor": ("proprio",)}, clip_actions=None),
+        )
+        assert resolve_runner_defaults("t").policy_obs_groups == ("proprio",)
+
+    def test_no_task_id_means_no_defaults(self):
+        result = resolve_runner_defaults(None)
+        assert result.policy_obs_groups is None
+        assert result.clip_actions is None
+
+    def test_an_unknown_task_is_not_fatal(self, monkeypatch):
+        module = ModuleType("mjlab.tasks.registry")
+
+        def _raise(task_id):
+            raise KeyError(task_id)
+
+        setattr(module, "load_rl_cfg", _raise)
+        monkeypatch.setitem(sys.modules, "mjlab", ModuleType("mjlab"))
+        monkeypatch.setitem(sys.modules, "mjlab.tasks", ModuleType("mjlab.tasks"))
+        monkeypatch.setitem(sys.modules, "mjlab.tasks.registry", module)
+
+        # A hand-built env_cfg has no registered task; that is a fallback, not an error.
+        assert resolve_runner_defaults("nope").policy_obs_groups is None
+
+    @pytest.mark.slow
+    @pytest.mark.mjlab
+    def test_against_a_real_mjlab_task(self):
+        """Pin the shape against mjlab itself, since this reads its config directly."""
+        pytest.importorskip("mjlab")
+        import mjlab.tasks  # noqa: F401 — populates the registry
+
+        result = resolve_runner_defaults("Mjlab-Velocity-Flat-Unitree-G1")
+        # mjlab's default is `{"actor": ("actor",), "critic": ("critic",)}`; if upstream
+        # renames or restructures it, this fails and says so.
+        assert result.policy_obs_groups == ("actor",)

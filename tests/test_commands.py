@@ -3,6 +3,8 @@
 Layer: L1 (pure Python, no MuJoCo/ONNX required).
 """
 
+import pytest
+
 import mjswan
 from mjswan.command import (
     ButtonConfig,
@@ -41,6 +43,34 @@ class TestSliderConfig:
 
     def test_slider_is_alias_for_slider_config(self):
         assert mjswan.Slider is SliderConfig
+
+    def test_adjustable_range_is_absent_unless_asked_for(self):
+        # A UI affordance, not a default: a config that never asked keeps no companion.
+        assert "adjustable_range" not in SliderConfig(name="x", label="X").to_dict()
+
+    def test_adjustable_range_travels_as_its_own_bounds(self):
+        # mjlab's "Max <label>" meta-slider: presentational, so it carries only its bounds.
+        s = SliderConfig(
+            name="lin_vel_x",
+            label="Forward Velocity",
+            range=(-1.5, 1.5),
+            adjustable_range=mjswan.SliderRangeConfig(
+                range=(0.0, 1.5), default=1.5, step=0.05
+            ),
+        )
+        assert s.to_dict()["adjustable_range"] == {
+            "min": 0.0,
+            "max": 1.5,
+            "step": 0.05,
+            "default": 1.5,
+        }
+
+    def test_adjustable_range_label_is_optional(self):
+        # Omitted means the browser writes `Max <label>`; naming it overrides that.
+        default = mjswan.SliderRangeConfig()
+        assert "label" not in default.to_dict()
+        named = mjswan.SliderRangeConfig(label="Speed cap")
+        assert named.to_dict()["label"] == "Speed cap"
 
 
 class TestButtonConfig:
@@ -127,3 +157,134 @@ class TestCommandRegistry:
         spec = _custom_registry["DummyCommandCfg"]
         assert spec.ts_name == "DummyCommand"
         assert spec.serializer(DummyCfg()) == {"value": 3}
+
+
+class TestMotionRsiRegistration:
+    """The RSI jitter graph lives author-side; its absence must not be silent.
+
+    `TrackingCommand.ts` used to jitter with `Math.random()`. ADR 0005 moved that
+    into a traced graph whose body needs mjlab's own `sample_uniform` /
+    `quat_from_euler_xyz`, so it is registered from `examples/mjlab/defaults/
+    commands` rather than from `mjswan.command` (which keeps mjlab a soft
+    dependency). A task whose author never imported that module therefore got the
+    plain binding — no graph — and quietly stopped jittering. These pin the
+    diagnosis that replaced the silence.
+    """
+
+    def test_warns_when_a_jittering_cfg_has_no_registered_graph(self):
+        from mjswan.command import _motion_rsi_unregistered
+
+        class MotionCommandCfg:
+            # mjlab's play override: pose/velocity cleared, joint jitter kept.
+            pose_range: dict = {}
+            velocity_range: dict = {}
+            joint_position_range = (-0.1, 0.1)
+
+        with pytest.warns(RuntimeWarning, match="unjittered reference frame"):
+            assert _motion_rsi_unregistered(MotionCommandCfg()) is None
+
+    def test_stays_quiet_when_the_cfg_jitters_nothing(self):
+        """A task with every range cleared is not missing anything."""
+        import warnings
+
+        from mjswan.command import _motion_rsi_unregistered
+
+        class MotionCommandCfg:
+            pose_range: dict = {}
+            velocity_range: dict = {}
+            joint_position_range = (0.0, 0.0)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert _motion_rsi_unregistered(MotionCommandCfg()) is None
+
+    def test_warns_for_a_pose_or_velocity_range_too(self):
+        from mjswan.command import _motion_rsi_unregistered
+
+        class PoseOnly:
+            pose_range = {"x": (-0.1, 0.1)}
+            velocity_range: dict = {}
+            joint_position_range = (0.0, 0.0)
+
+        class VelocityOnly:
+            pose_range: dict = {}
+            velocity_range = {"z": (-0.2, 0.2)}
+            joint_position_range = (0.0, 0.0)
+
+        for cfg in (PoseOnly(), VelocityOnly()):
+            with pytest.warns(RuntimeWarning):
+                _motion_rsi_unregistered(cfg)
+
+    def test_the_builtin_binding_carries_the_diagnosis(self):
+        """Registered on the binding, or nothing would ever call it."""
+        from mjswan.command import _custom_registry, _motion_rsi_unregistered
+
+        spec = _custom_registry["MotionCommandCfg"]
+        # An author-side re-registration replaces this, so only pin the diagnosing default.
+        assert spec.reset_trace in (_motion_rsi_unregistered, spec.reset_trace)
+        assert spec.ts_name == "TrackingCommand"
+
+
+class TestDefaultViz:
+    """The drawing restated from mjlab's `_debug_vis_impl`, pinned against its source.
+
+    A drift in scale, axis, or source field still draws a plausible arrow — pointing
+    at the wrong thing.
+    """
+
+    class UniformVelocityCommandCfg:
+        entity_name = "robot"
+
+        class viz:
+            z_offset = 0.2
+            scale = 0.5
+
+    class LiftingCommandCfg:
+        class viz:
+            target_color = (1.0, 0.5, 0.0, 0.3)
+
+    def test_velocity_draws_mjlabs_four_arrows(self):
+        from mjswan.command import default_viz
+
+        primitives = default_viz(self.UniformVelocityCommandCfg())
+        assert [p["shape"] for p in primitives] == ["arrow"] * 4
+        # Commanded pair reads the term's state; actual pair reads the entity.
+        assert [p["vector"].get("state") for p in primitives[:2]] == [
+            "vel_command_b"
+        ] * 2
+        assert [p["vector"].get("field") for p in primitives[2:]] == [
+            "root_link_lin_vel_b",
+            "root_link_ang_vel_b",
+        ]
+        # Linear arrows take xy, angular arrows take z alone.
+        assert primitives[0]["vector"]["components"] == [0, 1, None]
+        assert primitives[1]["vector"]["components"] == [None, None, 2]
+
+    def test_velocity_scales_base_and_vector_as_mjlab_does(self):
+        """mjlab scales `([0, 0, z_offset] + v) * scale`, so the base rises too."""
+        from mjswan.command import default_viz
+
+        primitive = default_viz(self.UniformVelocityCommandCfg())[0]
+        assert primitive["origin"] == {"const": [0.0, 0.0, 0.1]}
+        assert primitive["vector"]["scale"] == 0.5
+        assert primitive["frame"]["entity"] == "robot"
+
+    def test_lifting_takes_its_color_from_the_task_cfg(self):
+        from mjswan.command import default_viz
+
+        assert default_viz(self.LiftingCommandCfg()) == [
+            {
+                "shape": "sphere",
+                "radius": 0.03,
+                "color": [1.0, 0.5, 0.0, 0.3],
+                "origin": {"state": "target_pos"},
+            }
+        ]
+
+    def test_an_unknown_cfg_class_gets_nothing(self):
+        from mjswan.command import default_viz
+
+        class CustomCommandCfg:
+            debug_vis = True
+
+        assert default_viz(CustomCommandCfg()) is None

@@ -19,17 +19,20 @@ MyoFinger XMLs are fetched at runtime from upstream, so this example adds no
 Python dependency on ``myo_sim``.
 """
 
+import os
 from pathlib import Path
 from urllib.request import urlretrieve
 
 import mujoco
 import onnx
+from mjlab.envs.mdp import observations as obs_fns
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 from onnx import TensorProto, helper
 
 import mjswan
-from mjswan.envs.mdp import observations as obs_fns
 from mjswan.envs.mdp.actions import MuscleActivationActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
+from mjswan.trace_env import build_single_entity_trace_env
 
 JOINT_NAMES = ("IFadb", "IFmcp", "IFpip", "IFdip")
 MUSCLE_NAMES = ("extn", "adabR", "adabL", "mflx", "dflx")
@@ -42,11 +45,11 @@ INITIAL_QPOS = [0.0, 0.3, 0.3, 0.3]
 INITIAL_QVEL = [0.0] * NUM_JOINTS
 
 _MYOFINGER_BASE = "https://raw.githubusercontent.com/MyoHub/myo_sim/main/finger"
-_CACHE_DIR = Path.home() / ".cache" / "mjswan" / "myofinger"
+_CACHE_DIR = Path(__file__).parent / "assets" / "myofinger"
 
 
 def _fetch_myofinger() -> Path:
-    """Download MyoFinger XMLs into the user cache; return the entry-point XML."""
+    """Download MyoFinger XMLs next to this demo; return the entry-point XML."""
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     for name in ("myofinger_v0.xml", "finger_v0.xml"):
         target = _CACHE_DIR / name
@@ -91,10 +94,19 @@ def setup_builder() -> mjswan.Builder:
     builder = mjswan.Builder(debug=True)
     project = builder.add_project(name="Muscle Actuator")
 
+    myofinger_path = str(_fetch_myofinger())
     scene = project.add_scene(
-        spec=mujoco.MjSpec.from_file(str(_fetch_myofinger())),
+        control_dt=0.02,  # 50 Hz control step
+        spec=mujoco.MjSpec.from_file(myofinger_path),
         name="MyoFinger",
     )
+    trace_env = build_single_entity_trace_env(
+        lambda: mujoco.MjSpec.from_file(myofinger_path)
+    )
+    scene.set_trace_env(trace_env)
+
+    # The build resolves joint_names -> joint_ids against the trace env, as mjlab does.
+    finger_joints = SceneEntityCfg(name="robot", joint_names=list(JOINT_NAMES))
 
     scene.set_viewer(
         mjswan.ViewerConfig(
@@ -106,24 +118,25 @@ def setup_builder() -> mjswan.Builder:
         )
     )
 
-    handle = scene.add_policy(
+    scene.add_policy(
         name="Random Action",
         policy=_build_policy(),
         policy_joint_names=[],
-        observations={
-            "policy": ObservationGroupCfg(
-                terms={
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel,
-                        params={"joint_names": list(JOINT_NAMES)},
-                    ),
-                    "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel,
-                        params={"joint_names": list(JOINT_NAMES)},
-                    ),
-                }
-            ),
-        },
+        policy_num_actions=NUM_MUSCLES,
+        initial_qpos=INITIAL_QPOS,
+        initial_qvel=INITIAL_QVEL,
+        observations=ObservationGroupCfg(
+            terms={
+                "joint_pos": ObservationTermCfg(
+                    func=obs_fns.joint_pos_rel,
+                    params={"asset_cfg": finger_joints},
+                ),
+                "joint_vel": ObservationTermCfg(
+                    func=obs_fns.joint_vel_rel,
+                    params={"asset_cfg": finger_joints},
+                ),
+            }
+        ),
         actions={
             "muscles": MuscleActivationActionCfg(
                 entity_name="",
@@ -132,16 +145,17 @@ def setup_builder() -> mjswan.Builder:
         },
     )
 
-    handle._config.policy_num_actions = NUM_MUSCLES
-    handle._config.initial_qpos = INITIAL_QPOS
-    handle._config.initial_qvel = INITIAL_QVEL
-
     return builder
 
 
 def main():
+    """Environment variables:
+    MJSWAN_NO_LAUNCH: Set to '1' to skip launching the browser
+    """
     builder = setup_builder()
     app = builder.build()
+    if os.getenv("MJSWAN_NO_LAUNCH") == "1":
+        return
     app.launch()
 
 

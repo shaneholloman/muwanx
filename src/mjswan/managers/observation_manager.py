@@ -8,11 +8,12 @@ at build time.
 
 Example (identical to mjlab)::
 
+    from mjlab.envs.mdp import observations as obs_fns
+    from mjlab.managers.scene_entity_cfg import SceneEntityCfg
     from mjswan.managers.observation_manager import (
         ObservationGroupCfg,
         ObservationTermCfg,
     )
-    from mjswan.envs.mdp import observations as obs_fns
 
     observations = {
         "policy": ObservationGroupCfg(
@@ -51,19 +52,13 @@ class ObservationTermCfg:
     In mjswan the TS runtime handles scale and history; noise and delay are
     training-only and therefore accepted but ignored.
 
-    ``func`` accepts either:
-
-    - A legacy :class:`ObservationBinding` sentinel: the build emits the existing
-      ``{"name": ..., ...params}`` shape and the engine resolves the class
-      from its registry.
-    - A plain Python callable taking ``(env, **params)``: the build traces
-      the function against a symbolic env (see :mod:`mjswan.dsl`) and emits
-      the composition graph instead.  This is the declarative path described
-      in ADR 0003.
+    ``func`` is either an :class:`ObservationBinding` (resolved to a TS class by name)
+    or a plain ``func(env, **params)`` the build traces to ONNX.
     """
 
     func: ObservationBinding | Callable[..., Any]
-    """Observation function — ObservationBinding sentinel (legacy) or DSL callable."""
+    """Observation function — ObservationBinding sentinel (legacy) or a
+    plain callable traced to ONNX (ADR 0005)."""
 
     params: dict[str, Any] = field(default_factory=dict)
     """Additional keyword arguments forwarded to the TS observation constructor."""
@@ -76,6 +71,20 @@ class ObservationTermCfg:
 
     history_length: int = 0
     """Number of past frames to stack. 0 = current only (no history)."""
+
+    history_steps: tuple[int, ...] | None = None
+    """Sparse look-back offsets to stack, instead of every frame.
+
+    mjlab only counts frames (``history_length=n`` → offsets ``0..n-1``), but a
+    policy can be trained on a *sparse* window — e.g. ``(0, 1, 2, 4, 8, 16)``, which
+    reaches 17 frames back while contributing only 6. Naming the offsets keeps the
+    term's width at ``len(history_steps)`` frames; ``history_length`` would give 17.
+    Takes precedence over ``history_length`` when both are set."""
+
+    history_interleaved: bool = False
+    """Isaac-style joint-major history layout: ``[a0_t, a0_t-1, ..., a1_t, ...]``
+    instead of frame-major (``[a_t, a_t-1, ...]`` each the full vector). Only
+    meaningful when ``history_length`` > 0."""
 
     flatten_history_dim: bool = True
     """Whether to flatten history into the feature dimension.
@@ -94,20 +103,22 @@ class ObservationTermCfg:
     delay_per_env_phase: bool = True
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a JSON-compatible dict for the TS ``PolicyRunner``.
+        """Serialize an ``ObservationBinding`` term.
 
-        Legacy ``ObservationBinding`` produces ``{"name": "BaseLinearVelocity", ...}``.
-        A DSL callable produces ``{"kind": "observation", "nodes": [...], ...}``.
+        A plain-callable term needs a live env this method has no access to; the Builder
+        calls ``mjswan._onnx_build.serialize_observation_group`` for those.
         """
         if isinstance(self.func, ObservationBinding):
             return self._to_dict_legacy()
-        return self._to_dict_traced()
+        raise TypeError(
+            f"ObservationTermCfg.to_dict() cannot serialize a plain callable "
+            f"func ({self.func!r}) — it must be traced to ONNX against a live "
+            f"env. Use mjswan._onnx_build.serialize_observation_group(group, "
+            f"env, out_dir) instead (the Builder does this automatically)."
+        )
 
     def _to_dict_legacy(self) -> dict[str, Any]:
         func: ObservationBinding = self.func  # type: ignore[assignment]
-        if func.unsupported_reason is not None:
-            raise NotImplementedError(func.unsupported_reason)
-
         entry: dict[str, Any] = {"name": func.ts_name}
         merged: dict[str, Any] = {**func.defaults, **self.params}
         if self.scale is not None:
@@ -120,22 +131,6 @@ class ObservationTermCfg:
             merged["history_steps"] = self.history_length
         entry.update(merged)
         return entry
-
-    def _to_dict_traced(self) -> dict[str, Any]:
-        from ..dsl import trace_observation
-
-        # scale / clip / history are baked into the graph as trailing nodes so
-        # the engine interprets one self-contained graph (see ADR 0003).
-        # ``transpose`` (Isaac joint-major action history) maps to the History
-        # node's interleaved layout.
-        return trace_observation(
-            self.func,  # type: ignore[arg-type]
-            self.params,
-            scale=self.scale,
-            clip=self.clip,
-            history_steps=self.history_length or None,
-            interleaved=bool(self.params.get("transpose")),
-        )
 
 
 @dataclass
@@ -171,11 +166,6 @@ class ObservationGroupCfg:
         """
         result = []
         for term_cfg in self.terms.values():
-            if (
-                isinstance(term_cfg.func, ObservationBinding)
-                and term_cfg.func.unsupported_reason is not None
-            ):
-                continue
             d = term_cfg.to_dict()
             # Group-level history overrides term-level
             if self.history_length is not None and self.history_length > 0:

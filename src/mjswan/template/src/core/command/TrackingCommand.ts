@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 
+import { quatApply, quatInverse, quatMultiply, yawQuat } from '../observation/math';
 import { getPosition, getQuaternion } from '../scene/scene';
 import { type NpzEntry, loadNpz } from '../scene/npz';
 import { type Bytes, resolveBytes } from '../utils/bytes';
+import { OnnxEvent, isOnnxEventConfig } from '../event/OnnxEvent';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
 
 export type TrackingMotionConfig = {
@@ -30,9 +32,6 @@ type LoadedTrackingMotion = TrackingMotionConfig & {
   frameCount: number;
 };
 
-type ScalarRange = [number, number];
-type PoseRange = Partial<Record<'x' | 'y' | 'z' | 'roll' | 'pitch' | 'yaw', ScalarRange>>;
-
 function normalizeQuat(quat: ArrayLike<number>): Float32Array {
   const length = Math.hypot(quat[0] ?? 1, quat[1] ?? 0, quat[2] ?? 0, quat[3] ?? 0) || 1.0;
   return new Float32Array([
@@ -56,71 +55,6 @@ function splitFrames(entry: NpzEntry): Float32Array[] {
     frames.push(out);
   }
   return frames;
-}
-
-function normalizeScalarRange(value: unknown, fallback: ScalarRange): ScalarRange {
-  if (!Array.isArray(value) || value.length < 2) {
-    return fallback;
-  }
-  const lo = Number(value[0]);
-  const hi = Number(value[1]);
-  if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-    return fallback;
-  }
-  return [lo, hi];
-}
-
-function normalizeRangeMap(value: unknown): PoseRange {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return {};
-  }
-  const out: PoseRange = {};
-  for (const key of ['x', 'y', 'z', 'roll', 'pitch', 'yaw'] as const) {
-    const range = normalizeScalarRange((value as Record<string, unknown>)[key], [0.0, 0.0]);
-    if (range[0] !== 0.0 || range[1] !== 0.0) {
-      out[key] = range;
-    }
-  }
-  return out;
-}
-
-function sampleRangeValue(range: ScalarRange | undefined): number {
-  if (!range) {
-    return 0.0;
-  }
-  return range[0] + Math.random() * (range[1] - range[0]);
-}
-
-function quatMultiply(a: ArrayLike<number>, b: ArrayLike<number>): Float32Array {
-  const aw = a[0] ?? 1;
-  const ax = a[1] ?? 0;
-  const ay = a[2] ?? 0;
-  const az = a[3] ?? 0;
-  const bw = b[0] ?? 1;
-  const bx = b[1] ?? 0;
-  const by = b[2] ?? 0;
-  const bz = b[3] ?? 0;
-  return new Float32Array([
-    aw * bw - ax * bx - ay * by - az * bz,
-    aw * bx + ax * bw + ay * bz - az * by,
-    aw * by - ax * bz + ay * bw + az * bx,
-    aw * bz + ax * by - ay * bx + az * bw,
-  ]);
-}
-
-function quatFromEulerXYZ(roll: number, pitch: number, yaw: number): Float32Array {
-  const cr = Math.cos(roll * 0.5);
-  const sr = Math.sin(roll * 0.5);
-  const cp = Math.cos(pitch * 0.5);
-  const sp = Math.sin(pitch * 0.5);
-  const cy = Math.cos(yaw * 0.5);
-  const sy = Math.sin(yaw * 0.5);
-  return new Float32Array([
-    cr * cp * cy + sr * sp * sy,
-    sr * cp * cy - cr * sp * sy,
-    cr * sp * cy + sr * cp * sy,
-    cr * cp * sy - sr * sp * cy,
-  ]);
 }
 
 function setGhostMaterial(material: THREE.Material): THREE.Material {
@@ -150,6 +84,34 @@ function hasRenderableMesh(object: THREE.Object3D): boolean {
   return found;
 }
 
+/**
+ * mjlab's `update_relative_body_poses`: place the reference bodies onto the robot by
+ * keeping the robot's anchor x/y (but the *reference's* z) and rotating the
+ * anchor-relative offsets by the yaw between the two anchors.
+ */
+export function reanchorBodyPositions(
+  bodyPosW: Float32Array,
+  anchorPos: ArrayLike<number>,
+  anchorQuat: ArrayLike<number>,
+  robotAnchorPos: ArrayLike<number>,
+  robotAnchorQuat: ArrayLike<number>,
+): Float32Array {
+  const deltaPos = [robotAnchorPos[0] ?? 0, robotAnchorPos[1] ?? 0, anchorPos[2] ?? 0];
+  const deltaOri = yawQuat(quatMultiply(robotAnchorQuat, quatInverse(anchorQuat)));
+  const out = new Float32Array(bodyPosW.length);
+  for (let i = 0; i + 2 < bodyPosW.length; i += 3) {
+    const offset = quatApply(deltaOri, [
+      bodyPosW[i] - (anchorPos[0] ?? 0),
+      bodyPosW[i + 1] - (anchorPos[1] ?? 0),
+      bodyPosW[i + 2] - (anchorPos[2] ?? 0),
+    ]);
+    for (let j = 0; j < 3; j++) {
+      out[i + j] = deltaPos[j] + offset[j];
+    }
+  }
+  return out;
+}
+
 export class TrackingCommand implements CommandTerm {
   private readonly context: CommandTermContext;
   private readonly motions: TrackingMotionConfig[];
@@ -157,6 +119,8 @@ export class TrackingCommand implements CommandTerm {
   private sampleHz: number;
   private readonly ghostRoot: THREE.Group | null;
   private readonly ghostBodies: Map<number, THREE.Group>;
+  /** Model body id by name, filled on demand (see `resolveBodyId`). */
+  private readonly bodyIds = new Map<string, number>();
   private readonly ghostData: import('mujoco').MjData | null;
   private refBodyPosW: Float32Array[];
   private refBodyQuatW: Float32Array[];
@@ -171,9 +135,10 @@ export class TrackingCommand implements CommandTerm {
   private justReset: boolean;
   private referenceVisible: boolean;
   private readonly samplingMode: string;
-  private readonly poseRange: PoseRange;
-  private readonly velocityRange: PoseRange;
-  private readonly jointPositionRange: ScalarRange;
+  /** Look-ahead/look-back offsets the `ref_*` window state fields are sampled at. */
+  private readonly timeSteps: number[];
+  /** Traced reference-state-initialization jitter, or null when the task jitters nothing. */
+  private readonly resetJitter: OnnxEvent | null;
   refJointPos: Float32Array[];
   refRootPos: Float32Array[];
   refRootQuat: Float32Array[];
@@ -202,9 +167,10 @@ export class TrackingCommand implements CommandTerm {
     this.justReset = true;
     this.referenceVisible = true;
     this.samplingMode = typeof config.sampling_mode === 'string' ? config.sampling_mode : 'start';
-    this.poseRange = normalizeRangeMap(config.pose_range);
-    this.velocityRange = normalizeRangeMap(config.velocity_range);
-    this.jointPositionRange = normalizeScalarRange(config.joint_position_range, [0.0, 0.0]);
+    this.timeSteps = Array.isArray(config.time_steps)
+      ? (config.time_steps as unknown[]).map((step) => Math.trunc(Number(step) || 0))
+      : [0];
+    this.resetJitter = this.buildResetJitter(config.reset_graph);
     this.refJointPos = [];
     this.refRootPos = [];
     this.refRootQuat = [];
@@ -424,6 +390,116 @@ export class TrackingCommand implements CommandTerm {
     return frame ? frame.slice() : null;
   }
 
+  /**
+   * mjlab `MotionCommand` state, for traced graphs declaring a `{command: "motion",
+   * field}` slot — in mjlab's frame, element order and units (`env_origins` omitted,
+   * since the browser runs one env at the origin). An unlisted field returns null and
+   * its caller holds the previous value.
+   *
+   * The `ref_*` fields and `is_ready` are the look-ahead window, which mjlab has no
+   * equivalent of: each is the `time_steps` offsets' frames concatenated, and the
+   * traced term slices out the ones it wants.
+   */
+  getStateField(field: string): Float32Array | null {
+    switch (field) {
+      case 'is_ready':
+        return new Float32Array([this.isReady() ? 1.0 : 0.0]);
+      case 'ref_root_pos_w':
+        return this.refWindow(this.refRootPos, 3);
+      case 'ref_root_quat_w':
+        return this.refWindow(this.refRootQuat, 4, true);
+      case 'ref_joint_pos':
+        return this.refWindow(this.refJointPos, this.nJoints);
+      case 'anchor_pos_w':
+        return this.getAnchorPos();
+      case 'anchor_quat_w':
+        return this.getAnchorQuat();
+      case 'body_pos_w':
+        return this.getBodyPosW();
+      case 'robot_anchor_pos_w':
+        return this.robotBodyField('xpos', 3, [this.getAnchorBodyName() ?? '']);
+      case 'robot_anchor_quat_w':
+        return this.robotBodyField('xquat', 4, [this.getAnchorBodyName() ?? '']);
+      case 'robot_body_pos_w':
+        return this.robotBodyField('xpos', 3, this.getBodyNames());
+      case 'body_pos_relative_w':
+        return this.bodyPosRelativeW();
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * One `ref_*` field at every `time_steps` offset, concatenated. Offsets clamp rather
+   * than wrap, as in training; not ready gives zeros the `is_ready` gate multiplies away.
+   */
+  private refWindow(frames: Float32Array[], stride: number, quat = false): Float32Array {
+    const out = new Float32Array(this.timeSteps.length * stride);
+    if (quat) {
+      for (let i = 0; i < this.timeSteps.length; i++) out[i * stride] = 1.0;
+    }
+    if (!this.isReady()) {
+      return out;
+    }
+    for (let i = 0; i < this.timeSteps.length; i++) {
+      const index = Math.min(this.refLen - 1, Math.max(0, this.refIdx + this.timeSteps[i]));
+      const frame = frames[index];
+      if (!frame) continue;
+      const values = quat ? normalizeQuat(frame) : frame;
+      for (let j = 0; j < stride && j < values.length; j++) {
+        out[i * stride + j] = values[j];
+      }
+    }
+    return out;
+  }
+
+  /** `mjData.<source>` rows for the named bodies, flattened — mjlab's `body_link_*_w`. */
+  private robotBodyField(
+    source: 'xpos' | 'xquat',
+    stride: number,
+    bodyNames: string[],
+  ): Float32Array | null {
+    const mjData = this.context.mjData;
+    if (!mjData || bodyNames.length === 0) {
+      return null;
+    }
+    const out = new Float32Array(bodyNames.length * stride);
+    for (let i = 0; i < bodyNames.length; i++) {
+      const bodyId = this.resolveBodyId(bodyNames[i]);
+      if (bodyId < 0) {
+        return null;
+      }
+      for (let j = 0; j < stride; j++) {
+        out[i * stride + j] = mjData[source][bodyId * stride + j] ?? 0.0;
+      }
+    }
+    return out;
+  }
+
+  /** The reference bodies re-anchored onto the robot (`reanchorBodyPositions`). */
+  private bodyPosRelativeW(): Float32Array | null {
+    const anchorPos = this.getAnchorPos();
+    const anchorQuat = this.getAnchorQuat();
+    const bodyPos = this.getBodyPosW();
+    const anchorBody = [this.getAnchorBodyName() ?? ''];
+    const robotAnchorPos = this.robotBodyField('xpos', 3, anchorBody);
+    const robotAnchorQuat = this.robotBodyField('xquat', 4, anchorBody);
+    if (!anchorPos || !anchorQuat || !bodyPos || !robotAnchorPos || !robotAnchorQuat) {
+      return null;
+    }
+    return reanchorBodyPositions(bodyPos, anchorPos, anchorQuat, robotAnchorPos, robotAnchorQuat);
+  }
+
+  /** `findBodyIdByName`, memoized: the slots are read every control step. */
+  private resolveBodyId(bodyName: string): number {
+    let bodyId = this.bodyIds.get(bodyName);
+    if (bodyId === undefined) {
+      bodyId = this.findBodyIdByName(bodyName);
+      this.bodyIds.set(bodyName, bodyId);
+    }
+    return bodyId;
+  }
+
   private createGhostRoot(): THREE.Group | null {
     const bodies = this.context.bodies ?? null;
     const mjModel = this.context.mjModel;
@@ -536,8 +612,7 @@ export class TrackingCommand implements CommandTerm {
       // Use the npz's own body-name manifest for unambiguous index lookup.
       bodySourceIndices = bodyNames.map((name) => sourceBodyNames.indexOf(name));
     } else {
-      // Fall back: assume source bodies are laid out in mjModel body-ID order
-      // starting from the first body in body_names.
+      // Fall back to mjModel body-ID order from the first body in body_names.
       const rootBodyId = this.findBodyIdByName(bodyNames[0]);
       const bodyIds = bodyNames.map((name) => this.findBodyIdByName(name));
       bodySourceIndices = bodyIds.map((id) => id - rootBodyId);
@@ -632,60 +707,71 @@ export class TrackingCommand implements CommandTerm {
     }
 
     this.context.mujoco.mj_forward(mjModel, mjData);
+    this.applyResetJitter();
+  }
+
+  /**
+   * Run the traced reference-state-initialization graph, if the build shipped one.
+   *
+   * mjlab perturbs the reference frame before writing it; this perturbs it after,
+   * reading it back off `asset.data` — same numbers, and the clip stays out of the
+   * graph. The `mj_forward` above is what makes that read valid.
+   *
+   * Fire-and-forget, since `reset()` is sync and ORT is not. A frame of un-jittered
+   * reference pose is harmless.
+   */
+  private applyResetJitter(): void {
+    const graph = this.resetJitter;
+    if (!graph) return;
+    void graph
+      .fire({
+        mjModel: this.context.mjModel,
+        mjData: this.context.mjData,
+        terrainData: null,
+      })
+      .then(() => {
+        const { mjModel, mjData } = this.context;
+        if (mjModel && mjData) this.context.mujoco.mj_forward(mjModel, mjData);
+      });
+  }
+
+  /**
+   * The RSI graph, run through `OnnxEvent` rather than a second `rand`+`entity_write`
+   * evaluator. Skips if it or the PRNG is absent: a less varied start, not a broken one.
+   */
+  private buildResetJitter(config: unknown): OnnxEvent | null {
+    if (!isOnnxEventConfig(config)) return null;
+    const session = this.context.onnxSessions?.get(config.onnx);
+    const rng = this.context.rng;
+    if (!session || !rng) {
+      console.warn(
+        `[TrackingCommand] reset jitter needs the ONNX session "${config.onnx}" and a ` +
+          'seeded rng; starting from the unjittered reference frame.',
+      );
+      return null;
+    }
+    return new OnnxEvent(config, { session, rng, readSlot: this.context.readOnnxSlot });
   }
 
   private sampleRootPos(frameIndex: number): Float32Array | null {
-    const rootPos = this.refRootPos[frameIndex];
-    if (!rootPos) {
-      return null;
-    }
-    const sampled = rootPos.slice();
-    sampled[0] += sampleRangeValue(this.poseRange.x);
-    sampled[1] += sampleRangeValue(this.poseRange.y);
-    sampled[2] += sampleRangeValue(this.poseRange.z);
-    return sampled;
+    return this.refRootPos[frameIndex] ?? null;
   }
 
   private sampleRootQuat(frameIndex: number): Float32Array | null {
-    const rootQuat = this.refRootQuat[frameIndex];
-    if (!rootQuat) {
-      return null;
-    }
-    const roll = sampleRangeValue(this.poseRange.roll);
-    const pitch = sampleRangeValue(this.poseRange.pitch);
-    const yaw = sampleRangeValue(this.poseRange.yaw);
-    if (roll === 0.0 && pitch === 0.0 && yaw === 0.0) {
-      return rootQuat;
-    }
-    return normalizeQuat(quatMultiply(quatFromEulerXYZ(roll, pitch, yaw), rootQuat));
+    return this.refRootQuat[frameIndex] ?? null;
   }
 
   private sampleRootVelocity(frameIndex: number, source: Float32Array[]): Float32Array | null {
-    const rootVel = source[frameIndex]?.slice(
-      this.selectedRootBodyIndex * 3,
-      this.selectedRootBodyIndex * 3 + 3,
+    return (
+      source[frameIndex]?.slice(
+        this.selectedRootBodyIndex * 3,
+        this.selectedRootBodyIndex * 3 + 3,
+      ) ?? null
     );
-    if (!rootVel) {
-      return null;
-    }
-    rootVel[0] += sampleRangeValue(this.velocityRange.x);
-    rootVel[1] += sampleRangeValue(this.velocityRange.y);
-    rootVel[2] += sampleRangeValue(this.velocityRange.z);
-    return rootVel;
   }
 
   private sampleRootAngularVelocity(frameIndex: number): Float32Array | null {
-    const rootVel = this.refBodyAngVelW[frameIndex]?.slice(
-      this.selectedRootBodyIndex * 3,
-      this.selectedRootBodyIndex * 3 + 3,
-    );
-    if (!rootVel) {
-      return null;
-    }
-    rootVel[0] += sampleRangeValue(this.velocityRange.roll);
-    rootVel[1] += sampleRangeValue(this.velocityRange.pitch);
-    rootVel[2] += sampleRangeValue(this.velocityRange.yaw);
-    return rootVel;
+    return this.sampleRootVelocity(frameIndex, this.refBodyAngVelW);
   }
 
   private sampleInitialFrame(frameCount: number): number {
@@ -693,21 +779,19 @@ export class TrackingCommand implements CommandTerm {
       return 0;
     }
     if (this.samplingMode === 'uniform') {
-      return Math.floor(Math.random() * frameCount);
+      // The seeded PRNG, not `Math.random()`, so a session replays; mjlab uses randint.
+      const rng = this.context.rng;
+      if (!rng) {
+        console.warn('[TrackingCommand] no seeded rng in context; starting at frame 0.');
+        return 0;
+      }
+      return Math.min(frameCount - 1, Math.floor(rng.next() * frameCount));
     }
     return 0;
   }
 
   private sampleJointPos(frameIndex: number): Float32Array {
-    const jointPos = this.refJointPos[frameIndex] ?? new Float32Array(0);
-    if (this.jointPositionRange[0] === 0.0 && this.jointPositionRange[1] === 0.0) {
-      return jointPos;
-    }
-    const sampled = jointPos.slice();
-    for (let i = 0; i < sampled.length; i++) {
-      sampled[i] += sampleRangeValue(this.jointPositionRange);
-    }
-    return sampled;
+    return this.refJointPos[frameIndex] ?? new Float32Array(0);
   }
 
   private resolveQposAdr(jointNames: string[]): number[] {

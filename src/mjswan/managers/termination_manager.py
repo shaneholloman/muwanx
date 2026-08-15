@@ -5,8 +5,8 @@ Provides ``TerminationTermCfg`` with an API compatible with
 
 Example (identical to mjlab)::
 
+    from mjlab.envs.mdp import terminations as term_fns
     from mjswan.managers.termination_manager import TerminationTermCfg
-    from mjswan.envs.mdp import terminations as term_fns
 
     terminations = {
         "time_out": TerminationTermCfg(
@@ -33,19 +33,14 @@ class TerminationTermCfg:
 
     Mirrors ``mjlab.managers.termination_manager.TerminationTermCfg``.
 
-    ``func`` accepts either:
-
-    - A legacy :class:`TerminationBinding` sentinel: the build emits the existing
-      ``{"name": ..., "params": ...}`` shape and the engine resolves the
-      class from its registry.
-    - A plain Python callable taking ``(env, **params)``: the build traces
-      the function against a symbolic env (see :mod:`mjswan.dsl`) and emits
-      the composition graph instead.  This is the declarative path described
-      in ADR 0003.
+    ``func`` is either a :class:`TerminationBinding` (resolved to a TS class by name) or
+    a plain ``func(env, **params)`` the build traces to ONNX. One reading no time-varying
+    state, like ``time_out``, is classified native automatically.
     """
 
     func: TerminationBinding | Callable[..., Any]
-    """Termination function — TerminationBinding sentinel (legacy) or DSL callable."""
+    """Termination function — TerminationBinding sentinel (legacy) or a
+    plain callable traced to ONNX (ADR 0005)."""
 
     params: dict[str, Any] = field(default_factory=dict)
     """Additional keyword arguments forwarded to the function or TS constructor."""
@@ -55,32 +50,26 @@ class TerminationTermCfg:
     terminal failure.  Maps to the ``time_out`` flag in the JSON config."""
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a JSON-compatible dict for the TS ``TerminationManager``.
+        """Serialize a ``TerminationBinding`` term.
 
-        Legacy ``TerminationBinding`` produces ``{"name": ..., "params": ..., "time_out": ...}``.
-        A DSL callable produces ``{"kind": "termination", "nodes": [...], ...}``.
+        A plain-callable term needs a live env this method has no access to; the Builder
+        calls ``mjswan._onnx_build.serialize_termination`` for those.
         """
         if isinstance(self.func, TerminationBinding):
             return self._to_dict_legacy()
-        return self._to_dict_traced()
+        raise TypeError(
+            f"TerminationTermCfg.to_dict() cannot serialize a plain callable "
+            f"func ({self.func!r}) — it must be traced to ONNX against a live "
+            f"env. Use mjswan._onnx_build.serialize_termination(cfg, env, "
+            f"out_dir) instead (the Builder does this automatically)."
+        )
 
     def _to_dict_legacy(self) -> dict[str, Any]:
         func: TerminationBinding = self.func  # type: ignore[assignment]
-        if func.unsupported_reason is not None:
-            raise NotImplementedError(func.unsupported_reason)
-
         entry: dict[str, Any] = {"name": func.ts_name}
         merged: dict[str, Any] = {**func.defaults, **self.params}
         if merged:
             entry["params"] = merged
-        if self.time_out:
-            entry["time_out"] = True
-        return entry
-
-    def _to_dict_traced(self) -> dict[str, Any]:
-        from ..dsl import trace_termination
-
-        entry = trace_termination(self.func, self.params)  # type: ignore[arg-type]
         if self.time_out:
             entry["time_out"] = True
         return entry

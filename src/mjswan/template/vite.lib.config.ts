@@ -3,15 +3,13 @@ import react from '@vitejs/plugin-react';
 import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
 import path from 'path';
 import fs from 'fs';
+import { minify } from './vite.shared';
 
 // Library build: emits a single self-contained ESM (`dist/mjswan.js`) exposing
 // `createEngine(element, options?)` (the headless engine; no React/Mantine),
 // with every dependency bundled and the MuJoCo / ONNX WASM co-located flat in
 // `dist/` so they resolve relative to the bundle on a public CDN (jsDelivr).
 // See src/engine/ and docs/adr/0004-headless-engine-core.md.
-
-// Set MJSWAN_DEBUG=1 to keep console/debugger statements.
-const isDebug = process.env.MJSWAN_DEBUG === '1';
 
 function getOrtCdnBase(): string {
   // Bake the installed ort version into the bundle so OnnxModule.ts can redirect
@@ -188,9 +186,6 @@ export default defineConfig({
       },
     },
   },
-  esbuild: {
-    drop: isDebug ? [] : ['console', 'debugger'],
-  },
   build: {
     outDir: 'dist',
     // The SPA build (vite build) runs first and empties dist/; the lib build
@@ -220,6 +215,7 @@ export default defineConfig({
         entryFileNames: 'mjswan.js',
         chunkFileNames: '[name]-[hash].js',
         assetFileNames: '[name]-[hash][extname]',
+        minify,
       },
       onwarn(warning, warn) {
         if (

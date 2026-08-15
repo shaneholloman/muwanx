@@ -90,6 +90,63 @@ describe('parseManifest', () => {
     expect(() => parseManifest({ version: '0', projects: [] }, fakeSource({}).source)).toThrow();
   });
 
+  it('delivers the traced term graphs a policy.json refers to (ADR 0005)', async () => {
+    // One graph per traced term beside the network, keyed by the config-relative path
+    // the runtime looks a session up by, and fetched relative to policy.json.
+    const traced = {
+      onnx: { path: 'walk.onnx' },
+      observations: {
+        policy: [
+          { name: 'joint_pos', onnx: 'obs/joint_pos.onnx' },
+          { name: 'actions', native: 'prev_action' },
+        ],
+      },
+      terminations: { fell_over: { name: 'fell_over', onnx: 'term/fell_over.onnx' } },
+      commands: { twist: { name: 'OnnxCommand', onnx: 'command/twist.onnx' } },
+    };
+    const { source, requested } = fakeSource(traced);
+    const catalog = parseManifest(CONFIG, source);
+    const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk' });
+
+    expect(Object.keys(input.policy?.graphs ?? {}).sort()).toEqual([
+      'command/twist.onnx',
+      'obs/joint_pos.onnx',
+      'term/fell_over.onnx',
+    ]);
+    expect(requested).toContain('main/assets/humanoid/obs/joint_pos.onnx');
+    expect(requested).toContain('main/assets/humanoid/term/fell_over.onnx');
+    expect(requested).toContain('main/assets/humanoid/command/twist.onnx');
+    // The policy network's own `onnx` is an object, not a term reference.
+    expect(input.policy?.graphs).not.toHaveProperty('walk.onnx');
+  });
+
+  it('resolves event graphs relative to the model, not to policy.json', async () => {
+    // Event graphs sit beside the scene model, and a scene may have them with no policy.
+    const withEvents: AppConfig = {
+      ...CONFIG,
+      projects: [
+        {
+          ...CONFIG.projects[0],
+          scenes: [
+            {
+              ...CONFIG.projects[0].scenes[0],
+              events: [
+                { name: 'push_robot', onnx: 'event/push_robot.onnx' },
+                { name: 'randomize_terrain' },
+              ] as never,
+            },
+          ],
+        },
+      ],
+    };
+    const { source, requested } = fakeSource(POLICY_JSON);
+    const catalog = parseManifest(withEvents, source);
+    const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk' });
+
+    expect(Object.keys(input.graphs ?? {})).toEqual(['event/push_robot.onnx']);
+    expect(requested).toContain('main/assets/humanoid/event/push_robot.onnx');
+  });
+
   it('surfaces the runtime plugin module path when present', () => {
     const withPlugins = { ...CONFIG, plugins: 'assets/plugins.js' };
     expect(parseManifest(withPlugins, fakeSource(POLICY_JSON).source).pluginsPath).toBe(

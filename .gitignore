@@ -42,6 +42,8 @@ Thumbs.db
 # Cache
 .cache
 .temp
+# Fetched from upstream MyoHub/myo_sim at demo run time, not vendored
+examples/demo/assets/myofinger/
 
 # Artifacts
 dist/

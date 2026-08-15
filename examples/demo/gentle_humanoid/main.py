@@ -11,13 +11,17 @@ from typing import Any
 import mujoco
 import numpy as np
 import onnx
+import torch
 import yaml
+from mjlab.envs.mdp import observations as obs_fns
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 import mjswan
 from mjswan.envs.mdp.actions import JointPositionActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
+from mjswan.trace_env import build_single_entity_trace_env
 
-from .dsl_terms import BUILDERS
+from . import terms
 
 HERE = Path(__file__).resolve().parent
 GENTLE_HUMANOID_REPO_URL = os.getenv(
@@ -87,6 +91,7 @@ def _body_world_npz(
     dof_pos: np.ndarray,  # (N, n_source), source joint order
     source_joint_names: list[str],
     target_joint_names: list[str],
+    *,
     fps: float = 50.0,
 ) -> bytes:
     """Convert a root+dof clip to the engine's ``body_world`` format (#79):
@@ -156,6 +161,30 @@ def _clip_file_bytes(
     )
 
 
+class _RefWindow:
+    """Trace-time stand-in for the browser ``TrackingCommand``'s look-ahead window.
+
+    The clip lookup is data, not math, so the command stays native (ADR 0005) and
+    these reads become graph *inputs* the runtime serves from ``getStateField``.
+    Only the shapes matter here — one row per ``time_steps`` offset — so the values
+    are the neutral ones (identity quats, ready).
+    """
+
+    def __init__(self, num_steps: int, num_joints: int):
+        self.ref_root_pos_w = torch.zeros(1, num_steps, 3)
+        self.ref_root_quat_w = torch.zeros(1, num_steps, 4)
+        self.ref_root_quat_w[..., 0] = 1.0
+        self.ref_joint_pos = torch.zeros(1, num_steps, num_joints)
+        self.is_ready = torch.ones(1, 1)
+
+
+class _UiValues:
+    """Trace-time stand-in for a browser ``UiCommand``: one value per UI input."""
+
+    def __init__(self, width: int):
+        self.command = torch.zeros(1, width)
+
+
 def _write_generated(name: str, payload: bytes) -> Path:
     path = HERE / ".dep" / "generated" / f"gentle_humanoid_{name}.npz"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,13 +233,32 @@ def setup_builder() -> mjswan.Builder:
         max(10.0, float(tracking_cfg.get("compliance_flag_threshold", 10.0))),
     )
 
+    future_steps = [int(step) for step in tracking_cfg["future_steps"]]
+    # The checkpoint's joint order is `action_joint_names`, not the model's.
+    policy_joints = SceneEntityCfg(
+        name="robot",
+        joint_names=tuple(action_joint_names),
+        preserve_order=True,
+    )
+
     builder = mjswan.Builder()
     project = builder.add_project(name="Gentle Humanoid Tracking")
+    spec_path = str(gentle_humanoid_root / "assets" / "g1" / "g1.xml")
     scene = project.add_scene(
+        control_dt=0.02,  # 50 Hz control step
         name="Unitree G1",
-        spec=mujoco.MjSpec.from_file(
-            str(gentle_humanoid_root / "assets" / "g1" / "g1.xml")
-        ),
+        spec=mujoco.MjSpec.from_file(spec_path),
+    )
+    # No mjlab task, so tracing needs its own env plus stand-ins for the browser-only commands.
+    scene.set_trace_env(
+        build_single_entity_trace_env(
+            lambda: mujoco.MjSpec.from_file(spec_path),
+            commands={
+                "motion": _RefWindow(len(future_steps), len(action_joint_names)),
+                # The `compliance` UI command's two value-bearing inputs (a button would carry none).
+                "compliance": _UiValues(2),
+            },
+        )
     )
     scene.set_viewer(
         mjswan.ViewerConfig(
@@ -228,9 +276,12 @@ def setup_builder() -> mjswan.Builder:
         policy=onnx.load(str(policy_path), load_external_data=True),
         config_path=str(policy_json),
         commands={
-            # Built-in engine motion player; the demo's clips are converted to
-            # its body_world format at build time (see _clip_file_bytes, #79).
-            "motion": mjswan.CommandTermConfig(term_name="TrackingCommand"),
+            # Built-in motion player; clips convert to its body_world format at build time (#79).
+            # `time_steps` is the window its `ref_*` fields are sampled at, sliced by the terms.
+            "motion": mjswan.CommandTermConfig(
+                term_name="TrackingCommand",
+                params={"time_steps": future_steps},
+            ),
             "compliance": mjswan.ui_command(
                 [
                     mjswan.CheckboxConfig(
@@ -253,76 +304,51 @@ def setup_builder() -> mjswan.Builder:
                 ]
             ),
         },
-        observations={
-            "policy": ObservationGroupCfg(
-                terms={
-                    "boot": ObservationTermCfg(func=BUILDERS["gentle_humanoid_boot"]),
-                    "tracking": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_tracking"],
-                        params={"future_steps": list(tracking_cfg["future_steps"])},
+        # The offsets live on the `motion` command, so motion-coupled terms read their width off
+        # the reference tensors. Proprioceptive terms compute one frame; `history_steps` stacks.
+        observations=ObservationGroupCfg(
+            terms={
+                "boot": ObservationTermCfg(func=terms.boot),
+                "tracking": ObservationTermCfg(func=terms.tracking),
+                "compliance": ObservationTermCfg(
+                    func=terms.compliance,
+                    params={"command_name": "compliance"},
+                ),
+                "target_joint_pos": ObservationTermCfg(
+                    func=terms.target_joint_pos,
+                    params={"asset_cfg": policy_joints},
+                ),
+                "target_root_z": ObservationTermCfg(func=terms.target_root_z),
+                "target_projected_gravity": ObservationTermCfg(
+                    func=terms.target_projected_gravity
+                ),
+                "root_ang_vel": ObservationTermCfg(
+                    func=terms.root_ang_vel,
+                    history_steps=tuple(tracking_cfg["root_angvel_history_steps"]),
+                ),
+                "projected_gravity": ObservationTermCfg(
+                    func=terms.projected_gravity,
+                    history_steps=tuple(
+                        tracking_cfg["projected_gravity_history_steps"]
                     ),
-                    "compliance": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_compliance"],
-                        params={"command_name": "compliance"},
-                    ),
-                    "target_joint_pos": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_target_joint_pos"],
-                        params={
-                            "future_steps": list(tracking_cfg["future_steps"]),
-                            "num_joints": len(action_joint_names),
-                        },
-                    ),
-                    "target_root_z": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_target_root_z"],
-                        params={"future_steps": list(tracking_cfg["future_steps"])},
-                    ),
-                    "target_projected_gravity": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_target_projected_gravity"],
-                        params={"future_steps": list(tracking_cfg["future_steps"])},
-                    ),
-                    "root_ang_vel": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_root_ang_vel"],
-                        params={
-                            "history_steps": list(
-                                tracking_cfg["root_angvel_history_steps"]
-                            )
-                        },
-                    ),
-                    "projected_gravity": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_projected_gravity"],
-                        params={
-                            "history_steps": list(
-                                tracking_cfg["projected_gravity_history_steps"]
-                            )
-                        },
-                    ),
-                    "joint_pos": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_joint_pos"],
-                        params={
-                            "history_steps": list(
-                                tracking_cfg["joint_pos_history_steps"]
-                            ),
-                            "num_joints": len(action_joint_names),
-                        },
-                    ),
-                    "joint_vel": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_joint_vel"],
-                        params={
-                            "history_steps": list(
-                                tracking_cfg["joint_vel_history_steps"]
-                            ),
-                            "num_joints": len(action_joint_names),
-                        },
-                    ),
-                    "prev_actions": ObservationTermCfg(
-                        func=BUILDERS["gentle_humanoid_prev_actions"],
-                        params={
-                            "history_steps": int(tracking_cfg["prev_action_steps"])
-                        },
-                    ),
-                }
-            )
-        },
+                ),
+                "joint_pos": ObservationTermCfg(
+                    func=terms.joint_pos,
+                    params={"asset_cfg": policy_joints},
+                    history_steps=tuple(tracking_cfg["joint_pos_history_steps"]),
+                ),
+                "joint_vel": ObservationTermCfg(
+                    func=terms.joint_vel,
+                    params={"asset_cfg": policy_joints},
+                    history_steps=tuple(tracking_cfg["joint_vel_history_steps"]),
+                ),
+                # The runtime already holds `last_action`, so only the stacking is ours.
+                "prev_actions": ObservationTermCfg(
+                    func=obs_fns.last_action,
+                    history_length=int(tracking_cfg["prev_action_steps"]),
+                ),
+            }
+        ),
         actions={
             "joint_pos": JointPositionActionCfg(
                 actuator_names=(".*",),
@@ -337,8 +363,7 @@ def setup_builder() -> mjswan.Builder:
         default=True,
     )
 
-    # Clips are converted to the engine's body_world format (joints reordered
-    # into action order), so the bundled npz's joint order IS action order.
+    # The conversion to body_world reorders joints, so the npz's order IS action order.
     policy.add_motion(
         name="default",
         source=str(_write_generated("default", _default_clip_bytes(tracking_cfg))),

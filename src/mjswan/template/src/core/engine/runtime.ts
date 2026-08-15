@@ -24,6 +24,14 @@ import {
   computeCameraPosition,
   updateCameraFromData,
 } from './viewer_config';
+import {
+  clampActions,
+  readClipActions,
+  resolveActionClip,
+  stepPhysics,
+  type ResolvedActionTerm,
+} from '../action/applyAction';
+import { applyResetTerms } from './resetChain';
 import { Observations } from '../observation/observations';
 import { TerminationManager } from '../termination/TerminationManager';
 import { Terminations } from '../termination/terminations';
@@ -37,12 +45,64 @@ import { LocomotionPolicy } from '../policy/modules/LocomotionPolicy';
 import { CommandManager, type CommandTermContext, type CommandsConfig } from '../command';
 import { EventManager } from '../event/EventManager';
 import { Events } from '../event/events';
-import type { EventConfig, TerrainData } from '../event/EventBase';
+import type { EventConfig, EventContext, TerrainData } from '../event/EventBase';
+import { OnnxSessionCache, type SlotReader } from '../onnx/session';
+import { ContactSensorSet, type ContactSensorDescriptor } from '../onnx/contact';
+import type { RaycastSensorDescriptor } from '../onnx/raycast';
+import { createSlotReader, sensorWindow } from '../onnx/slotReader';
+import { SeededRng } from '../rng';
+
+/** Fixed rather than time-derived, so a plain page load replays identically. */
+const DEFAULT_TERM_SEED = 0x5eed;
+
+const EMPTY_ACTIONS = new Float32Array(0);
+
+/** Only for a policy-less scene; a policy carries its own rate in `controlDt`. */
+const DEFAULT_VIEWER_CONTROL_DT = 0.02;
+
+/** Keyed by joint name: the slot reader needs entity-joint order, not action order. */
+function buildJointBias(config: PolicyConfig): Map<string, number> {
+  const bias = new Map<string, number>();
+  const values = config.encoder_bias;
+  const names = config.policy_joint_names;
+  if (!Array.isArray(values) || !Array.isArray(names)) return bias;
+  for (let i = 0; i < names.length && i < values.length; i++) {
+    if (values[i]) bias.set(names[i], values[i]);
+  }
+  return bias;
+}
+
+type StructuredSensorDescriptor = RaycastSensorDescriptor | ContactSensorDescriptor;
+
+/**
+ * Descriptors for the structured sensors this policy's graphs read, by kind. Terminations
+ * carry them too, not just observation groups (`ee_ground_collision` is termination-only).
+ */
+function collectStructuredSensors(config: PolicyConfig): {
+  raycast: Record<string, RaycastSensorDescriptor>;
+  contact: Record<string, ContactSensorDescriptor>;
+} {
+  const raycast: Record<string, RaycastSensorDescriptor> = {};
+  const contact: Record<string, ContactSensorDescriptor> = {};
+  const owners: Array<{ sensors?: Record<string, StructuredSensorDescriptor> }> = [
+    ...Object.values(config.observations ?? {}),
+    ...Object.values(config.terminations ?? {}),
+  ] as Array<{ sensors?: Record<string, StructuredSensorDescriptor> }>;
+  for (const owner of owners) {
+    for (const [name, descriptor] of Object.entries(owner?.sensors ?? {})) {
+      if (descriptor.kind === 'contact') contact[name] = descriptor;
+      else raycast[name] = descriptor;
+    }
+  }
+  return { raycast, contact };
+}
 
 /** A policy with its ONNX weights resolved to bytes; motion data stays lazy. */
 export type ResolvedPolicy = {
   config: PolicyConfig;
   onnx: ArrayBuffer;
+  /** Traced term graphs, keyed by the config-relative path. */
+  graphs?: Array<{ name: string; data: ArrayBuffer }>;
   motions: Array<{ name: string; data: Bytes; default?: boolean }>;
   /** Policy-scoped custom terms (observations / terminations / commands). */
   plugins?: EnginePlugins;
@@ -63,6 +123,10 @@ export type ResolvedScene = {
   viewer?: ViewerConfig | null;
   events?: EventConfig[] | null;
   terrainData?: TerrainData | null;
+  /** Seconds per control step (mjlab's `step_dt`). */
+  controlDt?: number | null;
+  /** Traced event-term graphs, keyed by the model-relative path. */
+  graphs?: Array<{ name: string; data: ArrayBuffer }>;
   /** Scene-scoped custom terms (events). */
   plugins?: EnginePlugins;
 };
@@ -132,7 +196,8 @@ export class mjswanRuntime {
   private running: boolean;
   private timestep: number;
   private decimation: number;
-  private policyCtrlDt: number | null;
+  /** Null for a policy-less scene. */
+  private controlDt: number | null;
   private loadingScene: Promise<void> | null;
   private resizeObserver: ResizeObserver | null;
   private dragStateManager: DragStateManager | null;
@@ -141,25 +206,7 @@ export class mjswanRuntime {
   private policyStateBuilder: PolicyStateBuilder | null;
   private initialQpos: number[] | null;
   private initialQvel: number[] | null;
-  private policyControl: Array<{
-    controlType: string;
-    ctrlAdr: number[];
-    qposAdr: number[];
-    qvelAdr: number[];
-    // Indices into the flat policy action vector for this term's joints.
-    actionIndices: number[];
-    actionScale: Float32Array;
-    actionOffset: Float32Array;
-    defaultJointPos: Float32Array;
-    encoderBias: Float32Array;
-    // Per-actuator flag: true = position actuator (ctrl=target_pos, PD internal),
-    // false = motor actuator (ctrl=torque, PD computed in browser from kp/kd).
-    positionActuator: boolean[];
-    kp: Float32Array;
-    kd: Float32Array;
-    // muscle_activation only: when true apply MyoSuite sigmoid; when false clip(raw, 0, 1).
-    muscleNormalize: boolean;
-  }> | null;
+  private policyControl: ResolvedActionTerm[] | null;
   private onnxModule: OnnxModule | null;
   private onnxInputDict: Record<string, ort.Tensor> | null;
   private onnxInferencing: boolean;
@@ -173,17 +220,46 @@ export class mjswanRuntime {
   private currentSplatTransform: SplatTransform;
   private cameraState: ViewerState;
   private commandManager: CommandManager;
-  // Instance-scoped custom terms: scene-scoped (events) and policy-scoped
-  // (observations / terminations / commands). No module-global registries.
   private scenePlugins: EnginePlugins;
   private policyPlugins: EnginePlugins;
+  // Split by lifetime, so `setPolicy` leaves the scene's event graphs alone.
+  private policyGraphs: OnnxSessionCache;
+  private sceneGraphs: OnnxSessionCache;
+  /** Shared by every ONNX term's `rand` input; reseeded per `loadEnvironment`. */
+  private termRng: SeededRng;
+  /** Held so an app recording a session can persist the seed the run used. */
+  private readonly termSeed: number;
+  private readonly readOnnxSlot: SlotReader;
+  private jointBias = new Map<string, number>();
+  private clipActions: number | null = null;
+  private raycastSensors: Record<string, RaycastSensorDescriptor> = {};
+  /** Owned here, not by the slot reader: the history advances per substep. */
+  private contactSensors = new ContactSensorSet();
 
-  constructor(mujoco: MainModule, container: HTMLElement) {
+  constructor(mujoco: MainModule, container: HTMLElement, termSeed = DEFAULT_TERM_SEED) {
     this.mujoco = mujoco;
     this.container = container;
+    this.termSeed = termSeed;
     this.commandManager = new CommandManager();
     this.scenePlugins = {};
     this.policyPlugins = {};
+    this.policyGraphs = new OnnxSessionCache();
+    this.sceneGraphs = new OnnxSessionCache();
+    this.termRng = new SeededRng(termSeed);
+    // Re-reads mjModel/mjData per call so a scene rebuild needs no rewiring.
+    this.readOnnxSlot = createSlotReader(
+      () => ({
+        mujoco: this.mujoco,
+        mjModel: this.mjModel,
+        mjData: this.mjData,
+        commandManager: this.commandManager,
+      }),
+      {
+        jointBias: (name) => this.jointBias.get(name) ?? 0,
+        raycastSensors: () => this.raycastSensors,
+        contactSensors: () => this.contactSensors,
+      },
+    );
 
     const workingPath = '/working';
     try {
@@ -264,7 +340,7 @@ export class mjswanRuntime {
     this.running = false;
     this.timestep = 0.001;
     this.decimation = 1;
-    this.policyCtrlDt = null;
+    this.controlDt = null;
     this.loadingScene = null;
     this.dragStateManager = null;
     this.dragForceScale = 100.0;
@@ -277,6 +353,7 @@ export class mjswanRuntime {
     this.onnxInputDict = null;
     this.onnxInferencing = false;
     this.onnxTimeStep = 0;
+    this.clipActions = null;
     this.terminationManager = null;
     this.eventManager = null;
     this.terrainData = null;
@@ -287,15 +364,33 @@ export class mjswanRuntime {
   }
 
   async loadEnvironment(scene: ResolvedScene): Promise<void> {
+    // Before the graph swap below, or a running term steps a session it just released.
+    await this.stop();
     this.scenePlugins = scene.plugins ?? {};
     this.terrainData = scene.terrainData ?? null;
+    // Needed before `buildSceneFromMjz`, which derives `decimation` from it.
+    this.controlDt = scene.controlDt && scene.controlDt > 0 ? scene.controlDt : null;
+    // Reseed so two loads of the same scene draw the same randomness.
+    this.termRng = new SeededRng(this.termSeed);
+    await this.sceneGraphs.clear();
+    await this.sceneGraphs.load(scene.graphs ?? []);
     if (scene.events && scene.events.length > 0) {
-      this.eventManager = new EventManager(scene.events, { ...Events, ...this.scenePlugins.events });
-      console.log(`[EventManager] ${this.eventManager.size} reset event(s) loaded`);
+      this.eventManager = new EventManager(
+        scene.events,
+        { ...Events, ...this.scenePlugins.events },
+        {
+          sessions: this.sceneGraphs,
+          rng: this.termRng,
+          readSlot: this.readOnnxSlot,
+        },
+      );
+      console.log(
+        `[EventManager] ${this.eventManager.size} event term(s) loaded ` +
+          `(${this.sceneGraphs.size} traced graph(s))`,
+      );
     } else {
       this.eventManager = null;
     }
-    await this.stop();
 
     // Dispose previous splat/collider before switching scenes
     if (this.splatMesh) {
@@ -328,21 +423,33 @@ export class mjswanRuntime {
 
     this.applyViewerConfig(scene.viewer ?? null);
 
+    // `mode="startup"` fires once, after the model and policy exist.
+    if (this.eventManager && this.mjModel && this.mjData) {
+      await this.eventManager.startup(this.eventContext());
+      this.mujoco.mj_forward(this.mjModel, this.mjData);
+      this.updateCachedState();
+    }
+
     this.running = true;
     void this.startLoop();
   }
 
-  /**
-   * Initialize the CommandManager (clear).
-   * Commands are registered from policy config in loadPolicyConfig().
-   */
+  /** Context every event term writes through; re-read per call (scene reloads). */
+  private eventContext(): EventContext {
+    return {
+      mujoco: this.mujoco,
+      mjModel: this.mjModel,
+      mjData: this.mjData,
+      terrainData: this.terrainData,
+    };
+  }
+
+  /** Clear only; terms are registered from the policy config in `loadPolicyConfig`. */
   private initializeCommands(): void {
     this.commandManager.clear();
   }
 
-  /**
-   * Initialize commands from policy config
-   */
+  /** Initialize commands from policy config */
   private initializeCommandsFromConfig(
     commands: CommandsConfig,
     context: CommandTermContext
@@ -352,16 +459,12 @@ export class mjswanRuntime {
     console.log('[mjswanRuntime] Commands loaded from policy config:', Object.keys(commands));
   }
 
-  /**
-   * Public method to reset the simulation state
-   * Can be called from UI components via the CommandManager
-   */
+  /** Reset the simulation state; callable from the UI via the CommandManager. */
   resetSimulation(): void {
-    this.resetSimulationState();
-    if (this.policyRunner && this.policyStateBuilder) {
-      const state = this.policyStateBuilder.build();
-      this.policyRunner.reset(state);
-    }
+    // Sync by contract, so the reset terms land a microtask late; the step loop awaits.
+    void this.resetSimulationState().catch((error) => {
+      console.warn('[mjswanRuntime] reset terms failed:', error);
+    });
     console.log('[mjswanRuntime] Simulation reset');
   }
 
@@ -429,8 +532,11 @@ export class mjswanRuntime {
       this.syncStaticBodiesFromData();
 
       this.timestep = this.mjModel.opt.timestep || 0.001;
-      const ctrlDtForDec = this.policyCtrlDt ?? 0.02;
-      this.decimation = Math.max(1, Math.round(ctrlDtForDec / this.timestep));
+      // Never inferred: a wrong control rate runs the policy off-speed silently.
+      this.decimation = Math.max(
+        1,
+        Math.round((this.controlDt ?? DEFAULT_VIEWER_CONTROL_DT) / this.timestep),
+      );
 
       this.lastSimState.bodies.clear();
       this.updateCachedState();
@@ -455,8 +561,7 @@ export class mjswanRuntime {
     await this.loadingScene;
   }
 
-  // Unpack the app-supplied .mjz bytes into the VFS, then build the scene.
-  // No scene cache to reclaim on OOM, so surface it directly as WasmMemoryLimitError.
+  // No scene cache to reclaim on OOM, so surface it as WasmMemoryLimitError directly.
   private async buildSceneFromMjz(model: ArrayBuffer): Promise<void> {
     try {
       const xmlPath = await loadMjzFile(this.mujoco, model);
@@ -521,6 +626,11 @@ export class mjswanRuntime {
     return this.commandManager;
   }
 
+  /** The seed this instance's traced terms draw from, so an app can persist it. */
+  get seed(): number {
+    return this.termSeed;
+  }
+
   /** Resume the physics loop (rendering runs continuously regardless). */
   play(): void {
     this.running = true;
@@ -555,10 +665,7 @@ export class mjswanRuntime {
     };
   }
 
-  /**
-   * Overwrite the camera pose. Body tracking (if any) keeps following after
-   * this — it applies a per-frame delta — and OrbitControls stay live.
-   */
+  /** Overwrite the camera pose; body tracking and OrbitControls both stay live. */
   setCameraView(view: Partial<CameraView>): void {
     const cur = this.getCameraView();
     const lookat = view.lookat ?? cur.lookat;
@@ -602,40 +709,65 @@ export class mjswanRuntime {
     this.loopPromise = null;
   }
 
+  /**
+   * Caught, or an escaping throw leaves `loopPromise` rejected for good — `startLoop`
+   * returns it instead of restarting and `stop()` re-throws it, wedging `loadScene` too.
+   * Stops rather than skips: what reaches here is config, identical next frame.
+   */
   private async mainLoop(): Promise<void> {
+    try {
+      await this.runLoop();
+    } catch (error) {
+      this.running = false;
+      console.error('[mjswanRuntime] simulation loop stopped:', error);
+    } finally {
+      this.loopPromise = null;
+    }
+  }
+
+  private async runLoop(): Promise<void> {
     while (this.running) {
       const loopStart = performance.now();
       const target = this.timestep * this.decimation;
 
       if (this.mjModel && this.mjData) {
-        this.mujoco.mj_forward(this.mjModel, this.mjData);
+        // Mirrors mjlab's `ManagerBasedRlEnv.step()`, one forward per step:
+        // forward → command → event → obs → action → physics → term → reset.
         if (this.policyRunner && this.policyStateBuilder) {
           const state = this.policyStateBuilder.build();
-          const obs = this.policyRunner.collectObservationsByKey(state);
+          const obs = await this.policyRunner.collectObservationsByKey(state);
           await this.runOnnxInference(obs);
         }
         this.executeSimulationSteps();
-        this.updateCachedState();
 
-        // Evaluate termination conditions after simulation step
+        // Pre-forward, as in mjlab: derived state lags by one substep, consistently.
         if (this.terminationManager && this.policyStateBuilder) {
           const postState = this.policyStateBuilder.build();
-          const result = this.terminationManager.evaluate(postState);
+          const result = this.terminationManager.evaluate(postState, target);
           if (result.done) {
-            this.resetSimulationState();
-            this.terminationManager.reset();
-            if (this.policyRunner) {
-              const resetState = this.policyStateBuilder.build();
-              this.policyRunner.reset(resetState);
+            // Awaited so the writes precede the forward; caught so a failure costs a reset.
+            try {
+              await this.resetSimulationState({ forward: false });
+            } catch (error) {
+              console.warn('[mjswanRuntime] reset terms failed:', error);
             }
+            // Last, as in mjlab's `_reset_idx`.
+            this.terminationManager.reset();
           }
         }
 
-        // Commands are updated after the physics step to match mjlab training-time semantics:
-        // the policy sees command values from the previous step, consistent with how mjlab
-        // computes observations before stepping the environment.
+        // The one forward: clears the loop's staleness and publishes a reset's writes.
+        this.mujoco.mj_forward(this.mjModel, this.mjData);
+        this.updateCachedState();
+
         this.commandManager.update(target);
         this.commandManager.updateDebugVisuals();
+        // Awaited so `mode="interval"` terms resolve in config order.
+        try {
+          await this.eventManager?.tick(target, this.eventContext());
+        } catch (error) {
+          console.warn('[mjswanRuntime] interval events failed:', error);
+        }
       }
 
       const elapsed = (performance.now() - loopStart) / 1000;
@@ -644,7 +776,6 @@ export class mjswanRuntime {
         await new Promise((resolve) => setTimeout(resolve, sleepTime * 1000));
       }
     }
-    this.loopPromise = null;
   }
 
   async loadPolicyConfig(policy: ResolvedPolicy | null): Promise<void> {
@@ -657,24 +788,34 @@ export class mjswanRuntime {
     this.onnxInferencing = false;
     this.onnxTimeStep = 0;
     this.terminationManager = null;
-    // Note: eventManager and terrainData are scene-level state set in loadEnvironment; do not clear here.
-
-    // Clear existing commands when switching policies
+    // Before the release below — `setPolicy` runs live.
     this.commandManager.clear();
+    await this.policyGraphs.clear();
+    this.jointBias.clear();
+    this.clipActions = null;
+    this.raycastSensors = {};
+    this.contactSensors = new ContactSensorSet();
+    // eventManager, sceneGraphs and terrainData are scene-level; do not clear here.
 
     if (!policy) {
       return;
     }
 
     if (!this.mjModel || !this.mjData) {
+      // A caller-ordering mistake, not a bad bundle — unreachable from the app.
       console.warn('Policy config loaded before MuJoCo model is ready.');
       return;
     }
 
     try {
       const config = policy.config;
-      // Motion metadata lives in policy.json; the app supplies the bytes as
-      // MotionInput[]. Merge the bytes onto each motion entry by name.
+      await this.policyGraphs.load(policy.graphs ?? []);
+      this.jointBias = buildJointBias(config);
+      this.clipActions = readClipActions(config.clip_actions);
+      const structured = collectStructuredSensors(config);
+      this.raycastSensors = structured.raycast;
+      this.contactSensors = new ContactSensorSet(structured.contact);
+      // Metadata comes from policy.json, bytes from the app; merge them by name.
       if (Array.isArray(config.motions)) {
         const dataByName = new Map(policy.motions.map((m) => [m.name, m.data]));
         config.motions = config.motions.map((motion) => ({
@@ -690,9 +831,8 @@ export class mjswanRuntime {
       }
       this.initialQpos = Array.isArray(config.initial_qpos) ? (config.initial_qpos as number[]) : null;
       this.initialQvel = Array.isArray(config.initial_qvel) ? (config.initial_qvel as number[]) : null;
-      this.resetSimulationState();
-      this.mujoco.mj_forward(this.mjModel, this.mjData);
-      this.updateCachedState();
+      // Does its own forward; awaited so the reset terms precede the rebuild below.
+      await this.resetSimulationState();
 
       // Initialize commands from policy config if present
       if (config.commands && typeof config.commands === 'object') {
@@ -704,8 +844,12 @@ export class mjswanRuntime {
           bodies: this.bodies,
           mujocoRoot: this.mujocoRoot,
           requestReset: () => this.resetSimulation(),
+          // Traced commands run a graph per frame off these.
+          rng: this.termRng,
+          onnxSessions: this.policyGraphs,
+          readOnnxSlot: this.readOnnxSlot,
         });
-        this.commandManager.resetTerms();
+        await this.commandManager.resetTerms();
         const motionTerm = this.commandManager.getTerm('motion');
         if (isMotionCommandTerm(motionTerm)) {
           await motionTerm.setSelectedMotion(
@@ -732,9 +876,10 @@ export class mjswanRuntime {
           locomotion: LocomotionPolicy,
         },
         observations: { ...Observations, ...this.policyPlugins.observations },
-        // Expose the app-supplied clips to custom terms (they read bytes via
-        // runner.getMotionData instead of fetching — ADR 0004 §4/§10).
+        // Custom terms read clip bytes via `runner.getMotionData` rather than fetching.
         motions: policy.motions,
+        onnxSessions: this.policyGraphs,
+        readOnnxSlot: this.readOnnxSlot,
       });
 
       await runner.init({
@@ -760,37 +905,13 @@ export class mjswanRuntime {
       this.policyRunner.reset(state);
       this.policyControl = this.buildPolicyControl(config, runner, this.policyStateBuilder);
 
-      // Infer decimation from fps in obs terms (default heuristic targets 0.02s, some tasks train finer).
-      {
-        const obsGroups = config.observations;
-        const allTerms: Array<Record<string, unknown>> = [];
-        if (Array.isArray(obsGroups)) {
-          allTerms.push(...(obsGroups as Array<Record<string, unknown>>));
-        } else if (obsGroups && typeof obsGroups === 'object') {
-          for (const g of Object.values(obsGroups)) {
-            if (Array.isArray(g)) allTerms.push(...(g as Array<Record<string, unknown>>));
-          }
-        }
-        for (const term of allTerms) {
-          if (!term || this.timestep <= 0) continue;
-          if (typeof term.fps === 'number' && term.fps > 0) {
-            this.policyCtrlDt = 1 / term.fps;
-            const newDec = Math.max(1, Math.round(this.policyCtrlDt / this.timestep));
-            if (newDec !== this.decimation) {
-              console.log(`[PolicyRunner] Decimation updated: ${this.decimation} → ${newDec} (fps=${term.fps}, sim_dt=${this.timestep})`);
-              this.decimation = newDec;
-            }
-            break;
-          }
-        }
-      }
-
       // Initialize termination manager if termination config is present
       if (config.terminations && Object.keys(config.terminations).length > 0) {
         this.terminationManager = new TerminationManager(
           config.terminations,
           { ...Terminations, ...this.policyPlugins.terminations },
-          runner
+          runner,
+          { onnxSessions: this.policyGraphs, readOnnxSlot: this.readOnnxSlot }
         );
         console.log(`[TerminationManager] ${this.terminationManager.size} termination term(s) loaded`);
       }
@@ -806,7 +927,15 @@ export class mjswanRuntime {
         pdEnabled: this.policyControl !== null,
       });
     } catch (error) {
-      console.warn('Failed to load policy config:', error);
+      // Everything above is load-bearing, so rethrow rather than report success, and
+      // clear the partially-assigned fields so a failure leaves no policy, not half of one.
+      this.policyRunner = null;
+      this.policyStateBuilder = null;
+      this.policyControl = null;
+      this.onnxModule = null;
+      this.onnxInputDict = null;
+      this.terminationManager = null;
+      throw error;
     }
   }
 
@@ -814,21 +943,7 @@ export class mjswanRuntime {
     config: PolicyConfig,
     runner: PolicyRunner,
     stateBuilder: PolicyStateBuilder
-  ): Array<{
-    controlType: string;
-    ctrlAdr: number[];
-    qposAdr: number[];
-    qvelAdr: number[];
-    actionIndices: number[];
-    actionScale: Float32Array;
-    actionOffset: Float32Array;
-    defaultJointPos: Float32Array;
-    encoderBias: Float32Array;
-    positionActuator: boolean[];
-    kp: Float32Array;
-    kd: Float32Array;
-    muscleNormalize: boolean;
-  }> | null {
+  ): ResolvedActionTerm[] | null {
     const jointNames = runner.getPolicyJointNames();
     const affineBiasValue = this.mujoco.mjtBias?.mjBIAS_AFFINE?.value ?? 1;
 
@@ -840,7 +955,8 @@ export class mjswanRuntime {
       configOffset: number[] | number | Record<string, number> | undefined,
       configStiffness: number[] | number | Record<string, number> | undefined,
       configDamping: number[] | number | Record<string, number> | undefined,
-      useDefaultOffset: boolean
+      useDefaultOffset: boolean,
+      configClip?: Record<string, readonly number[]>
     ) => {
       const n = mapping.qposAdr.length;
       const subsetJointNames = mapping.actionIndices.map((i) => jointNames[i]);
@@ -866,10 +982,11 @@ export class mjswanRuntime {
 
       const kp = this.normalizeControlArray(configStiffness, n, 0.0, subsetJointNames);
       const kd = this.normalizeControlArray(configDamping, n, 0.0, subsetJointNames);
+      // Pattern-keyed, unlike the exact-name siblings above.
+      const { clipLo, clipHi } = resolveActionClip(configClip, subsetJointNames, n);
 
-      // Detect per-actuator whether the scene uses position actuators (biastype=affine,
-      // ctrl=target_pos, PD handled internally by MuJoCo) or motor actuators
-      // (biastype=none, ctrl=torque, PD must be computed externally from kp/kd).
+      // Position actuators (biastype=affine) take a target and run their PD in MuJoCo;
+      // motor actuators (biastype=none) take a torque and need the PD computed here.
       const positionActuator: boolean[] = mapping.ctrlAdr.map((adr) => {
         if (adr < 0 || !this.mjModel) return false;
         return this.mjModel.actuator_biastype[adr] === affineBiasValue;
@@ -899,6 +1016,8 @@ export class mjswanRuntime {
         kp,
         kd,
         muscleNormalize: false,
+        clipLo,
+        clipHi,
       };
     };
 
@@ -982,6 +1101,11 @@ export class mjswanRuntime {
           kp: new Float32Array(n),
           kd: new Float32Array(n),
           muscleNormalize,
+          ...resolveActionClip(
+            actionTerm.clip as Record<string, readonly number[]> | undefined,
+            muscleMapping.ctrlAdr.map((_, i) => patterns[i] ?? ''),
+            n
+          ),
         });
         continue;
       }
@@ -1021,7 +1145,8 @@ export class mjswanRuntime {
         actionTerm.offset as number[] | number | Record<string, number> | undefined,
         actionTerm.stiffness as number[] | number | Record<string, number> | undefined,
         actionTerm.damping as number[] | number | Record<string, number> | undefined,
-        useDefaultOffset
+        useDefaultOffset,
+        actionTerm.clip as Record<string, readonly number[]> | undefined
       ));
     }
 
@@ -1064,7 +1189,15 @@ export class mjswanRuntime {
     return output;
   }
 
-  private resetSimulationState(): void {
+  /**
+   * Put the sim back to its initial state, fire `mode="reset"` events, then reset
+   * the command terms — mjlab's order (see `resetChain`).
+   *
+   * The sim state resets synchronously, before the first `await`, so a caller that
+   * cannot await still gets an immediately-reset sim. Pass `forward: false` when the
+   * caller runs its own `mj_forward` right after.
+   */
+  private async resetSimulationState({ forward = true }: { forward?: boolean } = {}): Promise<void> {
     if (!this.mjModel || !this.mjData) {
       return;
     }
@@ -1085,112 +1218,59 @@ export class mjswanRuntime {
         qvel[i] = this.initialQvel[i];
       }
     }
-    if (this.eventManager) {
-      this.eventManager.onReset({
-        mjModel: this.mjModel,
-        mjData: this.mjData,
-        terrainData: this.terrainData,
-      });
-    }
-    this.commandManager.resetTerms();
+    // With the sim state, as mjlab does: a force from before the reset would otherwise
+    // keep an `illegal_contact` term firing.
+    this.contactSensors.reset();
+    // Reset with the sim state, not the terms: it reads nothing from the scene.
     if (this.onnxModule) {
       this.onnxInputDict = this.onnxModule.initInput();
     }
     this.onnxTimeStep = 0;
-    this.mujoco.mj_forward(this.mjModel, this.mjData);
     this.lastSimState.bodies.clear();
-    this.updateCachedState();
+
+    await applyResetTerms({
+      events: this.eventManager,
+      policy: this.policyRunner,
+      commands: this.commandManager,
+      context: this.eventContext(),
+      // A thunk so it reads state after the events land.
+      buildState: () => this.policyStateBuilder?.build(),
+    });
+
+    // Re-checked: the scene can be disposed while the reset events are in flight.
+    if (forward && this.mjModel && this.mjData) {
+      this.mujoco.mj_forward(this.mjModel, this.mjData);
+      this.updateCachedState();
+    }
   }
 
   private executeSimulationSteps(): void {
     if (!this.mjModel || !this.mjData) {
       return;
     }
-    // Apply drag forces
+    // Viewer-only: mouse-drag forces, not part of the MDP.
     this.applyDragForces();
 
-    for (let substep = 0; substep < this.decimation; substep++) {
-      this.applyPolicyControl();
-      this.mujoco.mj_step(this.mjModel, this.mjData);
-    }
+    stepPhysics(
+      this.mujoco,
+      this.mjModel,
+      this.mjData,
+      this.policyControl ?? [],
+      this.policyRunner?.getLastActions() ?? EMPTY_ACTIONS,
+      this.decimation,
+      undefined,
+      // Per substep, not per control step, as mjlab rolls it from
+      // `scene.update(dt=physics_dt)` inside its own decimation loop.
+      this.contactSensors.size > 0 ? () => this.advanceContactSensors() : undefined,
+    );
   }
 
-  private applyPolicyControl(): void {
-    if (!this.policyControl || !this.mjData) {
-      return;
-    }
-
-    const ctrl = this.mjData.ctrl;
-    ctrl.fill(0.0);
-
-    // Fetch the full action vector once; each term reads its own slice via actionIndices.
-    const allActions = this.policyRunner?.getLastActions() ?? new Float32Array(0);
-
-    for (const term of this.policyControl) {
-      const {
-        controlType,
-        ctrlAdr,
-        qposAdr,
-        qvelAdr,
-        actionIndices,
-        actionScale,
-        actionOffset,
-        defaultJointPos,
-        encoderBias,
-        positionActuator,
-        kp,
-        kd,
-        muscleNormalize,
-      } =
-        term;
-      const numJoints = ctrlAdr.length;
-
-      if (controlType === 'joint_position') {
-        for (let i = 0; i < numJoints; i++) {
-          const ctrlIndex = ctrlAdr[i];
-          if (ctrlIndex < 0) continue;
-          const actionValue = allActions[actionIndices[i]] ?? 0;
-          const target =
-            defaultJointPos[i] +
-            actionOffset[i] +
-            actionScale[i] * actionValue -
-            encoderBias[i];
-
-          if (positionActuator[i]) {
-            // Position actuator (biastype=affine): ctrl = target joint position.
-            // MuJoCo computes force = kp*(ctrl - qpos) - kd*qvel internally.
-            ctrl[ctrlIndex] = target;
-          } else {
-            // Motor actuator (biastype=none): ctrl = torque.
-            // PD must be computed externally using kp/kd from the policy config.
-            const qpos = this.mjData.qpos[qposAdr[i]];
-            const qvel = this.mjData.qvel[qvelAdr[i]];
-            ctrl[ctrlIndex] = kp[i] * (target - qpos) + kd[i] * (0 - qvel);
-          }
-        }
-      } else if (controlType === 'torque') {
-        for (let i = 0; i < numJoints; i++) {
-          const ctrlIndex = ctrlAdr[i];
-          if (ctrlIndex >= 0) {
-            ctrl[ctrlIndex] = actionScale[i] * (allActions[actionIndices[i]] ?? 0);
-          }
-        }
-      } else if (controlType === 'muscle_activation') {
-        // Shared pre-step: raw = scale * action + offset.
-        // normalize=true:  MyoSuite-canonical sigmoid σ(5 * (raw - 0.5)).
-        // normalize=false: clip(raw, 0, 1) for models that already output excitation.
-        for (let i = 0; i < numJoints; i++) {
-          const ctrlIndex = ctrlAdr[i];
-          if (ctrlIndex < 0) continue;
-          const raw = (allActions[actionIndices[i]] ?? 0) * actionScale[i] + actionOffset[i];
-          if (muscleNormalize) {
-            ctrl[ctrlIndex] = 1 / (1 + Math.exp(-5 * (raw - 0.5)));
-          } else {
-            ctrl[ctrlIndex] = raw < 0 ? 0 : raw > 1 ? 1 : raw;
-          }
-        }
-      }
-    }
+  private advanceContactSensors(): void {
+    if (!this.mjModel || !this.mjData) return;
+    const mjModel = this.mjModel;
+    this.contactSensors.advance(mjModel, this.mjData, (sensor) =>
+      sensorWindow(mjModel, sensor),
+    );
   }
 
   private async runOnnxInference(obs: Record<string, Float32Array>): Promise<void> {
@@ -1244,6 +1324,10 @@ export class mjswanRuntime {
         });
         return;
       }
+      // Before `setLastActions`, which is what both the action terms and the
+      // `prev_action` observation slot read — mirroring rsl-rl, where the clamp lands
+      // ahead of `env.step` and so ahead of the action manager recording the action.
+      clampActions(action, this.clipActions);
       this.policyRunner.setLastActions(action);
     } catch (error) {
       console.warn('[PolicyRunner] ONNX inference failed:', error);
@@ -1309,8 +1393,7 @@ export class mjswanRuntime {
     const f = new THREE.Vector3(force.x, force.y, force.z);
     const torque = new THREE.Vector3().crossVectors(r, f);
 
-    // Set xfrc_applied
-    // xfrc_applied: (nbody, 6) = [fx, fy, fz, tx, ty, tz] for each body
+    // Set xfrc_applied xfrc_applied: (nbody, 6) = [fx, fy, fz, tx, ty, tz] for each body
     const offset = bodyId * 6;
     this.mjData.xfrc_applied[offset + 0] = force.x;
     this.mjData.xfrc_applied[offset + 1] = force.y;
@@ -1480,14 +1563,15 @@ export class mjswanRuntime {
     this.policyRunner = null;
     this.policyStateBuilder = null;
 
-    // ONNX session, splat, and collider are not cache-managed; free them here
-    // or they leak across navigations (a live splat worker freezes the tab).
+    // Not cache-managed, so they leak across navigations unless freed here.
     if (this.onnxModule) {
       this.onnxModule.dispose();
       this.onnxModule = null;
     }
     this.onnxInputDict = null;
     this.onnxInferencing = false;
+    await this.policyGraphs.clear();
+    await this.sceneGraphs.clear();
     if (this.splatMesh) {
       disposeSplat(this.splatMesh, this.scene);
       this.splatMesh = null;
@@ -1505,9 +1589,8 @@ export class mjswanRuntime {
     this.mjData = null;
     this.mjModel = null;
 
-    // NOTE: Do NOT dispose Three.js resources here as they may be cached
-    // The cache manager will handle their disposal when evicting
-    // Just clear references
+    // NOTE: Do NOT dispose Three.js resources here as they may be cached The cache manager
+    // will handle their disposal when evicting Just clear references
     // this.disposeThreeJSResources();
 
     window.removeEventListener('resize', this.onWindowResize);

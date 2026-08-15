@@ -1,6 +1,24 @@
 import { ObservationBase } from '../observation/ObservationBase';
-import { DslObservation } from '../observation/DslObservation';
-import type { DslNode } from '../dsl/types';
+import {
+  FusedObservation,
+  isFusedObservationConfig,
+  type FusedObservationConfig,
+} from '../observation/FusedObservation';
+import {
+  HistoryObservation,
+  historyOffsets,
+  writeInterleavedFrame,
+} from '../observation/HistoryObservation';
+import {
+  NativeObservation,
+  isNativeObservationConfig,
+} from '../observation/NativeObservation';
+import {
+  OnnxObservation,
+  isOnnxObservationConfig,
+  type OnnxObservationConfig,
+} from '../observation/OnnxObservation';
+import type { OnnxSessionCache, SlotReader } from '../onnx/session';
 import { type Bytes, resolveBytes } from '../utils/bytes';
 import { PolicyModule } from './PolicyModule';
 import type {
@@ -9,6 +27,25 @@ import type {
   PolicyRunnerContext,
   PolicyState,
 } from './types';
+
+/** A frame-major stack re-laid element-major, as `history_interleaved` asks for. */
+function interleaveStack(
+  buffer: Float32Array,
+  width: number,
+  steps: number,
+): Float32Array {
+  const out = new Float32Array(buffer.length);
+  for (let i = 0; i < steps; i++) {
+    writeInterleavedFrame(
+      out,
+      buffer.subarray(i * width, (i + 1) * width),
+      width,
+      i,
+      steps,
+    );
+  }
+  return out;
+}
 
 export type PolicyModuleConstructor = new (config: PolicyConfig) => PolicyModule;
 export type ObservationConstructor = new (
@@ -21,6 +58,9 @@ export type PolicyRunnerOptions = {
   observations?: Record<string, ObservationConstructor>;
   /** App-supplied motion clips (name → bytes), exposed to terms via getMotionData. */
   motions?: Array<{ name: string; data: Bytes }>;
+  /** The loaded graphs and slot reader traced observations need; absent if none. */
+  onnxSessions?: OnnxSessionCache;
+  readOnnxSlot?: SlotReader;
 };
 
 export class PolicyRunner {
@@ -32,6 +72,8 @@ export class PolicyRunner {
   private obsSizes: Record<string, number>;
   private historyConfig: Record<string, { steps: number; interleaved: boolean }>;
   private historyBuffers: Record<string, Float32Array>;
+  /** Groups whose history must be filled with the next frame (set by `reset()`). */
+  private historyNeedsPrime: Record<string, boolean> = {};
   private defaultObsKey: string | null;
   private context: PolicyRunnerContext | null;
   private policyJointNames: string[];
@@ -50,6 +92,7 @@ export class PolicyRunner {
     this.obsSizes = {};
     this.historyConfig = {};
     this.historyBuffers = {};
+    this.historyNeedsPrime = {};
     this.defaultObsKey = null;
     this.context = null;
 
@@ -85,14 +128,10 @@ export class PolicyRunner {
       }
     }
     if (state) {
+      // Priming computes a frame, which is async for an ONNX term while `reset()` is not.
+      // Flag it and prime on the next collect, which uses the frame actually about to run.
       for (const [key, config] of Object.entries(this.historyConfig)) {
-        if (config.steps > 1) {
-          const frame = this.buildFrame(this.obsGroups[key] ?? [], state);
-          const buffer = this.historyBuffers[key];
-          for (let i = 0; i < config.steps; i++) {
-            buffer.set(frame, i * frame.length);
-          }
-        }
+        if (config.steps > 1) this.historyNeedsPrime[key] = true;
       }
     }
   }
@@ -108,29 +147,39 @@ export class PolicyRunner {
     }
   }
 
-  collectObservationsByKey(state: PolicyState): Record<string, Float32Array> {
+  /** Async because ONNX-backed terms run ORT inference. */
+  async collectObservationsByKey(state: PolicyState): Promise<Record<string, Float32Array>> {
     this.update(state);
     const outputs: Record<string, Float32Array> = {};
 
     for (const [key, obsList] of Object.entries(this.obsGroups)) {
       const history = this.historyConfig[key];
       if (history && history.steps > 1) {
-        const frame = this.buildFrame(obsList, state);
+        const frame = await this.buildFrame(obsList, state);
         const buffer = this.historyBuffers[key];
-        for (let i = buffer.length - 1; i >= frame.length; i--) {
-          buffer[i] = buffer[i - frame.length];
+        if (this.historyNeedsPrime[key]) {
+          // First frame after a reset: fill every slot, never a history of untrained zeros.
+          for (let i = 0; i < history.steps; i++) buffer.set(frame, i * frame.length);
+          delete this.historyNeedsPrime[key];
+        } else {
+          for (let i = buffer.length - 1; i >= frame.length; i--) {
+            buffer[i] = buffer[i - frame.length];
+          }
+          buffer.set(frame, 0);
         }
-        buffer.set(frame, 0);
-        outputs[key] = new Float32Array(buffer);
+        // The buffer is frame-major either way; interleaving is an output layout.
+        outputs[key] = history.interleaved
+          ? interleaveStack(buffer, frame.length, history.steps)
+          : new Float32Array(buffer);
       } else {
-        outputs[key] = this.buildFrame(obsList, state);
+        outputs[key] = await this.buildFrame(obsList, state);
       }
     }
     return outputs;
   }
 
-  collectObservations(state: PolicyState): Float32Array {
-    const outputs = this.collectObservationsByKey(state);
+  async collectObservations(state: PolicyState): Promise<Float32Array> {
+    const outputs = await this.collectObservationsByKey(state);
     if (this.defaultObsKey && outputs[this.defaultObsKey]) {
       return outputs[this.defaultObsKey];
     }
@@ -203,11 +252,7 @@ export class PolicyRunner {
     return this.config;
   }
 
-  /**
-   * Resolve an app-supplied motion clip's raw bytes by name (cached), or null
-   * if not supplied. Custom terms that need clip data read this slot instead of
-   * fetching a URL — the app owns and feeds all bytes (ADR 0004 §4/§10).
-   */
+  /** An app-supplied clip's bytes by name (cached); custom terms read this, never a URL. */
   getMotionData(name: string): Promise<ArrayBuffer | null> {
     const cached = this.motionCache.get(name);
     if (cached) return cached;
@@ -255,25 +300,16 @@ export class PolicyRunner {
     this.obsSizes = {};
     this.historyConfig = {};
     this.historyBuffers = {};
+    this.historyNeedsPrime = {};
     this.defaultObsKey = null;
 
-    const buildObservation = (entry: ObservationConfigEntry): ObservationBase => {
-      const dslEntry = entry as unknown as {
-        kind?: string;
-        nodes?: unknown[];
-        output?: string;
-        params?: Record<string, unknown>;
-      };
-      if (dslEntry.kind === 'observation' && Array.isArray(dslEntry.nodes)) {
-        return new DslObservation(this, {
-          name: 'DslObservation',
-          graph: {
-            kind: 'observation',
-            nodes: dslEntry.nodes as DslNode[],
-            output: dslEntry.output ?? '',
-          },
-          params: dslEntry.params,
-        });
+    const buildTerm = (entry: ObservationConfigEntry): ObservationBase => {
+      // Traced and native terms bypass the registry, so `entry.name` is the term's identity.
+      if (isOnnxObservationConfig(entry)) {
+        return this.buildOnnxObservation(entry);
+      }
+      if (isNativeObservationConfig(entry)) {
+        return new NativeObservation(this, entry);
       }
       const ObsClass = registry[entry.name];
       if (!ObsClass) {
@@ -282,7 +318,23 @@ export class PolicyRunner {
       return new ObsClass(this, entry);
     };
 
+    // mjlab stacks per term. Only ONNX/native entries wrap: registry classes self-stack.
+    const buildObservation = (entry: ObservationConfigEntry): ObservationBase => {
+      const base = buildTerm(entry);
+      const offsets =
+        isOnnxObservationConfig(entry) || isNativeObservationConfig(entry)
+          ? historyOffsets(entry)
+          : null;
+      return offsets ? new HistoryObservation(this, entry, base, offsets) : base;
+    };
+
     for (const [key, value] of Object.entries(obsConfig)) {
+      // A fused group is one graph for all its terms; below is the unfused path.
+      if (isFusedObservationConfig(value)) {
+        const fused = this.buildFusedObservation(key, value);
+        this.registerGroup(key, [fused], [{ name: key }], undefined, value.layout);
+        continue;
+      }
       if (Array.isArray(value)) {
         const obsList = value.map(buildObservation);
         this.registerGroup(key, obsList, value);
@@ -295,31 +347,10 @@ export class PolicyRunner {
           components?: ObservationConfigEntry[];
         };
         if (Array.isArray(configValue.components)) {
-          const obsList = configValue.components.map((entry) => {
-            const dslEntry = entry as unknown as {
-              kind?: string;
-              nodes?: unknown[];
-              output?: string;
-              params?: Record<string, unknown>;
-            };
-            if (dslEntry.kind === 'observation' && Array.isArray(dslEntry.nodes)) {
-              return new DslObservation(this, {
-                name: 'DslObservation',
-                graph: {
-                  kind: 'observation',
-                  nodes: dslEntry.nodes as DslNode[],
-                  output: dslEntry.output ?? '',
-                },
-                params: dslEntry.params,
-              });
-            }
-            const ObsClass = registry[entry.name];
-            if (!ObsClass) {
-              throw new Error(`Unknown observation type: ${entry.name}`);
-            }
-            const entryConfig = { ...entry, history_steps: 1 };
-            return new ObsClass(this, entryConfig);
-          });
+          // Group history owns the stacking, so each component computes one frame.
+          const obsList = configValue.components.map((entry) =>
+            buildObservation({ ...entry, history_steps: 1 }),
+          );
           const steps = Math.max(1, Math.floor(configValue.history_steps ?? 1));
           const interleaved = Boolean(configValue.interleaved);
           this.registerGroup(key, obsList, configValue.components, {
@@ -341,17 +372,53 @@ export class PolicyRunner {
     }
   }
 
+  /**
+   * Build a traced-ONNX observation term, or throw: unlike a command or event, dropping one
+   * shifts every later term's offset in the policy's input vector.
+   */
+  private buildOnnxObservation(entry: OnnxObservationConfig): OnnxObservation {
+    const session = this.options.onnxSessions?.get(entry.onnx);
+    const readSlot = this.options.readOnnxSlot;
+    if (!session || !readSlot) {
+      throw new Error(
+        `Observation "${entry.name}" needs the ONNX session "${entry.onnx}" and a ` +
+          'slot reader; pass onnxSessions/readOnnxSlot in PolicyRunnerOptions.'
+      );
+    }
+    return new OnnxObservation(this, entry, { session, readSlot });
+  }
+
+  /** Build the single handler for a fused group, or throw, as the per-term case does. */
+  private buildFusedObservation(
+    key: string,
+    config: FusedObservationConfig
+  ): FusedObservation {
+    const session = this.options.onnxSessions?.get(config.fused);
+    const readSlot = this.options.readOnnxSlot;
+    if (!session || !readSlot) {
+      throw new Error(
+        `Observation group "${key}" needs the ONNX session "${config.fused}" and a ` +
+          'slot reader; pass onnxSessions/readOnnxSlot in PolicyRunnerOptions.'
+      );
+    }
+    return new FusedObservation(this, { ...config, name: key }, { session, readSlot });
+  }
+
   private registerGroup(
     key: string,
     obsList: ObservationBase[],
     configList: ObservationConfigEntry[],
-    history?: { steps: number; interleaved: boolean }
+    history?: { steps: number; interleaved: boolean },
+    /** Fused groups only: per-term widths, since one handler covers every term. */
+    fusedLayout?: Array<{ name: string; size: number }>
   ): void {
     this.obsGroups[key] = obsList;
-    this.obsLayouts[key] = obsList.map((obs, index) => ({
-      name: configList[index]?.name ?? `obs_${index}`,
-      size: obs.size,
-    }));
+    this.obsLayouts[key] = fusedLayout
+      ? fusedLayout.map((entry) => ({ ...entry }))
+      : obsList.map((obs, index) => ({
+          name: configList[index]?.name ?? `obs_${index}`,
+          size: obs.size,
+        }));
     const baseSize = this.obsLayouts[key].reduce((sum, entry) => sum + entry.size, 0);
     if (history && history.steps > 1) {
       this.historyConfig[key] = history;
@@ -362,22 +429,24 @@ export class PolicyRunner {
     }
   }
 
-  private buildFrame(obsList: ObservationBase[], state: PolicyState): Float32Array {
-    // Compute every term first, then size the buffer from the actual arrays, so
-    // an observation whose output length changes between frames can never
-    // overflow `set()` (a term's `size` getter may lag its output — e.g. it is
-    // cached from the previous frame). The guard keeps a clear error for a
-    // genuine size mismatch.
-    const arrays = obsList.map((obs) => {
-      const value = obs.compute(state);
-      const array = value instanceof Float32Array ? value : Float32Array.from(value);
-      if (array.length !== obs.size) {
-        throw new Error(
-          `Observation size mismatch: expected ${obs.size}, got ${array.length}`
-        );
-      }
-      return array;
-    });
+  private async buildFrame(
+    obsList: ObservationBase[],
+    state: PolicyState
+  ): Promise<Float32Array> {
+    // Sized from the actual arrays, since a term's `size` getter may lag its output, and
+    // kicked off as a batch so the group's graphs do not serialize.
+    const arrays = await Promise.all(
+      obsList.map(async (obs) => {
+        const value = await obs.compute(state);
+        const array = value instanceof Float32Array ? value : Float32Array.from(value);
+        if (array.length !== obs.size) {
+          throw new Error(
+            `Observation size mismatch: expected ${obs.size}, got ${array.length}`
+          );
+        }
+        return array;
+      })
+    );
     const total = arrays.reduce((sum, array) => sum + array.length, 0);
     const output = new Float32Array(total);
     let offset = 0;

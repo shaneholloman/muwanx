@@ -1,7 +1,22 @@
 import type * as THREE from 'three';
 import type { MainModule, MjData, MjModel } from 'mujoco';
+import type { SeededRng } from '../rng';
+import type { OnnxSessionCache, SlotReader } from '../onnx/session';
 
 export type CommandType = 'slider' | 'button' | 'checkbox';
+
+/**
+ * A companion slider rescaling another's drag range, as mjlab's play GUI pairs each
+ * velocity axis with a "Max <label>". Not simulation state: it sends nothing to the engine.
+ */
+export interface SliderRangeControl {
+  min: number;
+  max: number;
+  step: number;
+  default: number;
+  /** Label for the companion slider; defaults to `Max <label>`. */
+  label?: string;
+}
 
 export interface SliderCommandConfig {
   type: 'slider';
@@ -12,6 +27,8 @@ export interface SliderCommandConfig {
   step: number;
   default: number;
   enabled_when?: string;
+  /** Renders a companion range slider and clamps this one to `[-value, value]`. */
+  adjustable_range?: SliderRangeControl;
 }
 
 export interface ButtonCommandConfig {
@@ -51,7 +68,13 @@ export function getCommandInputId(groupName: string, inputName: string): string 
   return `${groupName}:${inputName}`;
 }
 
-export type CommandEventType = 'change' | 'reset' | 'button' | 'group_registered' | 'clear';
+export type CommandEventType =
+  | 'change'
+  | 'reset'
+  | 'button'
+  | 'group_registered'
+  | 'clear'
+  | 'debug_vis';
 
 export interface CommandEvent {
   type: CommandEventType;
@@ -70,15 +93,26 @@ export interface CommandTermContext {
   bodies?: Record<number, THREE.Group> | null;
   mujocoRoot?: THREE.Group | null;
   requestReset?: () => void;
+  /** The seeded PRNG and loaded graphs `OnnxCommand` terms need; absent if none. */
+  rng?: SeededRng;
+  onnxSessions?: OnnxSessionCache;
+  /** Reads a command's declared dynamic runtime input slots. */
+  readOnnxSlot?: SlotReader;
 }
 
 export interface CommandTerm {
   getCommand(): Float32Array;
   getUiConfig?(): CommandUiConfig | null;
-  reset?(): void;
+  /** Episode reset — the resample for a traced term, hence async and awaited. */
+  reset?(): void | Promise<void>;
   update?(dt: number): void;
   updateDebugVisuals?(): void;
+  /** mjlab's `_debug_vis_enabled`; `null` when the term draws nothing. */
+  debugVisEnabled?(): boolean | null;
+  setDebugVisEnabled?(enabled: boolean): void;
   setValue?(inputName: string, value: number): number | void;
+  /** Current value of one UI input, for the panel's mirror of it. */
+  getUiValue?(inputName: string): number | undefined;
   triggerButton?(inputName: string): void;
   dispose?(): void;
 }

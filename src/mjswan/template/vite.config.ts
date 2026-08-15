@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
 import path from 'path';
 import fs from 'fs';
+import { minify } from './vite.shared';
 
 // Extract version from Python package (source of truth)
 function getVersionFromPython(): string {
@@ -22,7 +23,6 @@ function getVersionFromPython(): string {
 }
 
 const isMt = process.env.MJSWAN_MT === '1';
-const isDebug = process.env.MJSWAN_DEBUG === '1';
 const coiSwPath = path.resolve(__dirname, '_mt/coi-serviceworker.js');
 
 function mtPlugin(enabled: boolean): Plugin | null {
@@ -90,9 +90,6 @@ function gtmPlugin(gtmId: string | undefined) {
 
 export default defineConfig({
   plugins: [react(), vanillaExtractPlugin(), mtPlugin(isMt), gtmPlugin(process.env.MJSWAN_GTM_ID)],
-  esbuild: {
-    drop: isDebug ? [] : ['console', 'debugger'],
-  },
   base: process.env.MJSWAN_BASE_PATH || '/',
   define: {
     __APP_VERSION__: JSON.stringify(getVersionFromPython()),
@@ -122,6 +119,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 11000,
     rollupOptions: {
       input: path.resolve(__dirname, 'index.html'),
+      output: { minify },
       onwarn(warning, warn) {
         // mujoco.js is an Emscripten-generated file that imports Node.js built-ins
         // (module, worker_threads) behind runtime environment checks that are never

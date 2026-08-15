@@ -42,10 +42,6 @@ DATA_EXTENSIONS: frozenset[str] = frozenset(
     {".json", ".mjz", ".onnx", ".npz", ".ply", ".spz"}
 )
 
-#: App-shell files that happen to share a data extension but are not simulation
-#: data (the PWA manifest references the engine's own icons).
-_EXCLUDED_BASENAMES: frozenset[str] = frozenset({"manifest.json"})
-
 MAX_FILE_BYTES: int = 50 * 1024 * 1024
 MAX_TOTAL_BYTES: int = 200 * 1024 * 1024
 MAX_FILES: int = 64
@@ -282,8 +278,6 @@ def plan_publish(dist_dir: Path) -> PublishPlan:
         if path == config_path:
             continue  # already added at the upload root
         if path.suffix.lower() not in DATA_EXTENSIONS:
-            continue
-        if path.name in _EXCLUDED_BASENAMES:
             continue
         rel = path.relative_to(dist_dir).as_posix()
         _check_safe_path(rel)

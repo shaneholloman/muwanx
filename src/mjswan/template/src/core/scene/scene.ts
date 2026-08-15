@@ -4,6 +4,25 @@ import { createLights } from './lights';
 import { createTexture, createSkyboxTexture } from './textures';
 import { createTendonMeshes } from './tendons';
 
+
+function reflectanceParams(
+  mjModel: MjModel,
+  matId: number
+): Pick<THREE.MeshPhysicalMaterialParameters, 'specularIntensity' | 'reflectivity' | 'roughness' | 'metalness'> {
+  const specular = matId !== -1 ? (mjModel.mat_specular?.[matId] ?? 0.5) : 0.5;
+  const shininess = matId !== -1 ? (mjModel.mat_shininess?.[matId] ?? 0.5) : 0.5;
+  const reflectance = matId !== -1 ? (mjModel.mat_reflectance?.[matId] ?? 0) : 0;
+  const metallic = matId !== -1 ? (mjModel.mat_metallic?.[matId] ?? -1) : -1;
+  const roughnessAttr = matId !== -1 ? (mjModel.mat_roughness?.[matId] ?? -1) : -1;
+
+  return {
+    specularIntensity: specular,
+    reflectivity: reflectance,
+    roughness: roughnessAttr >= 0 ? roughnessAttr : 1.0 - shininess,
+    metalness: metallic >= 0 ? metallic : specular,
+  };
+}
+
 function isInlineXML(input: string): boolean {
   if (!input) {
     return false;
@@ -439,18 +458,7 @@ export async function loadSceneFromURL(
         color: new THREE.Color(color[0], color[1], color[2]),
         transparent: color[3] < 1.0,
         opacity: color[3],
-        specularIntensity:
-          mjModel.geom_matid[g] !== -1 ? mjModel.mat_specular?.[mjModel.geom_matid[g]] : undefined,
-        reflectivity:
-          mjModel.geom_matid[g] !== -1
-            ? mjModel.mat_reflectance?.[mjModel.geom_matid[g]]
-            : undefined,
-        roughness:
-          mjModel.geom_matid[g] !== -1 && mjModel.mat_shininess
-            ? 1.0 - mjModel.mat_shininess[mjModel.geom_matid[g]]
-            : undefined,
-        metalness:
-          mjModel.geom_matid[g] !== -1 ? mjModel.mat_specular?.[mjModel.geom_matid[g]] : 0.1,
+        ...reflectanceParams(mjModel, mjModel.geom_matid[g]),
       });
 
     if (texture) {
@@ -482,22 +490,7 @@ export async function loadSceneFromURL(
                 color: new THREE.Color(color[0], color[1], color[2]),
                 transparent: color[3] < 1.0,
                 opacity: color[3],
-                specularIntensity:
-                  mjModel.geom_matid[g] !== -1
-                    ? mjModel.mat_specular?.[mjModel.geom_matid[g]]
-                    : undefined,
-                reflectivity:
-                  mjModel.geom_matid[g] !== -1
-                    ? mjModel.mat_reflectance?.[mjModel.geom_matid[g]]
-                    : undefined,
-                roughness:
-                  mjModel.geom_matid[g] !== -1 && mjModel.mat_shininess
-                    ? 1.0 - mjModel.mat_shininess[mjModel.geom_matid[g]]
-                    : undefined,
-                metalness:
-                  mjModel.geom_matid[g] !== -1
-                    ? mjModel.mat_specular?.[mjModel.geom_matid[g]]
-                    : 0.1,
+                ...reflectanceParams(mjModel, mjModel.geom_matid[g]),
                 map: faceTex,
               });
               materials.push(m);
@@ -535,13 +528,15 @@ export async function loadSceneFromURL(
     bodies[b].userData.ignoreDragForce = ignoreDragForce;
     bodies[b].add(mesh);
     getPosition(mjModel.geom_pos, g, mesh.position);
-    if (type !== mujoco.mjtGeom.mjGEOM_PLANE.value) {
+    const isInfinitePlane =
+      type === mujoco.mjtGeom.mjGEOM_PLANE.value && (size[0] === 0 || size[1] === 0);
+    if (!isInfinitePlane) {
       getQuaternion(mjModel.geom_quat, g, mesh.quaternion);
     }
     if (type === mujoco.mjtGeom.mjGEOM_ELLIPSOID.value) {
       mesh.scale.set(size[0], size[2], size[1]);
     }
-    if (type === mujoco.mjtGeom.mjGEOM_PLANE.value && (size[0] === 0 || size[1] === 0)) {
+    if (isInfinitePlane) {
       const baseMat = (
         Array.isArray(currentMaterial) ? currentMaterial[0] : currentMaterial
       ) as THREE.MeshPhysicalMaterial;
@@ -573,6 +568,18 @@ export async function loadSceneFromURL(
         shaderMat.uniforms.uProjInverse.value.copy(camera.projectionMatrixInverse);
         shaderMat.uniforms.uCamWorldMatrix.value.copy(camera.matrixWorld);
       };
+    } else if (type === mujoco.mjtGeom.mjGEOM_PLANE.value) {
+      const frontMat = currentMaterial as THREE.MeshPhysicalMaterial;
+      const backMat = frontMat.clone();
+      backMat.side = THREE.BackSide;
+      backMat.transparent = true;
+      backMat.opacity = frontMat.opacity * 0.35;
+      backMat.depthWrite = false;
+      const backMesh = new THREE.Mesh(geometry, backMat);
+      backMesh.position.copy(mesh.position);
+      backMesh.quaternion.copy(mesh.quaternion);
+      backMesh.raycast = () => {};
+      bodies[b].add(backMesh);
     }
   }
 

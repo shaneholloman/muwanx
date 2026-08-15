@@ -47,9 +47,12 @@ class PolicyConfig:
     observations: dict[str, ObservationGroupCfg] | None = None
     """Observation group configurations (mjlab-compatible).
 
-    Keys are group names (e.g. ``"policy"``, ``"critic"``).  Values are
-    ``ObservationGroupCfg`` instances whose terms are serialized into
-    ``observations`` in the policy JSON at build time.
+    Keys are **ONNX input names**, not free-form labels: the runtime feeds each
+    group's vector as the input of that name, and ``in_keys`` defaults to
+    ``["policy"]``. mjlab calls the same group ``"actor"``, so
+    :func:`mjswan.adapters.adapt_observations` renames a single group to
+    ``"policy"`` on the way in. Values are ``ObservationGroupCfg`` instances whose
+    terms are serialized into ``observations`` in the policy JSON at build time.
     """
 
     actions: Mapping[str, ActionTermCfg] | None = None
@@ -97,6 +100,18 @@ class PolicyConfig:
 
     Used by the browser runtime to mirror mjlab's joint-position action path:
     the final target written to actuators is ``processed_action - encoder_bias``.
+    """
+
+    clip_actions: float | None = None
+    """Symmetric bound the raw policy output is clamped to, or ``None`` for unbounded.
+
+    rsl-rl's ``RslRlVecEnvWrapper.step`` clamps to ``[-clip_actions, +clip_actions]``
+    *before* ``env.step``, so the action manager — and therefore any ``last_action``
+    observation — sees the clamped vector. The browser mirrors that placement: the clamp
+    lands on the ONNX output before the action terms or the ``prev_action`` slot read it.
+
+    Not ``ActionTermCfg.clip``, which bounds ``raw * scale + offset`` per target and
+    lives on the action term.
     """
 
     initial_qpos: list[float] | None = None

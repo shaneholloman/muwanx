@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import io
 import re
 import tempfile
 from dataclasses import asdict, dataclass
@@ -81,18 +83,6 @@ def resolve_wandb_artifact_path(
     return wandb_artifact_path, "motions", "motion.npz"
 
 
-def _extract_required_capacity(message: str, name: str) -> int | None:
-    match = re.search(rf"{name} overflow \({name} must be >= (\d+)\)", message)
-    if match is None:
-        return None
-    return int(match.group(1))
-
-
-def _next_capacity(required: int) -> int:
-    slack = max(32, required // 8)
-    return required + slack
-
-
 def create_pt_onnx_export_context(
     task_id: str, *, env_cfg: Any | None = None
 ) -> PtOnnxExportContext:
@@ -105,9 +95,10 @@ def create_pt_onnx_export_context(
     """
     try:
         import mjlab.tasks  # noqa: F401 — populates the task registry
-        from mjlab.envs import ManagerBasedRlEnv
         from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
         from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
+
+        from .trace_env import build_mjlab_env
     except ImportError as e:
         raise ImportError(
             "mjlab and torch are required for only_latest=False. "
@@ -122,38 +113,28 @@ def create_pt_onnx_export_context(
     env_cfg.scene.num_envs = 1
     agent_cfg = load_rl_cfg(task_id)
 
-    while True:
-        try:
-            env = ManagerBasedRlEnv(cfg=env_cfg, device="cpu")
-            break
-        except ValueError as exc:
-            message = str(exc)
-            required_nconmax = _extract_required_capacity(message, "nconmax")
-            required_njmax = _extract_required_capacity(message, "njmax")
-            if required_nconmax is None and required_njmax is None:
-                raise
-            if required_nconmax is not None:
-                env_cfg.sim.nconmax = _next_capacity(required_nconmax)
-            if required_njmax is not None:
-                env_cfg.sim.njmax = _next_capacity(required_njmax)
+    env = build_mjlab_env(env_cfg)
 
     wrapped_env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
+    # rsl-rl prints 29 lines from this constructor with no flag to turn them off;
+    # buffered so a failure can still show them.
+    chatter = io.StringIO()
     try:
         runner_cls = load_runner_cls(task_id) or MjlabOnPolicyRunner
-        runner = runner_cls(wrapped_env, asdict(agent_cfg), device="cpu")
+        with contextlib.redirect_stdout(chatter):
+            runner = runner_cls(wrapped_env, asdict(agent_cfg), device="cpu")
     except Exception:
+        print(chatter.getvalue(), end="")
         wrapped_env.close()
         raise
 
-    # Extract core policy metadata from the action manager.
+    # Joint names, default positions, and encoder bias from the action manager.
     joint_names: list[str] = []
     default_joint_pos: list[float] = []
     encoder_bias: list[float] = []
 
     inner_env = wrapped_env.env if hasattr(wrapped_env, "env") else wrapped_env
-
-    # Joint names, default positions, and encoder bias from the action manager.
     action_mgr = getattr(inner_env, "action_manager", None)
     if action_mgr is not None:
         for term_name in action_mgr.active_terms:
@@ -291,6 +272,35 @@ def fetch_motion_npz_from_wandb_artifact(
         return motion_name, motion_path.read_bytes()
 
 
+def align_obs_normalizer(runner: Any, checkpoint: dict) -> None:
+    """Match the runner's policy normalizer to the checkpoint about to be loaded.
+
+    The runner is built from the task's *current* rl config, but a checkpoint carries
+    whichever normalizer its run trained with. A mismatch either fails the strict load
+    (config normalizes, checkpoint does not) or silently drops the trained statistics,
+    and an untrained ``EmpiricalNormalization`` is not the identity — it still divides
+    by ``std + eps``.
+    """
+    import torch
+    from rsl_rl.modules import EmpiricalNormalization
+
+    keys = list(checkpoint.get("actor_state_dict", {})) + [
+        key.removeprefix("actor_") for key in checkpoint.get("model_state_dict", {})
+    ]
+    normalized = any(key.startswith("obs_normalizer.") for key in keys)
+
+    policy = runner.alg.get_policy()
+    if normalized == policy.obs_normalization:
+        return
+    policy.obs_normalization = normalized
+    device = next(policy.parameters()).device
+    policy.obs_normalizer = (
+        EmpiricalNormalization(policy.obs_dim).to(device)
+        if normalized
+        else torch.nn.Identity()
+    )
+
+
 def fetch_pt_onnx_from_wandb_run(
     run_path: str,
     task_id: str,
@@ -314,6 +324,7 @@ def fetch_pt_onnx_from_wandb_run(
         ImportError: If ``mjlab`` or ``torch`` are not installed.
         ValueError: If no ``model_*.pt`` files are found in the run.
     """
+    import torch
     import wandb
 
     api = wandb.Api()
@@ -336,6 +347,10 @@ def fetch_pt_onnx_from_wandb_run(
             name = pt_path.stem  # e.g. "model_0", "model_50"
             onnx_filename = f"{name}.onnx"
 
+            align_obs_normalizer(
+                export_context.runner,
+                torch.load(str(pt_path), map_location="cpu", weights_only=False),
+            )
             export_context.runner.load(
                 str(pt_path),
                 load_cfg={"actor": True},
@@ -351,6 +366,7 @@ def fetch_pt_onnx_from_wandb_run(
 
 
 __all__ = [
+    "align_obs_normalizer",
     "fetch_motion_npz_from_wandb_artifact",
     "fetch_motion_npz_from_wandb_run",
     "fetch_onnx_from_wandb_run",

@@ -1,6 +1,14 @@
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
 import type { TerminationConstructor } from './terminations';
-import { DslTermination } from './DslTermination';
+import {
+  FusedLane,
+  FusedTermination,
+  isFusedTerminationConfig,
+  type FusedTerminationConfig,
+} from './FusedTermination';
+import { OnnxTermination, type OnnxTerminationConfig } from './OnnxTermination';
+import { TimeOutTermination, type TimeOutTerminationConfig } from './TimeOutTermination';
+import type { OnnxSessionCache, SlotReader } from '../onnx/session';
 import type { PolicyState, TerminationConfigEntry } from '../policy/types';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 
@@ -11,39 +19,62 @@ export type TerminationResult = {
   reasons: string[];
 };
 
-function isDslEntry(
+/** Absent for a policy whose terminations are all native or legacy. */
+export type TerminationManagerDeps = {
+  onnxSessions?: OnnxSessionCache;
+  readOnnxSlot?: SlotReader;
+};
+
+/** Whether an entry names a traced-ONNX termination. */
+function isOnnxEntry(entry: TerminationConfigEntry): entry is OnnxTerminationConfig {
+  return typeof (entry as { onnx?: unknown }).onnx === 'string';
+}
+
+/** Matched on `native` being present: its text is a description, not a wire enum. */
+function isNativeTimeOutEntry(
   entry: TerminationConfigEntry,
-): entry is Extract<TerminationConfigEntry, { kind: 'termination' }> {
-  return 'kind' in entry && entry.kind === 'termination';
+): entry is TimeOutTerminationConfig {
+  return typeof (entry as { native?: unknown }).native === 'string';
 }
 
 export class TerminationManager {
   private terms: { name: string; term: TerminationBase; isTimeOut: boolean }[] = [];
+  /** Episode time, accumulated from the control `dt` the caller passes. */
+  private elapsedS = 0;
+  /** Fused graphs, driven once per evaluation before their lanes are read. */
+  private fused: FusedTermination[] = [];
 
   constructor(
     config: Record<string, TerminationConfigEntry>,
     registry: Record<string, TerminationConstructor>,
     runner: PolicyRunner,
+    deps: TerminationManagerDeps = {},
   ) {
     for (const [name, entry] of Object.entries(config)) {
-      if (isDslEntry(entry)) {
-        const termConfig = {
-          name,
-          params: entry.params,
-          time_out: entry.time_out,
-          graph: { kind: 'termination' as const, nodes: entry.nodes, output: entry.output },
-        };
+      if (isFusedTerminationConfig(entry)) {
+        this.addFusedGroup(entry, runner, deps);
+        continue;
+      }
+      if (isOnnxEntry(entry)) {
+        const term = this.buildOnnxTermination(name, entry, runner, deps);
+        if (term) {
+          this.terms.push({ name, term, isTimeOut: entry.time_out ?? false });
+        }
+        continue;
+      }
+      if (isNativeTimeOutEntry(entry)) {
         this.terms.push({
           name,
-          term: new DslTermination(runner, termConfig),
+          term: new TimeOutTermination(runner, { ...entry, name }, () => this.elapsedS),
           isTimeOut: entry.time_out ?? false,
         });
         continue;
       }
       const TermClass = registry[entry.name];
       if (!TermClass) {
-        console.warn(`[TerminationManager] Unknown termination type: ${entry.name}`);
-        continue;
+        // Throws like the observation and command registries: continuing would run the
+        // episode without a reset condition it is configured to have.
+        throw new Error(`Unknown termination type: ${entry.name}`);
       }
       const termConfig: TerminationConfig = {
         name: entry.name,
@@ -58,7 +89,62 @@ export class TerminationManager {
     }
   }
 
-  evaluate(state: PolicyState): TerminationResult {
+  /**
+   * Expand a fused graph into one entry per lane, so the logic below need not know about
+   * fusion. Skips the group on missing deps: lost reset conditions beat a dead scene.
+   */
+  private addFusedGroup(
+    entry: FusedTerminationConfig,
+    runner: PolicyRunner,
+    deps: TerminationManagerDeps,
+  ): void {
+    const session = deps.onnxSessions?.get(entry.fused);
+    const readSlot = deps.readOnnxSlot;
+    if (!session || !readSlot) {
+      console.warn(
+        `[TerminationManager] the fused graph "${entry.fused}" needs a session and ` +
+          'a slot reader; skipping every term it covers.',
+      );
+      return;
+    }
+    const group = new FusedTermination(entry, { session, readSlot });
+    this.fused.push(group);
+    entry.lanes.forEach((lane, index) => {
+      this.terms.push({
+        name: lane.name,
+        term: new FusedLane(runner, { name: lane.name }, group, index),
+        isTimeOut: lane.time_out ?? false,
+      });
+    });
+  }
+
+  /**
+   * Build a traced-ONNX termination, or warn and skip: unlike an observation, dropping one
+   * loses a reset condition rather than reshaping the policy's input vector.
+   */
+  private buildOnnxTermination(
+    name: string,
+    entry: OnnxTerminationConfig,
+    runner: PolicyRunner,
+    deps: TerminationManagerDeps,
+  ): OnnxTermination | null {
+    const session = deps.onnxSessions?.get(entry.onnx);
+    const readSlot = deps.readOnnxSlot;
+    if (!session || !readSlot) {
+      console.warn(
+        `[TerminationManager] "${name}" needs the ONNX session "${entry.onnx}" and a ` +
+          'slot reader; skipping.',
+      );
+      return null;
+    }
+    return new OnnxTermination(runner, { ...entry, name }, { session, readSlot });
+  }
+
+  /** OR-reduce every term to one verdict, `time_out` split out; `dt` feeds its counter. */
+  evaluate(state: PolicyState, dt = 0): TerminationResult {
+    this.elapsedS += dt;
+    // Drive each fused graph once, before its lanes are read below.
+    for (const group of this.fused) group.kick();
     let terminated = false;
     let truncated = false;
     const reasons: string[] = [];
@@ -83,6 +169,8 @@ export class TerminationManager {
   }
 
   reset(): void {
+    this.elapsedS = 0;
+    for (const group of this.fused) group.reset();
     for (const { term } of this.terms) {
       term.reset?.();
     }

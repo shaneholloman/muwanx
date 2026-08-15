@@ -1,10 +1,7 @@
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
 import { CustomTerminations } from './custom_terminations';
 
-// All built-in terminations are declarative composition graphs now (evaluated
-// by DslTermination via the engine primitive registry; see ADR 0003), so there
-// are no named built-in termination classes.  This registry only carries
-// ts_src custom terminations (resolved by name via the legacy path).
+// Built-ins are traced graphs or the native `time_out`, so this holds only `ts_src` terms.
 
 export type TerminationConstructor = new (
   runner: import('../policy/PolicyRunner').PolicyRunner,
