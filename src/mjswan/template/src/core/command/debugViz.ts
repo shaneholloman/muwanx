@@ -125,7 +125,7 @@ export class CommandDebugVisuals {
   constructor(
     termName: string,
     private readonly primitives: readonly VizPrimitive[],
-    private readonly scene: THREE.Scene,
+    private readonly root: THREE.Object3D,
   ) {
     this.objects = primitives.map((primitive, index) => {
       const object =
@@ -137,7 +137,7 @@ export class CommandDebugVisuals {
             );
       object.name = `mjswan-command-${termName}-viz-${index}`;
       object.visible = false;
-      scene.add(object);
+      root.add(object);
       return object;
     });
   }
@@ -187,7 +187,7 @@ export class CommandDebugVisuals {
 
   dispose(): void {
     for (const object of this.objects) {
-      this.scene.remove(object);
+      this.root.remove(object);
       object.traverse(child => {
         if (!(child instanceof THREE.Mesh)) return;
         child.geometry.dispose();

@@ -594,6 +594,21 @@ describe('OnnxCommand: debug-vis marker (generic — replaces LiftingCommand.ts)
     ).toBeNull();
   });
 
+  it('attaches under the model root, not the bare scene', () => {
+    // The root carries whatever transform the scene applies to the model; a marker
+    // beside it would drift away from what it marks.
+    const scene = new THREE.Scene();
+    const mujocoRoot = new THREE.Group();
+    scene.add(mujocoRoot);
+    const context = { scene, mujocoRoot } as unknown as import('../types').CommandTermContext;
+    new OnnxCommand('lift_height', LIFT_VIZ_CFG, context, {
+      session: new FakeSession(() => ({})),
+      rng: new SeededRng(1),
+    });
+    expect(mujocoRoot.children.length).toBe(1);
+    expect(scene.children.length).toBe(1); // the root itself, nothing beside it
+  });
+
   it('does not create a marker without a viz descriptor', () => {
     const context = fakeContext();
     new OnnxCommand('twist', VELOCITY_CFG, context, {

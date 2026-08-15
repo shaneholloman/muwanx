@@ -9,6 +9,7 @@ sides are covered by tests, so there is no third restatement of it here.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -49,8 +50,33 @@ def command_config(
     if ui is not None:
         cfg["ui"] = ui
     if viz is not None:
+        _check_viz_state_fields(export, viz)
         cfg["viz"] = viz
     return cfg
+
+
+def _check_viz_state_fields(export: CommandExport, viz: list[dict[str, Any]]) -> None:
+    """Warn for a primitive reading a state field the trace does not have.
+
+    The browser hides a primitive whose source is missing, so a stale field name is a
+    silently blank drawing. A warning, not an error: the drawing is presentation, and a
+    term that can still be flown is worth shipping.
+    """
+    declared = {sf["name"] for sf in export.state_fields}
+    missing = {
+        vec["state"]
+        for primitive in viz
+        for vec in (primitive.get("origin"), primitive.get("vector"))
+        if isinstance(vec, dict) and vec.get("state") not in (None, *declared)
+    }
+    if missing:
+        warnings.warn(
+            f"Command term '{export.name}' has debug-vis primitives reading "
+            f"{sorted(missing)}, which its trace does not declare "
+            f"(state fields: {sorted(declared)}); the browser draws nothing for them.",
+            category=RuntimeWarning,
+            stacklevel=3,
+        )
 
 
 def write_command_artifact(

@@ -82,6 +82,22 @@ def test_command_config_shape():
         assert len(sf["init"]) == expected
 
 
+def test_viz_reading_an_undeclared_state_field_warns():
+    """A stale field name draws nothing, and the browser cannot tell you why."""
+    export = _make_export()
+    viz = [{"shape": "sphere", "origin": {"state": "vel_command"}}]
+    with pytest.warns(RuntimeWarning, match="vel_command"):
+        command_config(export, onnx_ref="command/twist.onnx", viz=viz)
+
+
+def test_viz_on_a_declared_state_field_is_quiet():
+    export = _make_export()
+    viz = [{"shape": "sphere", "origin": {"state": "vel_command_b"}}]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        command_config(export, onnx_ref="command/twist.onnx", viz=viz)
+
+
 def test_command_config_round_trips_through_json():
     export = _make_export()
     cfg = command_config(export, onnx_ref="command/twist.onnx")

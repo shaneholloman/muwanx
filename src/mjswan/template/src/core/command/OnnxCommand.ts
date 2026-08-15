@@ -102,7 +102,9 @@ export class OnnxCommand implements CommandTerm {
     }
     this.visuals =
       config.viz?.length && context
-        ? new CommandDebugVisuals(termName, config.viz, context.scene)
+        ? // Under the model root, as `TrackingCommand`'s ghost is: a marker in world
+          // coordinates has to move with whatever transform the root carries.
+          new CommandDebugVisuals(termName, config.viz, context.mujocoRoot ?? context.scene)
         : null;
   }
 
