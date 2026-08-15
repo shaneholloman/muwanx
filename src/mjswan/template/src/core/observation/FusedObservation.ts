@@ -15,8 +15,8 @@
 import { ObservationBase, type ObservationConfig } from './ObservationBase';
 import { assertCommandTermBound, sliceStoredActions } from './NativeObservation';
 import { conformToSize } from './pipeline';
-import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
-import { slotDims, slotInputName } from '../onnx/session';
+import type { OnnxInputSlot, OnnxSession, SlotReader } from '../onnx/session';
+import { buildFeeds } from '../onnx/session';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 import type { PolicyState } from '../policy/types';
 
@@ -84,18 +84,14 @@ export class FusedObservation extends ObservationBase<FusedObservationConfig> {
   }
 
   async compute(_state: PolicyState): Promise<Float32Array> {
-    const feeds: Record<string, OnnxTensorLike> = {};
-    for (const slot of this.config.input_slots ?? []) {
-      const value = this.deps.readSlot(slot);
-      if (!value) {
-        // Serve the last good vector rather than feeding the policy zeros.
-        console.warn(
-          `[FusedObservation] "${this.config.name}" could not read slot ` +
-            `${slotInputName(slot)}; reusing the previous vector.`,
-        );
-        return this.last;
-      }
-      feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
+    const { feeds, missing } = buildFeeds(this.config.input_slots, this.deps.readSlot);
+    if (missing) {
+      // Serve the last good vector rather than feeding the policy zeros.
+      console.warn(
+        `[FusedObservation] "${this.config.name}" could not read slot ${missing}; ` +
+          'reusing the previous vector.',
+      );
+      return this.last;
     }
     for (const native of this.config.native_inputs ?? []) {
       const value = this.readNative(native);

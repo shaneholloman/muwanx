@@ -49,6 +49,13 @@ def _is_dynamic_field(field_name: str) -> bool:
 #   (_COMMAND_NS, "cmd.attr")        -> env.command_manager.get_term(cmd).<attr>
 SlotKey = tuple[str, str]
 
+# A tagged key identifies one value an event/command body reads off ``env``. Wider than
+# a SlotKey because those bodies also read scene-level tensors and control-flow scalars:
+#   ("data", entity, field)  -> entity.data.<field>   (tensor; dynamic or const)
+#   ("scene", attr)          -> env.scene.<attr>      (scene-level constant, e.g. env_origins)
+#   ("attr", entity, attr)   -> entity.<attr>         (control-flow scalar, e.g. is_fixed_base)
+TaggedKey = tuple
+
 _SENSOR_NS = "__sensor__"
 _COMMAND_NS = "__command__"
 
@@ -323,6 +330,107 @@ class _ReplayEnv:
         raise AttributeError(name)
 
 
+# --- Shared trace mechanics: constants as buffers, and the export call itself. ---
+
+
+def _register_consts(
+    module: nn.Module, constants: dict[Any, torch.Tensor], prefix: str = "_const"
+) -> dict[Any, str]:
+    """Register each constant as a buffer, returning ``slot key -> buffer name``.
+
+    Buffers rather than plain attributes so ``torch.onnx.export`` folds them into the
+    graph instead of tracing them as free-floating tensors.
+    """
+    names: dict[Any, str] = {}
+    for i, (key, value) in enumerate(constants.items()):
+        buffer_name = f"{prefix}_{i}"
+        module.register_buffer(buffer_name, value.detach().clone())
+        names[key] = buffer_name
+    return names
+
+
+def _const_values(module: nn.Module, names: dict[Any, str]) -> dict[Any, torch.Tensor]:
+    """The registered constants, keyed by the slot each one serves."""
+    return {key: getattr(module, name) for key, name in names.items()}
+
+
+def _export_onnx(
+    module: nn.Module,
+    example: tuple[torch.Tensor, ...],
+    *,
+    input_names: list[str],
+    output_names: list[str],
+    batch_axis: list[str],
+    opset: int,
+) -> bytes:
+    """Export ``module`` to ONNX bytes with ``batch_axis`` names given a dynamic axis 0.
+
+    ``dynamo=False``: the TorchScript tracer records the concrete tensor ops we want,
+    while torch.export traces Python control flow and trips on the proxies.
+    """
+    buffer = io.BytesIO()
+    with torch.no_grad():
+        torch.onnx.export(
+            module,
+            example,
+            buffer,
+            input_names=input_names,
+            output_names=output_names,
+            dynamic_axes={n: {0: "batch"} for n in batch_axis},
+            opset_version=opset,
+            dynamo=False,
+        )
+    return buffer.getvalue()
+
+
+def _classify_slots(
+    log: list[tuple[SlotKey, Any]],
+    dynamic: dict[SlotKey, torch.Tensor],
+    constants: dict[SlotKey, torch.Tensor],
+) -> bool:
+    """Split a recorded read log into graph inputs and baked constants.
+
+    Sensor and command-state reads are live state by definition; an entity data field is
+    dynamic unless it is a model-derived constant. Returns whether *this* log
+    contributed a dynamic slot, which a group's caller needs per term.
+    """
+    saw_dynamic = False
+    for key, value in log:
+        if not isinstance(value, torch.Tensor):
+            continue  # non-tensor attribute access, not a graph slot
+        namespace, field_name = key
+        if namespace in (_SENSOR_NS, _COMMAND_NS) or _is_dynamic_field(field_name):
+            dynamic.setdefault(key, value)
+            saw_dynamic = True
+        else:
+            constants.setdefault(key, value)
+    return saw_dynamic
+
+
+def _classify_tagged(
+    log: list[tuple[TaggedKey, Any]],
+) -> tuple[
+    dict[SlotKey, torch.Tensor], dict[TaggedKey, torch.Tensor], dict[TaggedKey, Any]
+]:
+    """Split an event/command read log into dynamic inputs, tensor and scalar constants.
+
+    Only a time-varying ``entity.data`` field becomes a graph input; scene tensors and
+    control-flow scalars are baked.
+    """
+    dynamic: dict[SlotKey, torch.Tensor] = {}
+    tensor_consts: dict[TaggedKey, torch.Tensor] = {}
+    scalar_consts: dict[TaggedKey, Any] = {}
+    for key, value in log:
+        is_tensor = isinstance(value, torch.Tensor)
+        if key[0] == "data" and _is_dynamic_field(key[2]) and is_tensor:
+            dynamic.setdefault((key[1], key[2]), value)
+        elif is_tensor:
+            tensor_consts.setdefault(key, value)
+        else:
+            scalar_consts.setdefault(key, value)
+    return dynamic, tensor_consts, scalar_consts
+
+
 class _TermModule(nn.Module):
     """Wraps ``func(env, **params)`` so ``forward`` takes only dynamic tensors.
 
@@ -349,16 +457,11 @@ class _TermModule(nn.Module):
         self._sensors = sensors or {}
         self._commands = commands or {}
         self._real_env = real_env
-        self._const_buffers: dict[SlotKey, str] = {}
-        for i, (key, value) in enumerate(constants.items()):
-            buffer_name = f"_const_{i}"
-            self.register_buffer(buffer_name, value.detach().clone())
-            self._const_buffers[key] = buffer_name
+        self._const_buffers = _register_consts(self, constants)
 
     def forward(self, *dynamic: torch.Tensor) -> torch.Tensor:
         slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
-        for key, buffer_name in self._const_buffers.items():
-            slots[key] = getattr(self, buffer_name)
+        slots.update(_const_values(self, self._const_buffers))
         env = _ReplayEnv(slots, self._sensors, self._commands, real_env=self._real_env)
         return self._func(env, **self._params)
 
@@ -422,10 +525,6 @@ class TermExport:
     constant_slots: list[SlotKey] = field(default_factory=list)
     input_shapes: list[list[int]] = field(default_factory=list)
     """Traced shape of each input slot, parallel to ``input_slots`` (see :func:`slots_json`)."""
-
-    @property
-    def is_dynamic_only(self) -> bool:
-        return len(self.input_slots) > 0
 
 
 def _slot_input_name(key: SlotKey) -> str:
@@ -550,17 +649,7 @@ def trace_term(
     # 2. Classify accessed slots into dynamic inputs vs baked constants.
     dynamic: dict[SlotKey, torch.Tensor] = {}
     constants: dict[SlotKey, torch.Tensor] = {}
-    for key, value in recorder._log:  # noqa: SLF001 — internal proxy
-        if not isinstance(value, torch.Tensor):
-            continue  # non-tensor attribute access, not a graph slot
-        namespace, field_name = key
-        # Sensor and command-state reads are live state by definition; entity data
-        # fields are dynamic unless they are model-derived constants.
-        is_dynamic = namespace in (_SENSOR_NS, _COMMAND_NS) or _is_dynamic_field(
-            field_name
-        )
-        bucket = dynamic if is_dynamic else constants
-        bucket.setdefault(key, value)
+    _classify_slots(recorder._log, dynamic, constants)  # noqa: SLF001 — internal proxy
 
     if not dynamic:
         if recorder._log:  # noqa: SLF001 — internal proxy
@@ -590,24 +679,18 @@ def trace_term(
         real_env=env,
     ).eval()
     output_name = "value"
-    buffer = io.BytesIO()
-    # ``dynamo=False``: the TorchScript tracer records the concrete tensor ops we
-    # want, while torch.export traces Python control flow and trips on the proxies.
-    with torch.no_grad():
-        torch.onnx.export(
-            module,
-            example_inputs,
-            buffer,
-            input_names=input_names,
-            output_names=[output_name],
-            dynamic_axes={n: {0: "batch"} for n in [*input_names, output_name]},
-            opset_version=opset,
-            dynamo=False,
-        )
+    onnx_bytes = _export_onnx(
+        module,
+        example_inputs,
+        input_names=input_names,
+        output_names=[output_name],
+        batch_axis=[*input_names, output_name],
+        opset=opset,
+    )
 
     return TermExport(
         name=name,
-        onnx_bytes=buffer.getvalue(),
+        onnx_bytes=onnx_bytes,
         input_slots=dynamic_keys,
         input_names=input_names,
         output_name=output_name,
@@ -672,13 +755,6 @@ def _flatten_captures(
             names.append(f"{kind}__{field_name}")
             tensors.append(tensor)
     return names, tensors
-
-
-# A tagged key identifies one value an event body reads off ``env``:
-#   ("data", entity, field)  -> entity.data.<field>   (tensor; dynamic or const)
-#   ("scene", attr)          -> env.scene.<attr>       (scene-level constant, e.g. env_origins)
-#   ("attr", entity, attr)   -> entity.<attr>          (control-flow scalar, e.g. is_fixed_base)
-TaggedKey = tuple
 
 
 class _EvRecData:
@@ -834,17 +910,12 @@ class _EventModule(nn.Module):
         self._dynamic_keys = dynamic_keys
         self._scalar_consts = scalar_consts
         self._real_env = real_env
-        self._const_buffers: dict[TaggedKey, str] = {}
-        for i, (key, value) in enumerate(tensor_consts.items()):
-            buffer_name = f"_const_{i}"
-            self.register_buffer(buffer_name, value.detach().clone())
-            self._const_buffers[key] = buffer_name
+        self._const_buffers = _register_consts(self, tensor_consts)
 
     def forward(self, *args: torch.Tensor):
         *dynamic, rand = args
         served: dict[TaggedKey, Any] = dict(self._scalar_consts)
-        for key, buffer_name in self._const_buffers.items():
-            served[key] = getattr(self, buffer_name)
+        served.update(_const_values(self, self._const_buffers))
         for (entity, field_name), tensor in zip(self._dynamic_keys, dynamic):
             served[("data", entity, field_name)] = tensor
         captures: dict[str, tuple[torch.Tensor, ...]] = {}
@@ -943,21 +1014,7 @@ def trace_event_term(
     rand_ranges = rec.rand_ranges
 
     # 2. Classify recorded reads: dynamic data-field inputs vs baked constants.
-    dynamic: dict[SlotKey, torch.Tensor] = {}
-    tensor_consts: dict[TaggedKey, torch.Tensor] = {}
-    scalar_consts: dict[TaggedKey, Any] = {}
-    for key, value in log:
-        is_dynamic = (
-            key[0] == "data"
-            and _is_dynamic_field(key[2])
-            and isinstance(value, torch.Tensor)
-        )
-        if is_dynamic:
-            dynamic.setdefault((key[1], key[2]), value)
-        elif isinstance(value, torch.Tensor):
-            tensor_consts.setdefault(key, value)
-        else:
-            scalar_consts.setdefault(key, value)
+    dynamic, tensor_consts, scalar_consts = _classify_tagged(log)
 
     dynamic_keys = sorted(dynamic)
     dyn_input_names = [_slot_input_name(k) for k in dynamic_keys]
@@ -968,20 +1025,16 @@ def trace_event_term(
     module = _EventModule(
         func, params, dynamic_keys, tensor_consts, scalar_consts, real_env=env
     ).eval()
-    dyn_axes = {n: {0: "batch"} for n in [*dyn_input_names, *output_names]}
-    buffer = io.BytesIO()
     _prepare_single_env_export(env.num_envs)
-    with torch.no_grad():
-        torch.onnx.export(
-            module,
-            example,
-            buffer,
-            input_names=input_names,
-            output_names=output_names,
-            dynamic_axes=dyn_axes,
-            opset_version=opset,
-            dynamo=False,
-        )
+    # `rand` keeps its traced length: it is one flat draw vector, not a batch of rows.
+    onnx_bytes = _export_onnx(
+        module,
+        example,
+        input_names=input_names,
+        output_names=output_names,
+        batch_axis=[*dyn_input_names, *output_names],
+        opset=opset,
+    )
 
     asset_cfg = params.get("asset_cfg")
     entity = getattr(asset_cfg, "name", None)
@@ -1002,7 +1055,7 @@ def trace_event_term(
     return EventExport(
         name=name,
         mode=mode,
-        onnx_bytes=buffer.getvalue(),
+        onnx_bytes=onnx_bytes,
         input_slots=dynamic_keys,
         input_names=dyn_input_names,
         rand_dim=rand_dim,
@@ -1137,11 +1190,7 @@ class _CommandModule(nn.Module):
         self._dynamic_keys = dynamic_keys
         self._scalar_consts = scalar_consts
         self._env_ids = torch.arange(term.num_envs)
-        self._const_buffers: dict[TaggedKey, str] = {}
-        for i, (key, value) in enumerate(tensor_consts.items()):
-            buffer_name = f"_const_{i}"
-            self.register_buffer(buffer_name, value.detach().clone())
-            self._const_buffers[key] = buffer_name
+        self._const_buffers = _register_consts(self, tensor_consts)
 
     def forward(self, *args: torch.Tensor):
         n_dyn = len(self._dynamic_keys)
@@ -1152,8 +1201,7 @@ class _CommandModule(nn.Module):
         rand = args[n_dyn + n_state + 1]
 
         served: dict[TaggedKey, Any] = dict(self._scalar_consts)
-        for key, buffer_name in self._const_buffers.items():
-            served[key] = getattr(self, buffer_name)
+        served.update(_const_values(self, self._const_buffers))
         for (entity, field_name), tensor in zip(self._dynamic_keys, dynamic):
             served[("data", entity, field_name)] = tensor
 
@@ -1253,21 +1301,7 @@ def trace_command_term(
     ]
 
     # 2. Classify reads: dynamic data inputs vs baked tensor/scalar constants.
-    dynamic: dict[SlotKey, torch.Tensor] = {}
-    tensor_consts: dict[TaggedKey, torch.Tensor] = {}
-    scalar_consts: dict[TaggedKey, Any] = {}
-    for key, value in log:
-        is_dynamic = (
-            key[0] == "data"
-            and _is_dynamic_field(key[2])
-            and isinstance(value, torch.Tensor)
-        )
-        if is_dynamic:
-            dynamic.setdefault((key[1], key[2]), value)
-        elif isinstance(value, torch.Tensor):
-            tensor_consts.setdefault(key, value)
-        else:
-            scalar_consts.setdefault(key, value)
+    dynamic, tensor_consts, scalar_consts = _classify_tagged(log)
 
     dynamic_keys = sorted(dynamic)
     dyn_names = [_slot_input_name(k) for k in dynamic_keys]
@@ -1288,23 +1322,16 @@ def trace_command_term(
         tensor_consts=tensor_consts,
         scalar_consts=scalar_consts,
     ).eval()
-    dyn_axes = {
-        n: {0: "batch"}
-        for n in [*dyn_names, *prev_names, "resample_mask", *output_names]
-    }
-    buffer = io.BytesIO()
     _prepare_single_env_export(term.num_envs)
-    with torch.no_grad():
-        torch.onnx.export(
-            module,
-            example,
-            buffer,
-            input_names=input_names,
-            output_names=output_names,
-            dynamic_axes=dyn_axes,
-            opset_version=opset,
-            dynamo=False,
-        )
+    # `rand` keeps its traced length: it is one flat draw vector, not a batch of rows.
+    onnx_bytes = _export_onnx(
+        module,
+        example,
+        input_names=input_names,
+        output_names=output_names,
+        batch_axis=[*dyn_names, *prev_names, "resample_mask", *output_names],
+        opset=opset,
+    )
     _restore_state(term, snap)
 
     # Initial values, as `cfg.build(env)` left them. Without them the runtime
@@ -1325,7 +1352,7 @@ def trace_command_term(
 
     return CommandExport(
         name=name,
-        onnx_bytes=buffer.getvalue(),
+        onnx_bytes=onnx_bytes,
         state_fields=state_specs,
         command_field=command_field,
         input_slots=dynamic_keys,
@@ -1351,6 +1378,28 @@ NATIVE_OBSERVATION_FUNCS: dict[str, str] = {
 
 def _native_observation_kind(func: Callable[..., Any]) -> str | None:
     return NATIVE_OBSERVATION_FUNCS.get(getattr(func, "__name__", ""))
+
+
+def native_observation_entry(
+    name: str, func: Callable[..., Any], params: dict[str, Any], env: Any
+) -> dict[str, Any] | None:
+    """The ``native`` marker for an observation the runtime already holds, else ``None``.
+
+    Carries the kind and whichever selector it needs; the caller adds ``size`` (and, when
+    fusing, the graph ``input`` name) since the two paths resolve widths differently.
+    ``action_offset`` is resolved here rather than beside the caller's width probe, whose
+    swallowed failure would lose it.
+    """
+    kind = _native_observation_kind(func)
+    if kind is None:
+        return None
+    entry: dict[str, Any] = {"name": name, "native": kind}
+    if kind == "command":
+        entry["command_name"] = params["command_name"]
+    elif params.get("action_name") is not None:
+        entry["action_name"] = params["action_name"]
+        entry["action_offset"] = action_term_offset(env, params["action_name"])
+    return entry
 
 
 def action_term_offset(env: Any, action_name: str) -> int:
@@ -1433,23 +1482,14 @@ class _GroupModule(nn.Module):
         self._commands = commands
         self._native_names = native_names
         self._real_env = real_env
-        self._const_buffers: dict[SlotKey, str] = {}
-        for i, (key, value) in enumerate(constants.items()):
-            buffer_name = f"_const_{i}"
-            self.register_buffer(buffer_name, value.detach().clone())
-            self._const_buffers[key] = buffer_name
+        self._const_buffers = _register_consts(self, constants)
         # A term reading no dynamic state is a value, not a function — bake it.
-        self._baked_buffers: dict[str, str] = {}
-        for i, (term_name, value) in enumerate(baked.items()):
-            buffer_name = f"_baked_{i}"
-            self.register_buffer(buffer_name, value.detach().clone())
-            self._baked_buffers[term_name] = buffer_name
+        self._baked_buffers = _register_consts(self, baked, prefix="_baked")
 
     def forward(self, *args: torch.Tensor) -> torch.Tensor:
         split = len(self._dynamic_keys)
         slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, args[:split]))
-        for key, buffer_name in self._const_buffers.items():
-            slots[key] = getattr(self, buffer_name)
+        slots.update(_const_values(self, self._const_buffers))
         native = dict(zip(self._native_names, args[split:]))
         env = _ReplayEnv(slots, self._sensors, self._commands, real_env=self._real_env)
 
@@ -1530,19 +1570,9 @@ def trace_observation_group(
     layout: list[dict[str, Any]] = []
 
     for term in terms:
-        native_kind = _native_observation_kind(term.func)
-        if native_kind is not None:
-            entry: dict[str, Any] = {
-                "name": term.name,
-                "native": native_kind,
-                "input": "native__" + re.sub(r"\W", "_", term.name),
-            }
-            if native_kind == "command":
-                entry["command_name"] = term.params["command_name"]
-            elif term.params.get("action_name") is not None:
-                action_name = term.params["action_name"]
-                entry["action_name"] = action_name
-                entry["action_offset"] = action_term_offset(env, action_name)
+        entry = native_observation_entry(term.name, term.func, term.params, env)
+        if entry is not None:
+            entry["input"] = "native__" + re.sub(r"\W", "_", term.name)
             value = _native_example(term, env)
             entry["size"] = int(value.reshape(1, -1).shape[-1])
             native_inputs.append(entry)
@@ -1557,16 +1587,7 @@ def trace_observation_group(
                 f"Observation term {term.name!r} returned "
                 f"{type(recorded).__name__}, not a Tensor."
             )
-        term_dynamic = False
-        for key, value in recorder._log:  # noqa: SLF001 — internal proxy
-            if not isinstance(value, torch.Tensor):
-                continue
-            namespace, field_name = key
-            if namespace in (_SENSOR_NS, _COMMAND_NS) or _is_dynamic_field(field_name):
-                dynamic.setdefault(key, value)
-                term_dynamic = True
-            else:
-                constants.setdefault(key, value)
+        term_dynamic = _classify_slots(recorder._log, dynamic, constants)  # noqa: SLF001
         sensors.update(recorder._sensors)  # noqa: SLF001 — internal proxy
         commands.update(recorder._commands)  # noqa: SLF001 — internal proxy
         if not term_dynamic:
@@ -1606,23 +1627,20 @@ def trace_observation_group(
         real_env=env,
     ).eval()
     output_name = "obs"
-    buffer = io.BytesIO()
     with torch.no_grad():
         reference = module(*example_inputs).detach()
-        torch.onnx.export(
-            module,
-            example_inputs,
-            buffer,
-            input_names=input_names,
-            output_names=[output_name],
-            dynamic_axes={n: {0: "batch"} for n in [*input_names, output_name]},
-            opset_version=opset,
-            dynamo=False,
-        )
+    onnx_bytes = _export_onnx(
+        module,
+        example_inputs,
+        input_names=input_names,
+        output_names=[output_name],
+        batch_axis=[*input_names, output_name],
+        opset=opset,
+    )
 
     return GroupExport(
         name=name,
-        onnx_bytes=buffer.getvalue(),
+        onnx_bytes=onnx_bytes,
         input_slots=dynamic_keys,
         input_names=slot_names,
         input_shapes=[list(dynamic[k].shape) for k in dynamic_keys],
@@ -1675,16 +1693,11 @@ class _TerminationGroupModule(nn.Module):
         self._sensors = sensors
         self._commands = commands
         self._real_env = real_env
-        self._const_buffers: dict[SlotKey, str] = {}
-        for i, (key, value) in enumerate(constants.items()):
-            buffer_name = f"_const_{i}"
-            self.register_buffer(buffer_name, value.detach().clone())
-            self._const_buffers[key] = buffer_name
+        self._const_buffers = _register_consts(self, constants)
 
     def forward(self, *dynamic: torch.Tensor) -> torch.Tensor:
         slots: dict[SlotKey, torch.Tensor] = dict(zip(self._dynamic_keys, dynamic))
-        for key, buffer_name in self._const_buffers.items():
-            slots[key] = getattr(self, buffer_name)
+        slots.update(_const_values(self, self._const_buffers))
         env = _ReplayEnv(slots, self._sensors, self._commands, real_env=self._real_env)
         lanes = [term.func(env, **term.params).reshape(-1, 1) for term in self._terms]
         return torch.cat(lanes, dim=-1)
@@ -1716,16 +1729,7 @@ def trace_termination_group(
                 f"Termination term {term.name!r} returned "
                 f"{type(recorded).__name__}, not a Tensor."
             )
-        term_dynamic = False
-        for key, value in recorder._log:  # noqa: SLF001 — internal proxy
-            if not isinstance(value, torch.Tensor):
-                continue
-            namespace, field_name = key
-            if namespace in (_SENSOR_NS, _COMMAND_NS) or _is_dynamic_field(field_name):
-                dynamic.setdefault(key, value)
-                term_dynamic = True
-            else:
-                constants.setdefault(key, value)
+        term_dynamic = _classify_slots(recorder._log, dynamic, constants)  # noqa: SLF001
         sensors.update(recorder._sensors)  # noqa: SLF001 — internal proxy
         commands.update(recorder._commands)  # noqa: SLF001 — internal proxy
         if not term_dynamic:
@@ -1749,23 +1753,20 @@ def trace_termination_group(
         terms, dynamic_keys, constants, sensors=sensors, commands=commands, real_env=env
     ).eval()
     output_name = "done"
-    buffer = io.BytesIO()
     with torch.no_grad():
         reference = module(*example_inputs).detach()
-        torch.onnx.export(
-            module,
-            example_inputs,
-            buffer,
-            input_names=input_names,
-            output_names=[output_name],
-            dynamic_axes={n: {0: "batch"} for n in [*input_names, output_name]},
-            opset_version=opset,
-            dynamo=False,
-        )
+    onnx_bytes = _export_onnx(
+        module,
+        example_inputs,
+        input_names=input_names,
+        output_names=[output_name],
+        batch_axis=[*input_names, output_name],
+        opset=opset,
+    )
 
     return TerminationGroupExport(
         name=name,
-        onnx_bytes=buffer.getvalue(),
+        onnx_bytes=onnx_bytes,
         input_slots=dynamic_keys,
         input_names=input_names,
         input_shapes=[list(dynamic[k].shape) for k in dynamic_keys],

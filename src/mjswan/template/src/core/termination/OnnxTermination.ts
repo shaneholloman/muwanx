@@ -11,8 +11,8 @@
  */
 
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
-import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
-import { slotDims, slotInputName } from '../onnx/session';
+import type { OnnxInputSlot, OnnxSession, SlotReader } from '../onnx/session';
+import { buildFeeds } from '../onnx/session';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 import type { PolicyState } from '../policy/types';
 
@@ -58,18 +58,14 @@ export class OnnxTermination extends TerminationBase {
 
   /** Run one graph evaluation. Exposed for tests / deterministic stepping. */
   async step(): Promise<void> {
-    const feeds: Record<string, OnnxTensorLike> = {};
-    for (const slot of this.onnxConfig.input_slots ?? []) {
-      const value = this.deps.readSlot(slot);
-      if (!value) {
-        // Hold the previous verdict rather than letting a termination slip through.
-        console.warn(
-          `[OnnxTermination] "${this.config.name}" could not read slot ` +
-            `${slotInputName(slot)}; holding the previous verdict.`,
-        );
-        return;
-      }
-      feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
+    const { feeds, missing } = buildFeeds(this.onnxConfig.input_slots, this.deps.readSlot);
+    if (missing) {
+      // Hold the previous verdict rather than letting a termination slip through.
+      console.warn(
+        `[OnnxTermination] "${this.config.name}" could not read slot ${missing}; ` +
+          'holding the previous verdict.',
+      );
+      return;
     }
     const outputs = await this.deps.session.run(feeds);
     const first = Object.values(outputs)[0];

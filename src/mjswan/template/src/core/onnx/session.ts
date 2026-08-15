@@ -56,6 +56,35 @@ export function slotDims(slot: OnnxInputSlot, length: number): number[] {
 /** Reads the dynamic runtime state an `OnnxInputSlot` declares, or null if absent. */
 export type SlotReader = (slot: OnnxInputSlot) => Float32Array | null;
 
+/** An output tensor's data as float32; ORT hands back bool as `Uint8Array`, int64 as bigint. */
+export function toFloat32(data: OnnxTensorLike['data']): Float32Array {
+  if (data instanceof Float32Array) return data;
+  const out = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = Number(data[i]);
+  return out;
+}
+
+/**
+ * Feed the slots a graph declares, stopping at the first the reader cannot serve and
+ * naming it in `missing`. Callers that must not run on partial state bail on it; the
+ * rest ignore it and let ORT reject the incomplete feed, which it does either way.
+ *
+ * Stopping rather than reading on: a slot read is not always cheap (a raycast sensor
+ * casts its rays), and the feed is already unusable.
+ */
+export function buildFeeds(
+  slots: readonly OnnxInputSlot[] | undefined,
+  readSlot: SlotReader | undefined,
+): { feeds: Record<string, OnnxTensorLike>; missing: string | null } {
+  const feeds: Record<string, OnnxTensorLike> = {};
+  for (const slot of slots ?? []) {
+    const value = readSlot?.(slot) ?? null;
+    if (!value) return { feeds, missing: slotInputName(slot) };
+    feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
+  }
+  return { feeds, missing: null };
+}
+
 function toOrtTensor(t: OnnxTensorLike): ort.Tensor {
   if (t.data instanceof Uint8Array) {
     // ORT's 'bool' dtype takes a Uint8Array of 0/1 — a direct pass-through.

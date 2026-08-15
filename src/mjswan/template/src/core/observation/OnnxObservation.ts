@@ -17,8 +17,8 @@ import {
   type ObservationClip,
   type ObservationScale,
 } from './pipeline';
-import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
-import { slotDims, slotInputName } from '../onnx/session';
+import type { OnnxInputSlot, OnnxSession, SlotReader } from '../onnx/session';
+import { buildFeeds, toFloat32 } from '../onnx/session';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 import type { PolicyState } from '../policy/types';
 
@@ -63,18 +63,14 @@ export class OnnxObservation extends ObservationBase<OnnxObservationConfig> {
   }
 
   async compute(_state: PolicyState): Promise<Float32Array> {
-    const feeds: Record<string, OnnxTensorLike> = {};
-    for (const slot of this.config.input_slots ?? []) {
-      const value = this.deps.readSlot(slot);
-      if (!value) {
-        // An unsupplied slot means absent state: serve the last good value, not zeros.
-        console.warn(
-          `[OnnxObservation] "${this.config.name}" could not read slot ` +
-            `${slotInputName(slot)}; reusing the previous value.`,
-        );
-        return this.last;
-      }
-      feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
+    const { feeds, missing } = buildFeeds(this.config.input_slots, this.deps.readSlot);
+    if (missing) {
+      // An unsupplied slot means absent state: serve the last good value, not zeros.
+      console.warn(
+        `[OnnxObservation] "${this.config.name}" could not read slot ${missing}; ` +
+          'reusing the previous value.',
+      );
+      return this.last;
     }
 
     const outputs = await this.deps.session.run(feeds);
@@ -87,11 +83,4 @@ export class OnnxObservation extends ObservationBase<OnnxObservationConfig> {
     this.last = applyObservationPipeline(conformToSize(raw, this.config.size), this.config);
     return this.last;
   }
-}
-
-function toFloat32(data: Float32Array | BigInt64Array | Uint8Array): Float32Array {
-  if (data instanceof Float32Array) return data;
-  const out = new Float32Array(data.length);
-  for (let i = 0; i < data.length; i++) out[i] = Number(data[i]);
-  return out;
 }

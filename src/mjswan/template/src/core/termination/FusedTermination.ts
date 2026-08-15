@@ -13,7 +13,7 @@
 
 import { TerminationBase, type TerminationConfig } from './TerminationBase';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
-import { slotDims, slotInputName } from '../onnx/session';
+import { buildFeeds } from '../onnx/session';
 import type { PolicyRunner } from '../policy/PolicyRunner';
 import type { PolicyState } from '../policy/types';
 
@@ -84,18 +84,13 @@ export class FusedTermination {
 
   /** Run the graph once and latch every lane. Exposed for deterministic tests. */
   async step(): Promise<void> {
-    const feeds: Record<string, OnnxTensorLike> = {};
-    for (const slot of this.config.input_slots ?? []) {
-      const value = this.deps.readSlot(slot);
-      if (!value) {
-        // Hold every lane: a termination slipping through is worse than a late one.
-        console.warn(
-          `[FusedTermination] could not read slot ${slotInputName(slot)}; ` +
-            'holding the previous verdicts.',
-        );
-        return;
-      }
-      feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
+    const { feeds, missing } = buildFeeds(this.config.input_slots, this.deps.readSlot);
+    if (missing) {
+      // Hold every lane: a termination slipping through is worse than a late one.
+      console.warn(
+        `[FusedTermination] could not read slot ${missing}; holding the previous verdicts.`,
+      );
+      return;
     }
     const outputs = await this.deps.session.run(feeds);
     const first = Object.values(outputs)[0];

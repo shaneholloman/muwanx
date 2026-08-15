@@ -293,9 +293,9 @@ class SceneConfig:
     :func:`mjswan.adapters.resolve_runner_defaults`."""
 
     def __post_init__(self) -> None:
-        # Fixed now: `_save_web` drops `spec`/`model` right after writing the asset.
+        # The scene asset's filename, from whichever of spec/model was given. Fixed now
+        # rather than a property: `_save_web` drops both right after writing the asset.
         self.scene_filename = "scene.mjz" if self.spec is not None else "scene.mjb"
-        """Filename of the scene asset, from whichever of spec/model was provided."""
 
 
 class SceneHandle:

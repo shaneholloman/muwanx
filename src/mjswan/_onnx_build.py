@@ -100,23 +100,10 @@ def _native_observation_entry(
     ``generated_commands`` with a browser-only ``UiCommand`` fails mjlab's own assert
     during discovery.
     """
-    from .compile.tracer import action_term_offset
+    from .compile.tracer import native_observation_entry
 
-    func_name = getattr(func, "__name__", None)
-    if func_name == "last_action":
-        entry: dict[str, Any] = {"name": name, "native": "prev_action"}
-        action_name = params.get("action_name")
-        if action_name is not None:
-            entry["action_name"] = action_name
-            # Outside the `size` probe below, whose swallowed failure would lose it.
-            entry["action_offset"] = action_term_offset(env, action_name)
-    elif func_name == "generated_commands":
-        entry = {
-            "name": name,
-            "native": "command",
-            "command_name": params["command_name"],
-        }
-    else:
+    entry = native_observation_entry(name, func, params, env)
+    if entry is None:
         return None
 
     try:
@@ -529,8 +516,14 @@ def _native_termination_entry(
     return entry
 
 
-def _is_native_termination(term_cfg: TerminationTermCfg, env: Any) -> bool:
-    """Whether a term reads no time-varying state (so it cannot be traced)."""
+def _is_native_termination(name: str, term_cfg: TerminationTermCfg, env: Any) -> bool:
+    """Whether a term reads no time-varying state (so it cannot be traced).
+
+    ponytail: discovers by tracing and discarding the export, so a fused term is traced
+    twice. `trace_term` raises before `torch.onnx.export`, so the second pass is one term
+    call; give the tracer a discovery-only entry point if that ever shows up in a build.
+    The real name is passed so an `UntraceableTerm` escaping here names the term.
+    """
     from .compile import trace_term
     from .compile.tracer import ConstantTerm
 
@@ -539,7 +532,7 @@ def _is_native_termination(term_cfg: TerminationTermCfg, env: Any) -> bool:
             term_cfg.func,
             _resolved_params(term_cfg.params, env),
             env,
-            name="probe",
+            name=name,
         )
     except ConstantTerm:
         return True
@@ -565,7 +558,7 @@ def serialize_terminations(
             _require_ts_src("Termination", name, func)
             result[name] = term_cfg.to_dict()
             continue
-        if _is_native_termination(term_cfg, env):
+        if _is_native_termination(name, term_cfg, env):
             result[name] = _native_termination_entry(name, term_cfg, env)
             continue
         fusable[name] = term_cfg

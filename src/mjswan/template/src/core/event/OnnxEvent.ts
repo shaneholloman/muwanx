@@ -12,7 +12,7 @@
  */
 
 import { SeededRng } from '../rng';
-import { slotDims, slotInputName } from '../onnx/session';
+import { buildFeeds, toFloat32 } from '../onnx/session';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from './entityWrite';
 import type { EventContext } from './EventBase';
@@ -73,12 +73,7 @@ export class OnnxEvent {
     if (this.inFlight) return;
     this.inFlight = true;
     try {
-      const feeds: Record<string, OnnxTensorLike> = {};
-      for (const slot of this.config.input_slots ?? []) {
-        const value = this.deps.readSlot?.(slot) ?? null;
-        if (!value) continue;
-        feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
-      }
+      const { feeds } = buildFeeds(this.config.input_slots, this.deps.readSlot);
       feeds.rand = {
         data: this.deps.rng.randVector(this.config.rand_dim, this.config.rand_ranges),
         dims: [this.config.rand_dim],
@@ -100,11 +95,4 @@ export class OnnxEvent {
     for (const [key, tensor] of Object.entries(outputs)) values[key] = toFloat32(tensor.data);
     applyEntityWrites(mjModel, mjData, targets, values);
   }
-}
-
-function toFloat32(data: Float32Array | BigInt64Array | Uint8Array): Float32Array {
-  if (data instanceof Float32Array) return data;
-  const out = new Float32Array(data.length);
-  for (let i = 0; i < data.length; i++) out[i] = Number(data[i]);
-  return out;
 }

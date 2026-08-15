@@ -1,5 +1,5 @@
 /**
- * Native Event-mode dispatch (ADR 0005 §5, companion brief §4).
+ * Native Event-mode dispatch (ADR 0005 §5).
  *
  * `EventManager` previously only had `onReset()`; interval/startup dispatch is
  * genuinely new functionality (Velocity uses `mode="interval"` for `push_robot`

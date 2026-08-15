@@ -17,7 +17,7 @@
 import * as THREE from 'three';
 import { SeededRng } from '../rng';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from '../event/entityWrite';
-import { slotDims, slotInputName } from '../onnx/session';
+import { buildFeeds, toFloat32 } from '../onnx/session';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import { mjcToThreeCoordinate } from '../scene/coordinate';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
@@ -217,14 +217,9 @@ export class OnnxCommand implements CommandTerm {
 
   /** Run one graph evaluation. Exposed for tests//deterministic stepping. */
   async step(resample: boolean): Promise<void> {
-    const feeds: Record<string, OnnxTensorLike> = {};
+    const { feeds } = buildFeeds(this.cfg.input_slots, this.deps.readSlot);
     for (const spec of this.cfg.state_fields) {
       feeds[`prev_${spec.name}`] = this.state.get(spec.name)!;
-    }
-    for (const slot of this.cfg.input_slots ?? []) {
-      const value = this.deps.readSlot?.(slot) ?? null;
-      if (!value) continue;
-      feeds[slotInputName(slot)] = { data: value, dims: slotDims(slot, value.length) };
     }
     feeds.resample_mask = { data: new Uint8Array([resample ? 1 : 0]), dims: [1] };
     feeds.rand = {
@@ -287,11 +282,4 @@ export class OnnxCommand implements CommandTerm {
     this.context!.scene.add(marker);
     return marker;
   }
-}
-
-function toFloat32(data: Float32Array | BigInt64Array | Uint8Array): Float32Array {
-  if (data instanceof Float32Array) return data;
-  const out = new Float32Array(data.length);
-  for (let i = 0; i < data.length; i++) out[i] = Number(data[i]);
-  return out;
 }

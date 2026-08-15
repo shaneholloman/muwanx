@@ -5,12 +5,7 @@ from __future__ import annotations
 
 from .parity import ParityReport, TermReport, run_command_parity, run_parity
 from .rng import DrawRecorder, ReplayRng
-from .serialize import (
-    COMMAND_JSON_SCHEMA,
-    command_config,
-    validate_command_config,
-    write_command_artifact,
-)
+from .serialize import command_config, write_command_artifact
 from .tracer import (
     CommandExport,
     EventExport,
@@ -35,6 +30,4 @@ __all__ = [
     "ReplayRng",
     "command_config",
     "write_command_artifact",
-    "validate_command_config",
-    "COMMAND_JSON_SCHEMA",
 ]

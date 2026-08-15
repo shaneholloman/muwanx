@@ -1,8 +1,8 @@
-"""OnnxCommand config serialization (ADR 0005 §3, companion brief §3a).
+"""OnnxCommand config serialization (ADR 0005 §3).
 
 Layer: L1 (pure Python — no mjlab/torch/onnxruntime; builds a CommandExport by
 hand). Verifies the config emitted from a traced command carries everything the
-runtime needs and validates structurally.
+runtime needs.
 """
 
 from __future__ import annotations
@@ -15,11 +15,7 @@ import pytest
 # Pure-Python serialization, but `mjswan.compile` imports torch at load time.
 torch = pytest.importorskip("torch")
 
-from mjswan.compile import (  # noqa: E402
-    command_config,
-    validate_command_config,
-    write_command_artifact,
-)
+from mjswan.compile import command_config, write_command_artifact  # noqa: E402
 from mjswan.compile.tracer import (  # noqa: E402
     _COMMAND_NS,
     _SENSOR_NS,
@@ -86,11 +82,9 @@ def test_command_config_shape():
         assert len(sf["init"]) == expected
 
 
-def test_command_config_validates():
+def test_command_config_round_trips_through_json():
     export = _make_export()
     cfg = command_config(export, onnx_ref="command/twist.onnx")
-    assert validate_command_config(cfg) == []
-    # round-trips through JSON unchanged
     assert json.loads(json.dumps(cfg)) == cfg
 
 
@@ -119,17 +113,11 @@ def test_lifting_command_with_entity_write():
         reference_rand=torch.zeros(7),
     )
     cfg = command_config(export, onnx_ref="command/lift_height.onnx")
-    assert validate_command_config(cfg) == []
     kinds = {w["kind"] for w in cfg["write_targets"]}
     assert kinds == {"root_pose", "root_velocity"}
-
-
-def test_validate_catches_bad_command_field():
-    export = _make_export()
-    cfg = command_config(export, onnx_ref="command/twist.onnx")
-    cfg["command_field"] = "not_a_state_field"
-    errors = validate_command_config(cfg)
-    assert any("command_field" in e for e in errors)
+    # The command field must name a declared state field, or the runtime allocates
+    # a command of width 0 and every consumer silently reads zeros.
+    assert cfg["command_field"] in {sf["name"] for sf in cfg["state_fields"]}
 
 
 def test_slot_to_json_entity_data():
@@ -200,14 +188,6 @@ def test_command_config_accepts_a_sensor_slot():
     assert cfg["input_slots"] == [
         {"sensor": "robot/imu_ang_vel", "input": "sensor__robot_imu_ang_vel"}
     ]
-    assert validate_command_config(cfg) == []
-
-
-def test_validate_catches_slot_without_input_name():
-    export = _make_export()
-    cfg = command_config(export, onnx_ref="command/twist.onnx")
-    del cfg["input_slots"][0]["input"]
-    assert any("input" in e for e in validate_command_config(cfg))
 
 
 def test_write_command_artifact(tmp_path):
@@ -216,7 +196,6 @@ def test_write_command_artifact(tmp_path):
     written = tmp_path / "command" / "twist.onnx"
     assert written.read_bytes() == export.onnx_bytes
     assert cfg["onnx"] == "command/twist.onnx"
-    assert validate_command_config(cfg) == []
 
 
 # ---------------------------------------------------------------------------
