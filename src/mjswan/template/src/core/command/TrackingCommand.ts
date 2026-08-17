@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-import { quatApply, quatInverse, quatMultiply, yawQuat } from '../observation/math';
+import { quatApply, quatApplyInv, quatInverse, quatMultiply, yawQuat } from '../observation/math';
 import { getPosition, getQuaternion } from '../scene/scene';
 import { type NpzEntry, loadNpz } from '../scene/npz';
 import { type Bytes, resolveBytes } from '../utils/bytes';
@@ -381,6 +381,22 @@ export class TrackingCommand implements CommandTerm {
     return normalizeQuat(frame.slice(offset, offset + 4));
   }
 
+  /** The anchor body's slice of a per-body world vector field, at the current frame. */
+  private anchorVector(frames: Float32Array[]): Float32Array | null {
+    const frame = frames[this.refIdx];
+    if (!frame) return null;
+    const offset = this.selectedAnchorBodyIndex * 3;
+    return frame.slice(offset, offset + 3);
+  }
+
+  /** {@link anchorVector}, rotated into the anchor's own frame. */
+  private anchorFrameVector(frames: Float32Array[]): Float32Array | null {
+    const vector = this.anchorVector(frames);
+    const anchorQuat = this.getAnchorQuat();
+    if (!vector || !anchorQuat) return null;
+    return Float32Array.from(quatApplyInv(anchorQuat, vector));
+  }
+
   getBodyPosW(frameIndex = this.refIdx): Float32Array | null {
     const motion = this.selectedMotion;
     if (!motion) {
@@ -414,6 +430,33 @@ export class TrackingCommand implements CommandTerm {
         return this.getAnchorPos();
       case 'anchor_quat_w':
         return this.getAnchorQuat();
+      case 'anchor_lin_vel_w':
+        return this.anchorVector(this.refBodyLinVelW);
+      case 'anchor_ang_vel_w':
+        return this.anchorVector(this.refBodyAngVelW);
+      // The anchor-frame reference features a whole-body tracking policy reads. Each is
+      // the world quantity above rotated into the anchor's own frame, which is what
+      // mjlab's `quat_apply_inverse(anchor_quat_w, …)` properties compute.
+      case 'ref_base_height': {
+        // `env_origins` is omitted throughout: the browser runs one env at the origin.
+        const anchorPos = this.getAnchorPos();
+        return anchorPos ? new Float32Array([anchorPos[2]]) : null;
+      }
+      case 'ref_base_lin_vel_b':
+        return this.anchorFrameVector(this.refBodyLinVelW);
+      case 'ref_base_ang_vel_b':
+        return this.anchorFrameVector(this.refBodyAngVelW);
+      case 'ref_gravity_b': {
+        const anchorQuat = this.getAnchorQuat();
+        return anchorQuat
+          ? Float32Array.from(quatApplyInv(anchorQuat, [0, 0, -1]))
+          : null;
+      }
+      case 'joint_pos':
+      case 'tracked_joint_pos':
+        // The current reference frame alone, where `ref_joint_pos` is the whole
+        // look-ahead window.
+        return this.refJointPos[this.refIdx]?.slice() ?? null;
       case 'body_pos_w':
         return this.getBodyPosW();
       case 'robot_anchor_pos_w':

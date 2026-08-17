@@ -10,7 +10,11 @@ type MjModel = import('mujoco').MjModel;
 type MjData = import('mujoco').MjData;
 
 /** mjlab's `ActionTermCfg` kinds this runtime implements. */
-export type ControlType = 'joint_position' | 'torque' | 'muscle_activation';
+export type ControlType =
+  | 'joint_position'
+  | 'joint_position_reference'
+  | 'torque'
+  | 'muscle_activation';
 
 /** One resolved action term: the build's descriptor, names already resolved to addresses. */
 export interface ResolvedActionTerm {
@@ -24,6 +28,13 @@ export interface ResolvedActionTerm {
   actionScale: Float32Array;
   actionOffset: Float32Array;
   defaultJointPos: Float32Array;
+  /**
+   * `joint_position_reference` only: the tracking command's reference joint positions
+   * for this step, in policy-joint order, refreshed by the runtime before each step.
+   * `null` until a clip is loaded, where the default pose stands in — a still robot
+   * rather than one folded into zeros.
+   */
+  referenceJointPos?: Float32Array | null;
   encoderBias: Float32Array;
   /**
    * Per-actuator: true = position (`biastype=affine`), so `ctrl` is a target and MuJoCo
@@ -82,14 +93,18 @@ function applyActionTerm(
   const numJoints = ctrlAdr.length;
   const ctrl = mjData.ctrl;
 
-  if (controlType === 'joint_position') {
+  if (controlType === 'joint_position' || controlType === 'joint_position_reference') {
+    // What the residual is measured from: a constant default pose, or — for a tracking
+    // policy trained ZEST / BeyondMimic-style — the reference pose of this very step.
+    const reference = term.referenceJointPos ?? null;
     for (let i = 0; i < numJoints; i++) {
       const ctrlIndex = ctrlAdr[i];
       if (ctrlIndex < 0) continue;
       const actionValue = actions[actionIndices[i]] ?? 0;
+      const base = reference ? (reference[actionIndices[i]] ?? 0) : defaultJointPos[i];
       // Un-bias the target: the policy was trained against a biased reading.
       const processed = clamp(
-        defaultJointPos[i] + actionOffset[i] + actionScale[i] * actionValue,
+        base + actionOffset[i] + actionScale[i] * actionValue,
         term.clipLo[i],
         term.clipHi[i],
       );

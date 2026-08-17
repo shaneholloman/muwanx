@@ -44,6 +44,17 @@ shortcuts were removed outright (no alias) — see Removed.**
   of the clip rather than the current frame alone.
 - `build_single_entity_trace_env(commands=...)` and `TraceCommandManager`, so a
   traced term can read a command that exists browser-side only.
+- `ReferenceJointPositionActionCfg` (`joint_position_reference`) — joint position
+  targets as a motion reference plus a scaled residual, `q_cmd = q_ref(t) + scale * a`.
+  The offset is the tracking command's reference pose and moves every control step,
+  where `JointPositionActionCfg` offsets from a constant default pose. This is the
+  control law a tracking policy trained ZEST / BeyondMimic-style uses.
+- Anchor-frame reference state fields on `TrackingCommand`: `anchor_lin_vel_w`,
+  `anchor_ang_vel_w`, `ref_base_height`, `ref_base_lin_vel_b`, `ref_base_ang_vel_b`,
+  `ref_gravity_b`, and `joint_pos` / `tracked_joint_pos`. A whole-body tracking task's
+  observation terms read these off mjlab's `MotionCommand` as properties, which the
+  tracer turns into command slots — so with the browser answering to those names, the
+  task's own functions trace unmodified.
 
 ### Changed
 
@@ -97,3 +108,34 @@ All kept as aliases via `_compat.py`, removed in 0.9:
 - `PolicyHandle.add_velocity_command` / `add_command_velocity` — both removed
   with no alias. Pass `commands={"velocity": mjswan.velocity_command(...)}` to
   `add_policy()` instead.
+
+### Fixed
+
+- A position action term now inherits its PD gains from the entity's actuator configs.
+  mjlab's ideal-PD family (`IdealPdActuatorCfg` and subclasses, which is what
+  `wbc-mjlab`'s G1 uses) puts a `<motor>` in the model and computes
+  `kp·(q* − q) + kd·(0 − q̇)` in torch. The browser mirrors that for a `biastype=none`
+  actuator, but read the gains off the *action* term, where mjlab keeps them on the
+  *actuator* — so every such task got kp = kd = 0, every `ctrl` zero, and a robot that
+  ignored its policy entirely and collapsed. The runtime also now reports a motor term
+  with no stiffness as an error rather than running it limp.
+- `register_command` now maps a command config wherever its class lives. The adapter
+  only consulted the registry for classes from the `mjlab` package, so a task's own
+  `CommandTermCfg` subclass — which is where a downstream project's commands are —
+  passed through unadapted and failed later in the serializer on a missing
+  `pending_trace`.
+- The action adapter maps a config wherever its class lives too, and no longer lets a
+  rewrite escape into a caller's config. A task's own `ActionTermCfg` subclass passed
+  through unconverted, and `resolve_action_scales` then rewrote its `scale` keys in
+  place — on the very object the task's live env config holds, leaving mjlab unable to
+  resolve them when the tracing env was built, several frames from the cause. An
+  unrecognized term is now copied rather than shared.
+- `run_parity` no longer feeds a graph inputs it does not declare, matching the runtime.
+  A read the body only *indexes* with — a tracking command's `time_steps` — is recorded
+  as a slot but folded in as a constant, so the export prunes it and ORT refused the
+  feed, failing the check for every term of a tracking task.
+- `OnnxCommand` / `OnnxEvent` no longer feed a graph inputs it does not declare. The
+  export prunes an input the body never reads, so a term that draws nothing has no
+  `rand` and a state field written without being read has no `prev_<field>`; ORT
+  rejects either, taking the whole scene down with `invalid input '...'`. Feeds are
+  now filtered to the session's own input names.

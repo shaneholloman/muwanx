@@ -78,6 +78,20 @@ class ParityReport:
 _NATIVE_TERMINATIONS = {"time_out"}
 
 
+def _declared_feeds(
+    session: Any, feeds: dict[str, np.ndarray]
+) -> dict[str, np.ndarray]:
+    """*feeds* less anything the graph does not declare, as the browser does.
+
+    A read the body only *indexes* with — a tracking command's ``time_steps``, say —
+    is recorded as a slot but folded into the graph as a constant, so the export
+    prunes its input and ORT refuses the feed. The runtime never sends one (it feeds
+    the manifest's ``input_slots``, written from the graph), so neither does this.
+    """
+    declared = {i.name for i in session.get_inputs()}
+    return {name: value for name, value in feeds.items() if name in declared}
+
+
 def _to_numpy(t: torch.Tensor) -> np.ndarray:
     return t.detach().cpu().numpy().astype(np.float32)
 
@@ -200,10 +214,13 @@ def run_parity(
         for term_name, func, params in term_meta:
             export = exports[term_name]
             session = sessions[term_name]
-            feeds = {
-                in_name: _to_numpy(read_slot(env, slot))
-                for in_name, slot in zip(export.input_names, export.input_slots)
-            }
+            feeds = _declared_feeds(
+                session,
+                {
+                    in_name: _to_numpy(read_slot(env, slot))
+                    for in_name, slot in zip(export.input_names, export.input_slots)
+                },
+            )
             (onnx_out,) = session.run([export.output_name], feeds)
             live_out = _to_numpy(func(env, **params))
             diff = float(np.max(np.abs(onnx_out - live_out))) if live_out.size else 0.0

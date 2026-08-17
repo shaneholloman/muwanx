@@ -103,6 +103,11 @@ export interface CommandTermContext {
 export interface CommandTerm {
   getCommand(): Float32Array;
   getUiConfig?(): CommandUiConfig | null;
+  /**
+   * One named piece of the term's state, for a traced graph's `{command, field}` slot
+   * or a reference-residual action term. `null` for a field the term does not publish.
+   */
+  getStateField?(field: string): Float32Array | null;
   /** Episode reset — the resample for a traced term, hence async and awaited. */
   reset?(): void | Promise<void>;
   update?(dt: number): void;
