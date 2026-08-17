@@ -434,9 +434,8 @@ export class TrackingCommand implements CommandTerm {
         return this.anchorVector(this.refBodyLinVelW);
       case 'anchor_ang_vel_w':
         return this.anchorVector(this.refBodyAngVelW);
-      // The anchor-frame reference features a whole-body tracking policy reads. Each is
-      // the world quantity above rotated into the anchor's own frame, which is what
-      // mjlab's `quat_apply_inverse(anchor_quat_w, …)` properties compute.
+      // Anchor-frame reference features: the world quantities above rotated into the
+      // anchor's frame, as mjlab's `quat_apply_inverse(anchor_quat_w, …)` properties do.
       case 'ref_base_height': {
         // `env_origins` is omitted throughout: the browser runs one env at the origin.
         const anchorPos = this.getAnchorPos();

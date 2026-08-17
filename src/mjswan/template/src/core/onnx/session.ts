@@ -92,10 +92,9 @@ export function buildFeeds(
 /**
  * `feeds` less anything the graph does not declare.
  *
- * The export prunes an input the body never reads: a term that draws nothing has no
- * `rand`, and a state field written without being read has no `prev_<field>`. ORT
- * rejects a feed it cannot place, so the caller assembles everything it *might* owe and
- * this drops the rest. A session that does not report its inputs is fed unchanged.
+ * The export prunes an input the body never reads — a term that draws nothing has no
+ * `rand` — and ORT rejects a feed it cannot place. Callers assemble everything they
+ * *might* owe; this drops the rest. A session not reporting its inputs is fed unchanged.
  */
 export function declaredFeeds(
   session: OnnxSession,

@@ -149,14 +149,11 @@ class JointPositionActionCfg(BaseActionCfg):
 class ReferenceJointPositionActionCfg(BaseActionCfg):
     """Joint position targets as a motion reference plus a scaled residual.
 
-    ``q_cmd = q_ref(t) + scale * a - encoder_bias`` — the control law a tracking policy
-    trained ZEST / BeyondMimic-style uses, where the offset is the tracking command's
-    reference joint positions and therefore moves every control step. That is the whole
-    difference from :class:`JointPositionActionCfg`, whose offset is the constant
-    default pose; everything else (scale, clip, encoder bias) is applied identically.
+    ``q_cmd = q_ref(t) + scale * a - encoder_bias``. Identical to
+    :class:`JointPositionActionCfg` except that the offset is the tracking command's
+    reference pose for the current step, not the constant default pose.
 
-    The reference comes from the named command, so the policy must own one that
-    publishes ``ref_joint_pos`` — the built-in ``TrackingCommand`` does.
+    The policy must own a command publishing ``ref_joint_pos`` — ``TrackingCommand`` does.
     """
 
     command_name: str = "motion"

@@ -70,8 +70,6 @@ describe('applyAction — joint_position', () => {
   });
 
   it('offsets from the live reference, not the default pose, when told to', () => {
-    // A tracking policy trained ZEST / BeyondMimic-style: the residual is measured from
-    // the clip's pose for *this* step, so the default pose must not reach `ctrl`.
     const data = fakeData(2);
     applyAction(
       data,

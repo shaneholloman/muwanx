@@ -29,10 +29,9 @@ export interface ResolvedActionTerm {
   actionOffset: Float32Array;
   defaultJointPos: Float32Array;
   /**
-   * `joint_position_reference` only: the tracking command's reference joint positions
-   * for this step, in policy-joint order, refreshed by the runtime before each step.
-   * `null` until a clip is loaded, where the default pose stands in — a still robot
-   * rather than one folded into zeros.
+   * `joint_position_reference` only: this step's reference pose in policy-joint order,
+   * refreshed by the runtime. `null` before a clip loads, where the default pose
+   * stands in — a still robot rather than one folded into zeros.
    */
   referenceJointPos?: Float32Array | null;
   encoderBias: Float32Array;
@@ -94,8 +93,6 @@ function applyActionTerm(
   const ctrl = mjData.ctrl;
 
   if (controlType === 'joint_position' || controlType === 'joint_position_reference') {
-    // What the residual is measured from: a constant default pose, or — for a tracking
-    // policy trained ZEST / BeyondMimic-style — the reference pose of this very step.
     const reference = term.referenceJointPos ?? null;
     for (let i = 0; i < numJoints; i++) {
       const ctrlIndex = ctrlAdr[i];

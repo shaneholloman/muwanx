@@ -310,8 +310,7 @@ describe('OnnxCommand: seeded rand (ADR §2)', () => {
   });
 
   it('feeds only what the graph declares', async () => {
-    // A term that draws nothing exports no `rand`, and one whose body never reads a
-    // state field it writes exports no `prev_<field>`. ORT rejects either as a feed.
+    // A term that draws nothing exports no `rand`; ORT rejects it as a feed.
     const session = new FakeSession(() => velocityOutputs(0, 0, 0));
     Object.assign(session, { inputNames: ['prev_vel_command_b', 'resample_mask'] });
     const cmd = new OnnxCommand(

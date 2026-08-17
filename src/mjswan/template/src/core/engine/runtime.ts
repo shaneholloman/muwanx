@@ -999,8 +999,6 @@ export class mjswanRuntime {
       if (isPosition && isMotor) {
         console.warn(`[PolicyRunner] Action term "${termKey}": mixed actuator types detected.`);
       }
-      // A motor takes a torque, so with no gains the PD computed here is 0 at every
-      // step — the policy would move nothing at all. Louder than the limp robot.
       if (isMotor && controlType !== 'torque' && kp.every((v) => v === 0)) {
         console.error(
           `[PolicyRunner] Action term "${termKey}": motor actuators with no stiffness — ` +
@@ -1160,8 +1158,6 @@ export class mjswanRuntime {
         actionTerm.clip as Record<string, readonly number[]> | undefined
       );
       if (controlType === 'joint_position_reference') {
-        // Which command publishes the reference this term offsets from; the value
-        // itself is refreshed every step by `refreshActionReferences`.
         this.referenceActionCommands.set(entry, String(actionTerm.command_name ?? 'motion'));
       }
       results.push(entry);
@@ -1284,11 +1280,9 @@ export class mjswanRuntime {
   }
 
   /**
-   * Point each reference-residual action term at this step's reference pose.
-   *
-   * `applyAction` stays a pure function of what it is handed — the rollout-parity
-   * harness drives it in Node with no command manager — so the value is refreshed here
-   * rather than looked up in there.
+   * Point each reference-residual action term at this step's reference pose. Refreshed
+   * here so `applyAction` stays a pure function of what it is handed — the rollout-parity
+   * harness drives it in Node with no command manager.
    */
   private refreshActionReferences(): void {
     if (this.referenceActionCommands.size === 0) return;

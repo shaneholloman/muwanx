@@ -540,12 +540,7 @@ class TestAdaptCommands:
         ]
 
     def test_a_registered_cfg_adapts_from_outside_the_mjlab_package(self):
-        """A task's own `CommandTermCfg` subclass lives in the task's package.
-
-        `register_command` is how an author maps one, so the registry decides, not the
-        defining module. Passing it through unadapted only defers the failure to the
-        serializer, where nothing names the cause.
-        """
+        """The registry decides, not the defining module."""
         from mjswan.command import CommandBinding, _custom_registry, register_command
 
         class SkateCommandCfg:
@@ -568,12 +563,7 @@ class TestAdaptCommands:
         assert pending.state_fields == ["command_b"]
 
     def test_a_task_owned_action_subclass_adapts_by_name(self):
-        """A tracking task's own `ActionTermCfg` subclass is not in the `mjlab` package.
-
-        Passing it through unconverted leaves the caller's object in the term set, which
-        `resolve_action_scales` then rewrites — and that object is the one a live mjlab
-        env config holds.
-        """
+        """A tracking task's own `ActionTermCfg` subclass is not in the `mjlab` package."""
         from mjswan.envs.mdp.actions import ReferenceJointPositionActionCfg
 
         cfg_cls = _make_mjlab_class(
@@ -700,8 +690,7 @@ def _fake_actuator_cls(class_name: str) -> type:
     return Cls
 
 
-#: mjlab computes this family's PD in torch, so the browser owes it. The builtin
-#: position actuator bakes its gains into the model and must contribute nothing.
+#: The browser owes the ideal-PD family's gains; the builtin position one contributes none.
 _FakeIdealPdActuatorCfg = _fake_actuator_cls("IdealPdActuatorCfg")
 _FakeBuiltinPositionActuatorCfg = _fake_actuator_cls("BuiltinPositionActuatorCfg")
 

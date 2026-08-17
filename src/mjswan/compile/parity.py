@@ -83,10 +83,8 @@ def _declared_feeds(
 ) -> dict[str, np.ndarray]:
     """*feeds* less anything the graph does not declare, as the browser does.
 
-    A read the body only *indexes* with — a tracking command's ``time_steps``, say —
-    is recorded as a slot but folded into the graph as a constant, so the export
-    prunes its input and ORT refuses the feed. The runtime never sends one (it feeds
-    the manifest's ``input_slots``, written from the graph), so neither does this.
+    A slot the body only *indexes* with is folded in as a constant, so the export
+    prunes its input and ORT refuses the feed.
     """
     declared = {i.name for i in session.get_inputs()}
     return {name: value for name, value in feeds.items() if name in declared}

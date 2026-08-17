@@ -458,10 +458,8 @@ def adapt_commands(
         if isinstance(term, MjswanCommandTermConfig):
             adapted[key] = term
             continue
-        # A registered name adapts wherever its class lives: a task's own `CommandTermCfg`
-        # subclass is not in the `mjlab` package, and `register_command` is what an author
-        # has to map one. Passing it through unadapted only defers the failure to the
-        # serializer, where nothing names the cause.
+        # A registered name adapts wherever its class lives: a task's own
+        # `CommandTermCfg` subclass is not in the `mjlab` package.
         if _is_from_mjlab(term) or type(term).__name__ in _custom_command_registry:
             try:
                 adapted[key] = _adapt_command_cfg(term)
@@ -495,12 +493,7 @@ def _mjswan_action_class(term: Any) -> type[MjswanActionTermCfg] | None:
 
 
 def _has_mjswan_action(term: Any) -> bool:
-    """Whether *term* adapts by name, wherever its class lives.
-
-    A task's own `ActionTermCfg` subclass is not in the `mjlab` package — myosuite's
-    muscle cfg and a tracking task's reference-residual cfg both sit outside it — so
-    the name decides, not the defining module.
-    """
+    """Whether *term* adapts by name — a task's own subclass is not in ``mjlab``."""
     return _mjswan_action_class(term) is not None
 
 
@@ -559,9 +552,8 @@ def adapt_actions(
             if adapted is not None:
                 result[key] = adapted
         else:
-            # Copied, not passed through: `resolve_action_scales` rewrites `scale` on
-            # whatever it is handed, and an unconverted foreign cfg is the very object
-            # a live mjlab env config holds — mutating it there breaks the tracing env.
+            # Copied: `resolve_action_scales` rewrites `scale` in place, and this is
+            # the object a live mjlab env config holds.
             result[key] = copy.copy(term)
     return result
 
@@ -609,9 +601,8 @@ def _expand_patterns(value: Any, joint_names: list[str]) -> Any:
     return resolved if resolved else value
 
 
-#: mjlab's ideal-PD actuator family puts a ``<motor>`` in the model and computes
-#: ``kp·(q* − q) + kd·(0 − q̇)`` in torch (``IdealPdActuator.compute``). The builtin
-#: position actuators bake their gains into the model instead, and need nothing here.
+#: This family computes its PD in torch; builtin position actuators bake the gains
+#: into the model and need nothing here.
 _PYTHON_PD_ACTUATOR = "IdealPdActuatorCfg"
 
 
@@ -622,10 +613,8 @@ def resolve_pd_gains(
 ) -> None:
     """Fill a position term's ``stiffness``/``damping`` from the entity's actuators.
 
-    The browser runs the PD for a ``biastype=none`` actuator itself, but reads the gains
-    off the *action* term, where mjlab keeps them on the *actuator* config. Without this
-    a task built on the ideal-PD family gets kp = kd = 0 — every ``ctrl`` zero, and a
-    robot that ignores its policy entirely.
+    The browser runs the PD for a ``biastype=none`` actuator itself and reads the gains
+    off the *action* term, where mjlab keeps them on the *actuator* config.
 
     Mutates the two fields in-place, and only when the term sets neither.
     """
