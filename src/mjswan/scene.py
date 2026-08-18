@@ -24,6 +24,7 @@ from .adapters import (
     adapt_observations,
     adapt_terminations,
     resolve_action_scales,
+    resolve_pd_gains,
     resolve_runner_defaults,
 )
 from .motion import MotionConfig
@@ -481,6 +482,9 @@ class SceneHandle:
         _enrich_joint_observations(self._config, adapted_observations)
         if adapted_actions and policy_joint_names:
             resolve_action_scales(adapted_actions, policy_joint_names)
+            resolve_pd_gains(
+                adapted_actions, policy_joint_names, self._resolve_env_cfg(env_cfg)
+            )
 
         policy_config = PolicyConfig(
             name=name,

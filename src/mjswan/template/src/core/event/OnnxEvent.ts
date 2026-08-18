@@ -12,7 +12,7 @@
  */
 
 import { SeededRng } from '../rng';
-import { buildFeeds, toFloat32 } from '../onnx/session';
+import { buildFeeds, declaredFeeds, toFloat32 } from '../onnx/session';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from './entityWrite';
 import type { EventContext } from './EventBase';
@@ -79,7 +79,7 @@ export class OnnxEvent {
         dims: [this.config.rand_dim],
       };
 
-      const outputs = await this.deps.session.run(feeds);
+      const outputs = await this.deps.session.run(declaredFeeds(this.deps.session, feeds));
       this.applyWrites(context, outputs);
     } finally {
       this.inFlight = false;

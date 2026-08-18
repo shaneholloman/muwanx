@@ -22,6 +22,7 @@ Mapping strategy
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import re
 import warnings
@@ -34,6 +35,10 @@ from ..command import _custom_registry as _custom_command_registry
 from ..envs.mdp import actions as _actions_module
 from ..envs.mdp.actions.actions import (
     ActionTermCfg as MjswanActionTermCfg,
+)
+from ..envs.mdp.actions.actions import (
+    JointPositionActionCfg,
+    ReferenceJointPositionActionCfg,
 )
 from ..envs.mdp.events import EventBinding
 from ..envs.mdp.events import _custom_registry as _custom_event_registry
@@ -453,7 +458,9 @@ def adapt_commands(
         if isinstance(term, MjswanCommandTermConfig):
             adapted[key] = term
             continue
-        if _is_from_mjlab(term):
+        # A registered name adapts wherever its class lives: a task's own
+        # `CommandTermCfg` subclass is not in the `mjlab` package.
+        if _is_from_mjlab(term) or type(term).__name__ in _custom_command_registry:
             try:
                 adapted[key] = _adapt_command_cfg(term)
             except ValueError as exc:
@@ -476,6 +483,20 @@ _ACTION_CLASS_ALIASES: dict[str, str] = {
 }
 
 
+def _mjswan_action_class(term: Any) -> type[MjswanActionTermCfg] | None:
+    """The mjswan action class matching *term*'s class name, or ``None``."""
+    class_name = _ACTION_CLASS_ALIASES.get(type(term).__name__, type(term).__name__)
+    cls = getattr(_actions_module, class_name, None)
+    if isinstance(cls, type) and issubclass(cls, MjswanActionTermCfg):
+        return cls
+    return None
+
+
+def _has_mjswan_action(term: Any) -> bool:
+    """Whether *term* adapts by name — a task's own subclass is not in ``mjlab``."""
+    return _mjswan_action_class(term) is not None
+
+
 def _adapt_action_cfg(term: Any) -> MjswanActionTermCfg | None:
     """Convert a single mjlab ``ActionTermCfg`` to mjswan.
 
@@ -487,11 +508,9 @@ def _adapt_action_cfg(term: Any) -> MjswanActionTermCfg | None:
     responsible for dropping the entry.
     """
     class_name = _ACTION_CLASS_ALIASES.get(type(term).__name__, type(term).__name__)
-    mjswan_cls = getattr(_actions_module, class_name, None)
+    mjswan_cls = _mjswan_action_class(term)
 
-    if mjswan_cls is None or not (
-        isinstance(mjswan_cls, type) and issubclass(mjswan_cls, MjswanActionTermCfg)
-    ):
+    if mjswan_cls is None:
         warnings.warn(
             f"mjlab action type '{class_name}' has no mjswan equivalent. "
             f"It will be skipped.",
@@ -528,12 +547,14 @@ def adapt_actions(
     for key, term in actions.items():
         if isinstance(term, MjswanActionTermCfg):
             result[key] = term
-        elif _is_from_mjlab(term) or type(term).__name__ in _ACTION_CLASS_ALIASES:
+        elif _is_from_mjlab(term) or _has_mjswan_action(term):
             adapted = _adapt_action_cfg(term)
             if adapted is not None:
                 result[key] = adapted
         else:
-            result[key] = term
+            # Copied: `resolve_action_scales` rewrites `scale` in place, and this is
+            # the object a live mjlab env config holds.
+            result[key] = copy.copy(term)
     return result
 
 
@@ -553,29 +574,81 @@ def resolve_action_scales(
     if not actions or not joint_names:
         return
 
-    def _resolve(value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        resolved: dict[str, float] = {}
-        for pattern, val in value.items():
-            try:
-                regex = re.compile(pattern)
-            except re.error:
-                resolved[pattern] = val
-                continue
-            for joint_name in joint_names:
-                bare = joint_name.split("/")[-1] if "/" in joint_name else joint_name
-                if regex.fullmatch(bare) or regex.fullmatch(joint_name):
-                    resolved[joint_name] = val
-        return resolved if resolved else value
-
     for term in actions.values():
         scale = getattr(term, "scale", None)
         if isinstance(scale, dict):
-            setattr(term, "scale", _resolve(scale))
+            setattr(term, "scale", _expand_patterns(scale, joint_names))
         offset = getattr(term, "offset", None)
         if isinstance(offset, dict):
-            setattr(term, "offset", _resolve(offset))
+            setattr(term, "offset", _expand_patterns(offset, joint_names))
+
+
+def _expand_patterns(value: Any, joint_names: list[str]) -> Any:
+    """A ``{pattern: value}`` mapping keyed by the joint names it matches."""
+    if not isinstance(value, dict):
+        return value
+    resolved: dict[str, float] = {}
+    for pattern, val in value.items():
+        try:
+            regex = re.compile(pattern)
+        except re.error:
+            resolved[pattern] = val
+            continue
+        for joint_name in joint_names:
+            bare = joint_name.split("/")[-1] if "/" in joint_name else joint_name
+            if regex.fullmatch(bare) or regex.fullmatch(joint_name):
+                resolved[joint_name] = val
+    return resolved if resolved else value
+
+
+#: This family computes its PD in torch; builtin position actuators bake the gains
+#: into the model and need nothing here.
+_PYTHON_PD_ACTUATOR = "IdealPdActuatorCfg"
+
+
+def resolve_pd_gains(
+    actions: Mapping[str, MjswanActionTermCfg] | None,
+    joint_names: list[str],
+    env_cfg: Any | None,
+) -> None:
+    """Fill a position term's ``stiffness``/``damping`` from the entity's actuators.
+
+    The browser runs the PD for a ``biastype=none`` actuator itself and reads the gains
+    off the *action* term, where mjlab keeps them on the *actuator* config.
+
+    Mutates the two fields in-place, and only when the term sets neither.
+    """
+    entities = getattr(getattr(env_cfg, "scene", None), "entities", None)
+    if not actions or not joint_names or not entities:
+        return
+
+    for term in actions.values():
+        if not isinstance(
+            term, (JointPositionActionCfg, ReferenceJointPositionActionCfg)
+        ):
+            continue
+        if term.stiffness is not None or term.damping is not None:
+            continue
+        entity = entities.get(getattr(term, "entity_name", "robot"))
+        actuators = [
+            cfg
+            for cfg in getattr(getattr(entity, "articulation", None), "actuators", ())
+            if any(base.__name__ == _PYTHON_PD_ACTUATOR for base in type(cfg).__mro__)
+        ]
+        gains = {
+            field: _expand_patterns(
+                {
+                    pattern: float(getattr(cfg, field))
+                    for cfg in actuators
+                    for pattern in cfg.target_names_expr
+                },
+                joint_names,
+            )
+            for field in ("stiffness", "damping")
+        }
+        if gains["stiffness"]:
+            term.stiffness = gains["stiffness"]
+            term.damping = gains["damping"]
 
 
 # --- Event adaptation ---
@@ -679,6 +752,7 @@ __all__ = [
     "adapt_actions",
     "adapt_terminations",
     "resolve_action_scales",
+    "resolve_pd_gains",
     "MjlabRunnerDefaults",
     "resolve_runner_defaults",
 ]

@@ -20,6 +20,8 @@ from mjswan.adapters.mjlab_adapter import (
     adapt_commands,
     adapt_observations,
     adapt_terminations,
+    resolve_action_scales,
+    resolve_pd_gains,
     resolve_runner_defaults,
 )
 from mjswan.envs.mdp.observations import ObservationBinding
@@ -537,6 +539,67 @@ class TestAdaptCommands:
             }
         ]
 
+    def test_a_registered_cfg_adapts_from_outside_the_mjlab_package(self):
+        """The registry decides, not the defining module."""
+        from mjswan.command import CommandBinding, _custom_registry, register_command
+
+        class SkateCommandCfg:
+            resampling_time_range = (20.0, 20.0)
+            debug_vis = False
+
+        assert not SkateCommandCfg.__module__.startswith("mjlab")
+        register_command(
+            "SkateCommandCfg",
+            CommandBinding(state_fields=["command_b"], command_field="command_b"),
+        )
+        try:
+            result = adapt_commands({"skate": SkateCommandCfg()})
+        finally:
+            _custom_registry.pop("SkateCommandCfg", None)
+
+        assert result is not None
+        pending = result["skate"].pending_trace
+        assert pending is not None
+        assert pending.state_fields == ["command_b"]
+
+    def test_a_task_owned_action_subclass_adapts_by_name(self):
+        """A tracking task's own `ActionTermCfg` subclass is not in the `mjlab` package."""
+        from mjswan.envs.mdp.actions import ReferenceJointPositionActionCfg
+
+        cfg_cls = _make_mjlab_class(
+            "ReferenceJointPositionActionCfg",
+            entity_name="robot",
+            actuator_names=(".*",),
+            scale={".*_knee_joint": 0.5},
+            offset=0.0,
+            clip=None,
+            command_name="motion",
+        )
+        cfg_cls.__module__ = "some_task.env.mdp.actions"
+        cfg = cfg_cls()
+
+        result = adapt_actions({"joint_pos": cfg})
+        assert result is not None
+        adapted = result["joint_pos"]
+        assert isinstance(adapted, ReferenceJointPositionActionCfg)
+        assert adapted is not cfg
+        assert adapted.command_name == "motion"
+
+    def test_an_unknown_foreign_action_is_copied_not_shared(self):
+        """`resolve_action_scales` rewrites what it is given; the caller keeps its own."""
+
+        class ForeignActionCfg:
+            def __init__(self) -> None:
+                self.scale = {".*": 0.5}
+
+        cfg = ForeignActionCfg()
+        result = adapt_actions({"joint_pos": cfg})
+        assert result is not None
+        assert result["joint_pos"] is not cfg
+
+        resolve_action_scales(result, ["robot/left_knee_joint"])  # type: ignore[arg-type]
+        assert cfg.scale == {".*": 0.5}
+
     def test_mjswan_types_unchanged(self):
         from mjswan.envs.mdp.actions import JointPositionActionCfg
 
@@ -607,6 +670,95 @@ class TestAdaptCommands:
         from mjswan.envs.mdp.actions import JointEffortActionCfg
 
         assert isinstance(result["torque"], JointEffortActionCfg)
+
+
+# ===================================================================
+# Tests: PD gains from the entity's actuator configs
+# ===================================================================
+
+
+def _fake_actuator_cls(class_name: str) -> type:
+    """An actuator cfg the adapter recognizes by the class name in its MRO."""
+
+    class Cls:
+        def __init__(self, target_names_expr, stiffness, damping):
+            self.target_names_expr = target_names_expr
+            self.stiffness = stiffness
+            self.damping = damping
+
+    Cls.__name__ = class_name
+    return Cls
+
+
+#: The browser owes the ideal-PD family's gains; the builtin position one contributes none.
+_FakeIdealPdActuatorCfg = _fake_actuator_cls("IdealPdActuatorCfg")
+_FakeBuiltinPositionActuatorCfg = _fake_actuator_cls("BuiltinPositionActuatorCfg")
+
+
+def _env_cfg_with(*actuators: Any) -> Any:
+    entity = SimpleNamespace(articulation=SimpleNamespace(actuators=actuators))
+    return SimpleNamespace(scene=SimpleNamespace(entities={"robot": entity}))
+
+
+class TestResolvePdGains:
+    """A motor actuator's PD runs in the browser, off gains mjlab keeps on the entity."""
+
+    JOINTS = [
+        "robot/left_knee_joint",
+        "robot/right_knee_joint",
+        "robot/waist_yaw_joint",
+    ]
+
+    def test_gains_expand_to_the_joints_the_patterns_match(self):
+        from mjswan.envs.mdp.actions import ReferenceJointPositionActionCfg
+
+        actions = {"joint_pos": ReferenceJointPositionActionCfg()}
+        resolve_pd_gains(
+            actions,
+            self.JOINTS,
+            _env_cfg_with(
+                _FakeIdealPdActuatorCfg((".*_knee_joint",), 99.0, 6.3),
+                _FakeIdealPdActuatorCfg(("waist_yaw_joint",), 40.0, 2.5),
+            ),
+        )
+
+        term = actions["joint_pos"]
+        assert term.stiffness == {
+            "robot/left_knee_joint": 99.0,
+            "robot/right_knee_joint": 99.0,
+            "robot/waist_yaw_joint": 40.0,
+        }
+        assert term.damping == {
+            "robot/left_knee_joint": 6.3,
+            "robot/right_knee_joint": 6.3,
+            "robot/waist_yaw_joint": 2.5,
+        }
+
+    def test_a_builtin_position_actuator_contributes_nothing(self):
+        from mjswan.envs.mdp.actions import JointPositionActionCfg
+
+        actions = {"joint_pos": JointPositionActionCfg()}
+        resolve_pd_gains(
+            actions,
+            self.JOINTS,
+            _env_cfg_with(_FakeBuiltinPositionActuatorCfg((".*",), 99.0, 6.3)),
+        )
+
+        assert actions["joint_pos"].stiffness is None
+        assert actions["joint_pos"].damping is None
+
+    def test_an_explicit_gain_wins(self):
+        from mjswan.envs.mdp.actions import JointPositionActionCfg
+
+        actions = {"joint_pos": JointPositionActionCfg(stiffness=1.0)}
+        resolve_pd_gains(
+            actions,
+            self.JOINTS,
+            _env_cfg_with(_FakeIdealPdActuatorCfg((".*",), 99.0, 6.3)),
+        )
+
+        assert actions["joint_pos"].stiffness == 1.0
+        assert actions["joint_pos"].damping is None
 
 
 # ===================================================================

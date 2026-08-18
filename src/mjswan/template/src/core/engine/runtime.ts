@@ -220,6 +220,8 @@ export class mjswanRuntime {
   private currentSplatTransform: SplatTransform;
   private cameraState: ViewerState;
   private commandManager: CommandManager;
+  /** `joint_position_reference` terms → the command name publishing their reference. */
+  private readonly referenceActionCommands = new Map<ResolvedActionTerm, string>();
   private scenePlugins: EnginePlugins;
   private policyPlugins: EnginePlugins;
   // Split by lifetime, so `setPolicy` leaves the scene's event graphs alone.
@@ -997,6 +999,12 @@ export class mjswanRuntime {
       if (isPosition && isMotor) {
         console.warn(`[PolicyRunner] Action term "${termKey}": mixed actuator types detected.`);
       }
+      if (isMotor && controlType !== 'torque' && kp.every((v) => v === 0)) {
+        console.error(
+          `[PolicyRunner] Action term "${termKey}": motor actuators with no stiffness — ` +
+          'every ctrl will be zero. Set `stiffness`/`damping` on the action term.'
+        );
+      }
       console.log(
         `[PolicyRunner] Action term "${termKey}" (${controlType}): ${n} joint(s), ` +
         `mode: ${isPosition ? 'position (ctrl=target_pos)' : 'motor (ctrl=torque, external PD)'}`
@@ -1057,6 +1065,7 @@ export class mjswanRuntime {
       const controlType = actionTerm.type ?? 'joint_position';
       if (
         controlType !== 'joint_position' &&
+        controlType !== 'joint_position_reference' &&
         controlType !== 'torque' &&
         controlType !== 'muscle_activation'
       ) {
@@ -1137,7 +1146,7 @@ export class mjswanRuntime {
         ? actionTerm.use_default_offset
         : controlType === 'joint_position';
 
-      results.push(buildEntry(
+      const entry = buildEntry(
         termKey,
         controlType,
         mapping,
@@ -1147,7 +1156,11 @@ export class mjswanRuntime {
         actionTerm.damping as number[] | number | Record<string, number> | undefined,
         useDefaultOffset,
         actionTerm.clip as Record<string, readonly number[]> | undefined
-      ));
+      );
+      if (controlType === 'joint_position_reference') {
+        this.referenceActionCommands.set(entry, String(actionTerm.command_name ?? 'motion'));
+      }
+      results.push(entry);
     }
 
     if (results.length === 0) {
@@ -1251,6 +1264,7 @@ export class mjswanRuntime {
     // Viewer-only: mouse-drag forces, not part of the MDP.
     this.applyDragForces();
 
+    this.refreshActionReferences();
     stepPhysics(
       this.mujoco,
       this.mjModel,
@@ -1263,6 +1277,19 @@ export class mjswanRuntime {
       // `scene.update(dt=physics_dt)` inside its own decimation loop.
       this.contactSensors.size > 0 ? () => this.advanceContactSensors() : undefined,
     );
+  }
+
+  /**
+   * Point each reference-residual action term at this step's reference pose. Refreshed
+   * here so `applyAction` stays a pure function of what it is handed — the rollout-parity
+   * harness drives it in Node with no command manager.
+   */
+  private refreshActionReferences(): void {
+    if (this.referenceActionCommands.size === 0) return;
+    for (const [term, commandName] of this.referenceActionCommands) {
+      const command = this.commandManager.getTerm(commandName);
+      term.referenceJointPos = command?.getStateField?.('tracked_joint_pos') ?? null;
+    }
   }
 
   private advanceContactSensors(): void {

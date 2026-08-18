@@ -308,6 +308,23 @@ describe('OnnxCommand: seeded rand (ADR §2)', () => {
     expect(rand[1]).toBeGreaterThanOrEqual(10);
     expect(rand[1]).toBeLessThan(11);
   });
+
+  it('feeds only what the graph declares', async () => {
+    // A term that draws nothing exports no `rand`; ORT rejects it as a feed.
+    const session = new FakeSession(() => velocityOutputs(0, 0, 0));
+    Object.assign(session, { inputNames: ['prev_vel_command_b', 'resample_mask'] });
+    const cmd = new OnnxCommand(
+      'clock',
+      { ...VELOCITY_CFG, rand_dim: 0, rand_ranges: [] },
+      null,
+      { session, rng: new SeededRng(4) },
+    );
+    await cmd.step(true);
+    expect(Object.keys(session.calls[0]).sort()).toEqual([
+      'prev_vel_command_b',
+      'resample_mask',
+    ]);
+  });
 });
 
 describe('OnnxCommand: UI override (mjlab play parity, §3a)', () => {

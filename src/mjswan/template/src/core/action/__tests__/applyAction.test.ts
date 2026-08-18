@@ -69,6 +69,43 @@ describe('applyAction — joint_position', () => {
     expect(data.ctrl[1]).toBeCloseTo(-0.2 + 0.0 + 3 * 1.0 + 0.01, 6);
   });
 
+  it('offsets from the live reference, not the default pose, when told to', () => {
+    const data = fakeData(2);
+    applyAction(
+      data,
+      [
+        term({
+          controlType: 'joint_position_reference',
+          defaultJointPos: Float32Array.from([9, 9]),
+          referenceJointPos: Float32Array.from([0.4, -0.3]),
+          actionScale: Float32Array.from([2, 2]),
+          encoderBias: Float32Array.from([0.05, 0.0]),
+        }),
+      ],
+      Float32Array.from([0.5, 1.0]),
+    );
+    expect(data.ctrl[0]).toBeCloseTo(0.4 + 2 * 0.5 - 0.05, 6);
+    expect(data.ctrl[1]).toBeCloseTo(-0.3 + 2 * 1.0, 6);
+  });
+
+  it('holds the default pose while no clip is loaded', () => {
+    // `referenceJointPos` is null until a motion arrives; zeros would fold the robot up.
+    const data = fakeData(2);
+    applyAction(
+      data,
+      [
+        term({
+          controlType: 'joint_position_reference',
+          defaultJointPos: Float32Array.from([0.4, -0.3]),
+          referenceJointPos: null,
+        }),
+      ],
+      new Float32Array(2),
+    );
+    expect(data.ctrl[0]).toBeCloseTo(0.4, 6);
+    expect(data.ctrl[1]).toBeCloseTo(-0.3, 6);
+  });
+
   it('runs the PD itself for a motor actuator', () => {
     // `biastype=none`: `ctrl` is a torque, so the browser owes the PD itself.
     const data = fakeData(1, [0.2], [0.5]);

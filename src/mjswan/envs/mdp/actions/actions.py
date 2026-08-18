@@ -146,6 +146,48 @@ class JointPositionActionCfg(BaseActionCfg):
 
 
 @dataclass(kw_only=True)
+class ReferenceJointPositionActionCfg(BaseActionCfg):
+    """Joint position targets as a motion reference plus a scaled residual.
+
+    ``q_cmd = q_ref(t) + scale * a - encoder_bias``. Identical to
+    :class:`JointPositionActionCfg` except that the offset is the tracking command's
+    reference pose for the current step, not the constant default pose.
+
+    The policy must own a command publishing ``ref_joint_pos`` — ``TrackingCommand`` does.
+    """
+
+    command_name: str = "motion"
+    """Command term supplying the reference joint positions."""
+
+    stiffness: float | list[float] | dict[str, float] | None = None
+    """Position gain (kp). mjswan-specific; see :class:`JointPositionActionCfg`."""
+
+    damping: float | list[float] | dict[str, float] | None = None
+    """Velocity gain (kd). mjswan-specific; see :class:`JointPositionActionCfg`."""
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.unsupported_reason is not None:
+            raise NotImplementedError(self.unsupported_reason)
+
+        entry: dict[str, Any] = {"type": "joint_position_reference"}
+        if self.scale != 1.0:
+            entry["scale"] = self.scale
+        if self.offset != 0.0:
+            raise ValueError(
+                "ReferenceJointPositionActionCfg takes no `offset`: the reference "
+                "joint positions are the offset, and they come from the command."
+            )
+        entry["actuator_names"] = list(self.actuator_names)
+        entry["command_name"] = self.command_name
+        if self.stiffness is not None:
+            entry["stiffness"] = self.stiffness
+        if self.damping is not None:
+            entry["damping"] = self.damping
+        self._add_clip(entry)
+        return entry
+
+
+@dataclass(kw_only=True)
 class JointVelocityActionCfg(BaseActionCfg):
     """Configuration for joint velocity control.
 

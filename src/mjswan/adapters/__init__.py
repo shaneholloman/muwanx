@@ -11,6 +11,7 @@ from .mjlab_adapter import (
     adapt_observations,
     adapt_terminations,
     resolve_action_scales,
+    resolve_pd_gains,
     resolve_runner_defaults,
 )
 from .mjlab_compat import apply_mjlab_sim_options, ensure_mjlab_extensions
@@ -22,6 +23,7 @@ __all__ = [
     "adapt_commands",
     "adapt_terminations",
     "resolve_action_scales",
+    "resolve_pd_gains",
     "MjlabRunnerDefaults",
     "resolve_runner_defaults",
     "apply_mjlab_sim_options",

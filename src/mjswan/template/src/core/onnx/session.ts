@@ -9,6 +9,8 @@ import { queueOrtRun } from './runQueue';
 /** Minimal ORT-Web surface a command/event handler needs. */
 export interface OnnxSession {
   run(feeds: Record<string, OnnxTensorLike>): Promise<Record<string, OnnxTensorLike>>;
+  /** The graph's input names, when the session knows them — see {@link declaredFeeds}. */
+  readonly inputNames?: readonly string[];
   /** Free the backing WASM memory. */
   release?(): Promise<void>;
 }
@@ -87,6 +89,27 @@ export function buildFeeds(
   return { feeds, missing: null };
 }
 
+/**
+ * `feeds` less anything the graph does not declare.
+ *
+ * The export prunes an input the body never reads — a term that draws nothing has no
+ * `rand` — and ORT rejects a feed it cannot place. Callers assemble everything they
+ * *might* owe; this drops the rest. A session not reporting its inputs is fed unchanged.
+ */
+export function declaredFeeds(
+  session: OnnxSession,
+  feeds: Record<string, OnnxTensorLike>,
+): Record<string, OnnxTensorLike> {
+  const names = session.inputNames;
+  if (!names) return feeds;
+  const declared = new Set(names);
+  const filtered: Record<string, OnnxTensorLike> = {};
+  for (const [name, tensor] of Object.entries(feeds)) {
+    if (declared.has(name)) filtered[name] = tensor;
+  }
+  return filtered;
+}
+
 function toOrtTensor(t: OnnxTensorLike): ort.Tensor {
   if (t.data instanceof Uint8Array) {
     // ORT's 'bool' dtype takes a Uint8Array of 0/1 — a direct pass-through.
@@ -107,6 +130,10 @@ function fromOrtTensor(t: ort.Tensor): OnnxTensorLike {
 /** Wraps a real ORT-Web `InferenceSession` behind the minimal `OnnxSession` shape. */
 class OrtSession implements OnnxSession {
   constructor(private readonly session: ort.InferenceSession) {}
+
+  get inputNames(): readonly string[] {
+    return this.session.inputNames;
+  }
 
   async run(feeds: Record<string, OnnxTensorLike>): Promise<Record<string, OnnxTensorLike>> {
     const ortFeeds: Record<string, ort.Tensor> = {};

@@ -16,7 +16,7 @@
 
 import { SeededRng } from '../rng';
 import { applyEntityWrites, type WriteTarget, type WriteValues } from '../event/entityWrite';
-import { buildFeeds, toFloat32 } from '../onnx/session';
+import { buildFeeds, declaredFeeds, toFloat32 } from '../onnx/session';
 import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../onnx/session';
 import { CommandDebugVisuals, type VizPrimitive } from './debugViz';
 import type { CommandConfigEntry, CommandTerm, CommandTermContext, CommandUiConfig } from './types';
@@ -232,7 +232,7 @@ export class OnnxCommand implements CommandTerm {
       dims: [this.cfg.rand_dim],
     };
 
-    const outputs = await this.deps.session.run(feeds);
+    const outputs = await this.deps.session.run(declaredFeeds(this.deps.session, feeds));
 
     for (const spec of this.cfg.state_fields) {
       const next = outputs[`next_${spec.name}`];
