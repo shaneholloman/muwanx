@@ -4,9 +4,9 @@ mjlab is a **soft dependency** — this module never fails at import time.
 When mjlab is not installed the ``adapt_*`` functions simply return their
 inputs unchanged (they are assumed to already be mjswan types).
 
-The adapter detects mjlab types by checking the module path of the class
-(``type(obj).__module__``) rather than ``isinstance``, so mjlab does not
-need to be importable for mjswan to function.
+The adapter detects mjlab types by the module path of any class in the MRO
+rather than ``isinstance``, so mjlab does not need to be importable for
+mjswan to function.
 
 Mapping strategy
 ----------------
@@ -58,9 +58,15 @@ from ..managers.termination_manager import (
 
 
 def _is_from_mjlab(obj: Any) -> bool:
-    """Check whether *obj*'s class originates from the ``mjlab`` package."""
-    module = getattr(type(obj), "__module__", "") or ""
-    return module.startswith("mjlab")
+    """Check whether *obj*'s class derives from the ``mjlab`` package.
+
+    The whole MRO, not just the leaf: a task subclassing an mjlab config to add a
+    field of its own reports its *own* module.
+    """
+    return any(
+        (getattr(klass, "__module__", "") or "").startswith("mjlab")
+        for klass in type(obj).__mro__
+    )
 
 
 # --- Observation adaptation ---

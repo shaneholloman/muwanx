@@ -677,6 +677,177 @@ class TestFlatPatchSpawnTraces:
         )
 
 
+class TestWriteTargetEntity:
+    """Which entity a traced write lands on, and how many it may land on.
+
+    The browser resolves a root write through this name, and a scene with two floating
+    bodies — a robot and a thrown ball — has a free joint each. Reading the name off an
+    `asset_cfg` param only is what left it `null`: mjlab's own terms take that param, but
+    a task's term is free to take a plain `ball_name`, and then the write went to
+    whichever free joint came first in the model. The robot got launched; the ball never
+    moved. mjlab writes per entity, so the tracer keys captures the same way.
+    """
+
+    @staticmethod
+    def _env():
+        torch = pytest.importorskip("torch")
+
+        class _Data:
+            def __init__(self):
+                self.root_link_pos_w = torch.zeros(1, 3)
+                self.default_root_state = torch.zeros(1, 13)
+
+        class _Entity:
+            def __init__(self):
+                self.data = _Data()
+                self.written = 0
+
+            def write_root_link_pose_to_sim(self, pose, env_ids=None):
+                self.written += 1
+
+            def write_root_link_velocity_to_sim(self, velocity, env_ids=None):
+                self.written += 1
+
+            def write_root_state_to_sim(self, root_state, env_ids=None):
+                self.written += 1
+
+        class _Scene(dict):
+            def __getitem__(self, name):
+                return self.setdefault(name, _Entity())
+
+            @property
+            def entities(self):
+                return {name: self[name] for name in ("robot", "ball")}
+
+        class _Env:
+            def __init__(self):
+                self.scene = _Scene()
+                self.num_envs = 1
+                self.device = "cpu"
+
+        return _Env()
+
+    @staticmethod
+    def _trace(func, params, env=None):
+        pytest.importorskip("mjlab")
+        pytest.importorskip("torch")
+        from mjswan.compile import trace_event_term
+
+        return trace_event_term(
+            func,
+            params,
+            env if env is not None else TestWriteTargetEntity._env(),
+            name="throw",
+            mode="interval",
+        )
+
+    def test_the_write_names_the_entity_it_was_made_on(self):
+        torch = pytest.importorskip("torch")
+
+        def throw(env, env_ids, ball_name="ball"):
+            ball = env.scene[ball_name]
+            ball.write_root_link_pose_to_sim(torch.zeros(1, 7), env_ids=env_ids)
+            ball.write_root_link_velocity_to_sim(torch.zeros(1, 6), env_ids=env_ids)
+
+        export = self._trace(throw, {"ball_name": "ball"})
+        assert [(w["kind"], w["entity"]) for w in export.write_targets] == [
+            ("root_pose", "ball"),
+            ("root_velocity", "ball"),
+        ]
+        # The graph output carries the entity too, so a second one cannot collide.
+        assert [w["outputs"] for w in export.write_targets] == [
+            ["ball__root_pose__pose"],
+            ["ball__root_velocity__velocity"],
+        ]
+        assert export.output_names == [
+            "ball__root_pose__pose",
+            "ball__root_velocity__velocity",
+        ]
+
+    def test_an_asset_cfg_still_names_it(self):
+        """mjlab's own convention keeps working, and stays the fallback."""
+        torch = pytest.importorskip("torch")
+        pytest.importorskip("mjlab")
+        from mjlab.managers.scene_entity_config import SceneEntityCfg
+
+        def reset(env, env_ids, asset_cfg=None):
+            env.scene[asset_cfg.name].write_root_link_pose_to_sim(
+                torch.zeros(1, 7), env_ids=env_ids
+            )
+
+        export = self._trace(reset, {"asset_cfg": SceneEntityCfg("robot")})
+        assert [w["entity"] for w in export.write_targets] == ["robot"]
+
+    def test_two_entities_each_get_their_own_target(self):
+        """One write per entity reaches the browser, as in mjlab — the robot's root and
+        the ball's are different addresses."""
+        torch = pytest.importorskip("torch")
+
+        def throw_both(env, env_ids):
+            for name in ("ball", "robot"):
+                env.scene[name].write_root_link_pose_to_sim(
+                    torch.zeros(1, 7), env_ids=env_ids
+                )
+
+        export = self._trace(throw_both, {})
+        assert [(w["kind"], w["entity"]) for w in export.write_targets] == [
+            ("root_pose", "ball"),
+            ("root_pose", "robot"),
+        ]
+        assert export.output_names == [
+            "ball__root_pose__pose",
+            "robot__root_pose__pose",
+        ]
+
+    def test_a_root_state_write_splits_into_pose_and_velocity(self):
+        """mjlab's own split of the 13-wide state, so a term using it traces as well as
+        one calling the two writes itself."""
+        torch = pytest.importorskip("torch")
+
+        def reset(env, env_ids):
+            env.scene["ball"].write_root_state_to_sim(
+                torch.zeros(1, 13), env_ids=env_ids
+            )
+
+        export = self._trace(reset, {})
+        assert [(w["kind"], w["entity"]) for w in export.write_targets] == [
+            ("root_pose", "ball"),
+            ("root_velocity", "ball"),
+        ]
+
+    def test_iterating_the_scene_never_touches_the_live_entities(self):
+        """A term walking `scene.entities` gets recording stand-ins: writing through the
+        live ones would move the tracing env under every term traced after it."""
+        torch = pytest.importorskip("torch")
+        env = self._env()
+
+        def reset_all(env, env_ids):
+            for entity in env.scene.entities.values():
+                entity.write_root_link_pose_to_sim(torch.zeros(1, 7), env_ids=env_ids)
+
+        export = self._trace(reset_all, {}, env=env)
+        assert {w["entity"] for w in export.write_targets} == {"robot", "ball"}
+        assert [e.written for e in env.scene.entities.values()] == [0, 0]
+
+    def test_an_uncaptured_write_is_refused_not_forwarded(self):
+        """Forwarding it would mutate the live env and emit no graph output for it."""
+        torch = pytest.importorskip("torch")
+
+        def spin(env, env_ids):
+            env.scene["robot"].write_root_link_velocity_b_to_sim(torch.zeros(1, 6))
+
+        with pytest.raises(ValueError, match="does not capture"):
+            self._trace(spin, {})
+
+
+def test_reset_scene_to_default_needs_no_graph():
+    """The runtime's own reset already restores every entity's default state, so mjlab's
+    default event has nothing left to write."""
+    from mjswan._onnx_build import _EVENTS_WITH_NOTHING_TO_WRITE
+
+    assert "reset_scene_to_default" in _EVENTS_WITH_NOTHING_TO_WRITE
+
+
 class TestApplyTerrainSpawn:
     """`add_scene_mjlab` swaps mjlab's root-spawn reset once the terrain has patches."""
 
