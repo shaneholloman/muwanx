@@ -108,9 +108,9 @@ obs = ObservationGroupCfg(
 | `params` | Forwarded to the function at trace time. Regex patterns in a `SceneEntityCfg` resolve to static indices and bake into the graph. |
 | `scale` | Element-wise scale, applied after `clip` (mjlab's order). |
 | `clip` | `(min, max)`, applied before `scale`. |
-| `history_length` | Number of past frames to stack. `0` = current frame only. |
-| `history_steps` | Sparse look-back offsets to stack instead of every frame — `(0, 1, 2, 4, 8, 16)` reaches 17 frames back while contributing only 6. Takes precedence over `history_length`. |
-| `history_interleaved` | Isaac-style joint-major layout (`[a0_t, a0_t-1, …, a1_t, …]`) instead of frame-major. |
+| `history_length` | Past frames to stack, **oldest first** (`[x_{t-n+1} … x_t]`), as mjlab's history buffer flattens them. `0` = current frame only. |
+| `history_steps` | Look-back offsets to stack, in the order the policy reads them, instead of a count — `(16, 8, 4, 2, 1, 0)` reaches 17 frames back at a width of 6, and `(0, 1, 2)` is `history_length=3` reversed. Takes precedence over `history_length`. |
+| `history_interleaved` | Isaac-style element-major layout (`[a0_{t-n+1}, …, a0_t, a1_…]`) instead of frame-major. |
 
 Other mjlab fields (`noise`, `delay_*`, `enable_corruption`, `nan_policy`) are accepted
 for config compatibility and ignored — there is no training in the browser.

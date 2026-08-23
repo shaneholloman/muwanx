@@ -177,6 +177,7 @@ class TestAdaptObservations:
         assert term.params == {"world_frame": True}
 
     def test_mjlab_obs_scale_and_history(self):
+        """A count carries over as a count: both sides stack oldest frame first."""
         mjlab_func = _make_mjlab_obs_func("joint_pos_rel")
         mjlab_term = FakeMjlabObsTermCfg(func=mjlab_func, scale=0.5, history_length=3)
         mjlab_group = FakeMjlabObsGroupCfg(terms={"jp": mjlab_term})
@@ -186,6 +187,46 @@ class TestAdaptObservations:
         term = result["policy"].terms["jp"]
         assert term.scale == 0.5
         assert term.history_length == 3
+        assert term.history_steps is None
+
+    def test_mjlab_group_history_carries_over(self):
+        """The count stays on the group; the serializer applies it, as mjlab does."""
+        mjlab_group = FakeMjlabObsGroupCfg(
+            terms={
+                "jp": FakeMjlabObsTermCfg(func=_make_mjlab_obs_func("joint_pos_rel")),
+                "jv": FakeMjlabObsTermCfg(
+                    func=_make_mjlab_obs_func("joint_vel_rel"), history_length=2
+                ),
+            },
+            history_length=4,
+        )
+
+        result = adapt_observations({"policy": mjlab_group})
+        assert result is not None
+        group = result["policy"]
+        assert group.history_length == 4
+        assert group.terms["jv"].history_length == 2
+
+    def test_mjlab_cfg_subclass_is_still_adapted(self):
+        """A task's subclass of an mjlab config is still mjlab: it reports its own
+        module, so checking the leaf class lets mjlab terms reach the serializer.
+        """
+
+        class TaskObsGroupCfg(FakeMjlabObsGroupCfg):  # defined here, not in mjlab
+            pass
+
+        group = TaskObsGroupCfg(
+            terms={
+                "jp": FakeMjlabObsTermCfg(func=_make_mjlab_obs_func("joint_pos_rel"))
+            },
+            history_length=4,
+        )
+
+        result = adapt_observations({"policy": group})
+        assert result is not None
+        assert isinstance(result["policy"], ObservationGroupCfg)
+        assert isinstance(result["policy"].terms["jp"], ObservationTermCfg)
+        assert result["policy"].history_length == 4
 
     def test_mjlab_asset_cfg_kept_intact_for_tracing(self):
         # A plain (non-Binding) func is traced to ONNX at build time (ADR 0005) via `func(env,

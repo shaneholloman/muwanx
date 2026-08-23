@@ -42,7 +42,7 @@ pytestmark = [pytest.mark.slow, pytest.mark.mjlab]
 COMMAND_TASKS = [
     # Stateful, with an `entity_write` side effect on the cube (§3b).
     pytest.param("Mjlab-Lift-Cube-Yam", "lift_height", id="lift-cube-yam"),
-    # Heading tracking as a dynamic slot; needs the examples-side override.
+    # Heading tracking as a dynamic slot, through the override mjswan itself binds.
     pytest.param("Mjlab-Velocity-Flat-Unitree-G1", "twist", id="velocity-flat-g1"),
     pytest.param("Mjlab-Velocity-Flat-Unitree-Go1", "twist", id="velocity-flat-go1"),
 ]
@@ -50,12 +50,11 @@ COMMAND_TASKS = [
 
 @pytest.fixture(scope="module", autouse=True)
 def _registrations() -> None:
-    """The traced command bodies live author-side; load them before resolving.
+    """`LiftingCommandCfg`'s traced body lives author-side; load it before resolving.
 
-    `examples/mjlab/defaults/commands` is what binds `UniformVelocityCommandCfg`
-    and `LiftingCommandCfg` to their traced bodies. Without it the adapter raises
-    for an unregistered class — which is how a missing import surfaces, and is the
-    same footgun that cost `g1_spinkick` its RSI jitter.
+    Without it the adapter raises for an unregistered class — the footgun that cost
+    `g1_spinkick` its RSI jitter. `UniformVelocityCommandCfg` needs no import: mjswan
+    binds that one itself.
     """
     pytest.importorskip("examples.mjlab.defaults.commands")
 
