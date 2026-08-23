@@ -3,7 +3,7 @@
 Interactive MuJoCo simulations with ONNX policies running entirely in the browser.
 """
 
-__version__ = "0.9.1"
+__version__ = "0.9.2"
 
 import os
 
