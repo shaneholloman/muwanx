@@ -274,7 +274,12 @@ def velocity_command(
     default_lin_vel_y: float = 0.0,
     default_ang_vel_z: float = 0.0,
 ) -> CommandTermConfig:
-    """Create a built-in UI command term for planar velocity control."""
+    """Three sliders the operator drives, as a ``ui_command`` preset.
+
+    Not mjlab's ``UniformVelocityCommand``: nothing resamples, and the value is
+    whatever the slider says. A scene carrying an mjlab task should pass that cfg
+    instead (``mjswan.envs.mdp.commands`` binds it) and get mjlab's own joystick.
+    """
 
     return ui_command(
         [

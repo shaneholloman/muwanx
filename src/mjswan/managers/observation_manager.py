@@ -70,23 +70,19 @@ class ObservationTermCfg:
     """(min, max) clipping range applied after scaling."""
 
     history_length: int = 0
-    """Number of past frames to stack, oldest first — ``[x_{t-n+1} … x_t]``, as
-    mjlab's chronological history buffer flattens them. 0 = current only."""
+    """Past frames to stack, oldest first (``[x_{t-n+1} … x_t]``), as mjlab's history
+    buffer flattens them. 0 = current only."""
 
     history_steps: tuple[int, ...] | None = None
     """Look-back offsets to stack, in the order the policy reads them, instead of a
-    count of frames.
-
-    Two things a count cannot say. A *sparse* window — e.g. ``(16, 8, 4, 2, 1, 0)`` —
-    reaches 17 frames back while contributing only 6, keeping the term's width at
-    ``len(history_steps)`` where ``history_length`` would give 17. And a different
-    *order*: ``(0, 1, 2, 3)`` stacks four frames newest-first, the reverse of
-    ``history_length=4``. Takes precedence over ``history_length`` when both are set."""
+    count. Says two things a count cannot: a *sparse* window — ``(16, 8, 4, 2, 1, 0)``
+    reaches 17 frames back at a width of 6, where ``history_length`` would give 17 — and
+    a different *order*, ``(0, 1, 2, 3)`` being ``history_length=4`` reversed. Takes
+    precedence over ``history_length`` when both are set."""
 
     history_interleaved: bool = False
-    """Isaac-style element-major history layout: ``[a0_{t-n+1}, …, a0_t, a1_…]``
-    instead of frame-major (``[x_{t-n+1}, …, x_t]``, each the full vector). Only
-    meaningful when history is stacked at all."""
+    """Isaac-style element-major layout — ``[a0_{t-n+1}, …, a0_t, a1_…]`` instead of
+    frame-major ``[x_{t-n+1}, …, x_t]``. Only meaningful alongside history."""
 
     flatten_history_dim: bool = True
     """Whether to flatten history into the feature dimension.

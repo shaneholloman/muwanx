@@ -46,8 +46,7 @@ from mjswan.trace_env import build_single_entity_trace_env  # noqa: E402
 # own trace env via SceneHandle.set_trace_env, and the terms below are written against
 # the same live-env API mjlab's own use. ---
 
-#: Three frames, newest first. `history_length` stacks chronologically (mjlab's order);
-#: these Go2 checkpoints were trained on the reverse, so they name the offsets.
+#: Newest first: these Go2 checkpoints predate `history_length` stacking chronologically.
 GO2_HISTORY_STEPS = (0, 1, 2)
 
 

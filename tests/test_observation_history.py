@@ -69,8 +69,7 @@ def test_group_history_overrides_a_terms_own_length():
 
 
 def test_a_group_zero_switches_history_off():
-    """mjlab assigns the group's count whenever it is set, so an explicit 0 is an
-    instruction, not an absent value."""
+    """mjlab assigns the group's count whenever set, so an explicit 0 is an instruction."""
     entry = _entry(_term(history_length=4), group_history=0)
     assert "history_length" not in entry
     assert "history_offsets" not in entry

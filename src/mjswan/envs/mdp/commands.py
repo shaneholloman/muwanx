@@ -1,17 +1,13 @@
 """Trace-friendly rewrites of mjlab command bodies, and their registrations.
 
-The other ``envs/mdp`` submodules reimplement nothing: a task's own function object is
-traced as-is. A *command* is a class, not a function, and two of mjlab's use constructs
-the tracer cannot follow — ``Tensor.uniform_`` draws its RNG spy cannot see, and
-per-``env_ids`` index assignment that branches on live data. ``CommandBinding``'s
-``trace_override`` exists for exactly this: the term is rebound to a body that is
-equivalent at ``N=1`` and expressible as one graph, then traced.
+A command is a class, not a function, and mjlab's use constructs the tracer cannot
+follow: ``Tensor.uniform_`` draws its RNG spy cannot see, and per-``env_ids`` assignment
+that branches on live data. ``CommandBinding.trace_override`` rebinds the term to a body
+equivalent at ``N=1`` and expressible as one graph.
 
-A rewrite is a second copy of mjlab's math, so it has to be read against the original
-whenever mjlab moves. ``tests/test_velocity_command.py`` pins the two bodies against a
-live mjlab term, which the command parity harness cannot do: it traces the *overridden*
-term and compares the graph against that same term, so it only ever checks
-"graph == override", never "override == mjlab".
+Each rewrite is a second copy of mjlab's math, so it has to be reread whenever mjlab
+moves. ``tests/test_velocity_command.py`` pins it against a live mjlab term, which the
+parity harness cannot: that only ever checks "graph == override".
 """
 
 from __future__ import annotations
@@ -22,8 +18,8 @@ from typing import Any
 from ...command import CommandBinding, register_command
 
 try:
-    # Module-level, not deferred: the tracer's RNG spy patches a term body's *module
-    # globals*, so `sample_uniform` has to be one of ours to be seen at all.
+    # Module-level, not deferred: the RNG spy patches a term body's *module globals*,
+    # so `sample_uniform` has to be one of ours to be seen.
     import torch
     from mjlab.utils.lab_api.math import sample_uniform, wrap_to_pi
 except ImportError:
@@ -35,8 +31,7 @@ except ImportError:
 #: `UniformVelocityCommand`'s floor on a forward-only env's commanded speed.
 _FORWARD_MIN_SPEED = 0.3
 
-#: Cfg fields whose behaviour the rewrite below does not carry, and what each does.
-#: Reaching one is a build error rather than a silent difference in the browser.
+#: Cfg fields the rewrite does not carry: a build error, not a silent difference.
 _UNMODELLED_FIELDS: tuple[tuple[str, str], ...] = (
     (
         "init_velocity_prob",
@@ -49,9 +44,8 @@ _UNMODELLED_FIELDS: tuple[tuple[str, str], ...] = (
 def _resample_velocity_command(self: Any, env_ids: Any) -> None:
     """``UniformVelocityCommand._resample_command``, as one graph at ``N=1``.
 
-    mjlab assigns through ``env_ids`` and draws with ``Tensor.uniform_``; this draws
-    with ``sample_uniform`` and selects with ``torch.where``, in mjlab's own order:
-    the world-frame reference is the raw sample, copied *before* the forward clamp.
+    In mjlab's own order: the world-frame reference is the raw sample, copied *before*
+    the forward clamp.
     """
     cfg = self.cfg
     ranges = cfg.ranges
@@ -87,9 +81,8 @@ def _resample_velocity_command(self: Any, env_ids: Any) -> None:
 def _update_velocity_command(self: Any) -> None:
     """``UniformVelocityCommand._update_command``, as one graph at ``N=1``.
 
-    Heading-tracking envs re-derive yaw from the heading error every step, world-frame
-    envs rotate their stored reference into the body frame, and standing envs are
-    zeroed last — the order mjlab applies them in.
+    Heading tracking, then the world-frame rotation, then standing zeroed last — the
+    order mjlab applies them in.
     """
     cfg = self.cfg
     heading_w = self.robot.data.heading_w

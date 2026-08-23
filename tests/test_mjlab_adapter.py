@@ -190,8 +190,7 @@ class TestAdaptObservations:
         assert term.history_steps is None
 
     def test_mjlab_group_history_carries_over(self):
-        """The group's own count stays on the group, where the serializer applies it to
-        every term — as mjlab's manager does."""
+        """The count stays on the group; the serializer applies it, as mjlab does."""
         mjlab_group = FakeMjlabObsGroupCfg(
             terms={
                 "jp": FakeMjlabObsTermCfg(func=_make_mjlab_obs_func("joint_pos_rel")),
@@ -209,11 +208,8 @@ class TestAdaptObservations:
         assert group.terms["jv"].history_length == 2
 
     def test_mjlab_cfg_subclass_is_still_adapted(self):
-        """A task subclassing an mjlab config to add a field of its own is still mjlab.
-
-        The subclass reports its own module, so a check on the class alone passes it
-        through unadapted — and the mjlab *terms* inside it then reach the serializer,
-        which fails on the first mjswan-only field.
+        """A task's subclass of an mjlab config is still mjlab: it reports its own
+        module, so checking the leaf class lets mjlab terms reach the serializer.
         """
 
         class TaskObsGroupCfg(FakeMjlabObsGroupCfg):  # defined here, not in mjlab

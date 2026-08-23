@@ -58,11 +58,8 @@ from ..managers.termination_manager import (
 
 
 def _is_from_mjlab(obj: Any) -> bool:
-    """Check whether *obj*'s class derives from the ``mjlab`` package.
-
-    The whole MRO, not just the leaf: a task subclassing an mjlab config to add a
-    field of its own reports its *own* module.
-    """
+    """Whether any class in *obj*'s MRO comes from ``mjlab``: a task's subclass of an
+    mjlab config reports its own module, so the leaf class alone is not enough."""
     return any(
         (getattr(klass, "__module__", "") or "").startswith("mjlab")
         for klass in type(obj).__mro__

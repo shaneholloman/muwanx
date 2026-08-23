@@ -131,8 +131,7 @@ def _apply_observation_pipeline(
         )
     if term_cfg.clip is not None:
         entry["clip"] = list(term_cfg.clip)
-    # A group count replaces the term's whenever it is set, `0` included, as mjlab's
-    # own `ObservationManager` does.
+    # A group count replaces the term's whenever set, `0` included, as mjlab does.
     history = (
         group_history_length
         if group_history_length is not None

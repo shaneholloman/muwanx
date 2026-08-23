@@ -680,12 +680,9 @@ class TestFlatPatchSpawnTraces:
 class TestWriteTargetEntity:
     """Which entity a traced write lands on, and how many it may land on.
 
-    The browser resolves a root write through this name, and a scene with two floating
-    bodies — a robot and a thrown ball — has a free joint each. Reading the name off an
-    `asset_cfg` param only is what left it `null`: mjlab's own terms take that param, but
-    a task's term is free to take a plain `ball_name`, and then the write went to
-    whichever free joint came first in the model. The robot got launched; the ball never
-    moved. mjlab writes per entity, so the tracer keys captures the same way.
+    Reading the name off an `asset_cfg` param alone left it `null` for a term taking a
+    plain `ball_name`, and the write then went to the model's *first* free joint: the
+    robot got launched, the ball never moved. mjlab writes per entity, so does the key.
     """
 
     @staticmethod
@@ -779,8 +776,7 @@ class TestWriteTargetEntity:
         assert [w["entity"] for w in export.write_targets] == ["robot"]
 
     def test_two_entities_each_get_their_own_target(self):
-        """One write per entity reaches the browser, as in mjlab — the robot's root and
-        the ball's are different addresses."""
+        """One write per entity, as in mjlab: the two roots are different addresses."""
         torch = pytest.importorskip("torch")
 
         def throw_both(env, env_ids):
@@ -800,8 +796,7 @@ class TestWriteTargetEntity:
         ]
 
     def test_a_root_state_write_splits_into_pose_and_velocity(self):
-        """mjlab's own split of the 13-wide state, so a term using it traces as well as
-        one calling the two writes itself."""
+        """mjlab's own split of the 13-wide state, so such a term traces too."""
         torch = pytest.importorskip("torch")
 
         def reset(env, env_ids):
@@ -816,8 +811,7 @@ class TestWriteTargetEntity:
         ]
 
     def test_iterating_the_scene_never_touches_the_live_entities(self):
-        """A term walking `scene.entities` gets recording stand-ins: writing through the
-        live ones would move the tracing env under every term traced after it."""
+        """Stand-ins: writing through the live ones would move the sim under later terms."""
         torch = pytest.importorskip("torch")
         env = self._env()
 
@@ -841,8 +835,7 @@ class TestWriteTargetEntity:
 
 
 def test_reset_scene_to_default_needs_no_graph():
-    """The runtime's own reset already restores every entity's default state, so mjlab's
-    default event has nothing left to write."""
+    """The runtime's reset already restores every default, so nothing is left to write."""
     from mjswan._onnx_build import _EVENTS_WITH_NOTHING_TO_WRITE
 
     assert "reset_scene_to_default" in _EVENTS_WITH_NOTHING_TO_WRITE

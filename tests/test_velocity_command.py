@@ -2,18 +2,11 @@
 
 Layer: L1 (no env build, no trace — the term is constructed against a stand-in env).
 
-mjswan cannot trace `UniformVelocityCommand` as written: it draws with
-`Tensor.uniform_`, which the tracer's RNG spy cannot see, and assigns through
-`env_ids`, which branches on live data. `mjswan.envs.mdp.commands` rebinds the two
-bodies to equivalents built from `sample_uniform` and `torch.where`.
-
-That makes the rewrite a second copy of mjlab's math, and **the command parity harness
-cannot check it**: `run_command_parity` traces the *overridden* term and compares the
-graph against that same term, so it only ever establishes "graph == override". Whether
-"override == mjlab" holds is what this file pins. Getting it wrong is silent — the
-policy receives a well-formed command of the right width that mjlab would not have
-issued (a forward-only env that never goes forward-only, say, which is 20% of
-resamples in mjlab's own velocity tasks).
+The rewrite in `mjswan.envs.mdp.commands` is a second copy of mjlab's math, and the
+parity harness cannot check it: `run_command_parity` traces the *overridden* term and
+compares the graph against that same term, so it only establishes "graph == override".
+"override == mjlab" is what this file pins. Getting it wrong is silent — a well-formed
+command of the right width that mjlab would not have issued.
 """
 
 from __future__ import annotations
@@ -36,11 +29,8 @@ HEADING_W = 0.7
 
 
 class _FakeEnv:
-    """Enough env for `CommandTerm.__init__`: `num_envs`, `device`, and the entity.
-
-    `ManagerTermBase` only stores `env` and reads those through properties, so no
-    scene is compiled and the test stays out of the `slow` tier.
-    """
+    """Enough env for `CommandTerm.__init__`: `num_envs`, `device`, and the entity. No
+    scene is compiled, so these tests stay out of the `slow` tier."""
 
     def __init__(self, heading: float = HEADING_W):
         robot = type(
@@ -75,8 +65,7 @@ def _cfg(**overrides) -> UniformVelocityCommandCfg:
 
 
 #: A command mid-episode. `ang_vel_z` is deliberately *not* what heading tracking would
-#: produce for (`heading_target`, `HEADING_W`) — otherwise the heading cases pass
-#: whether or not the rewrite tracks heading at all.
+#: produce, or the heading cases pass whether the rewrite tracks heading or not.
 _SEED = {
     "vel_command_b": [[0.4, -0.3, -0.45]],
     "vel_command_w": [[0.9, 0.2, -0.1]],
@@ -102,8 +91,7 @@ def _pair(cfg):
 
 
 def test_the_binding_ships_with_mjswan():
-    """It used to live in `examples/`, so a project outside the repo could not reach it
-    and hand-wrote sliders instead."""
+    """It used to live in `examples/`, out of reach of any project outside this repo."""
     binding = _custom_registry["UniformVelocityCommandCfg"]
     assert binding.is_onnx_traced
     assert binding.command_field == "vel_command_b"
@@ -126,8 +114,7 @@ def test_update_command_matches_mjlab(heading, world, standing):
 
 
 def test_heading_tracking_actually_moves_the_yaw():
-    """Guards the test above: without this, a rewrite ignoring `is_heading_env`
-    entirely would still pass every case."""
+    """Guards the test above: a rewrite ignoring `is_heading_env` would still pass it."""
     live, _ = _pair(_cfg())
     _seed(live, heading=True, world=False, standing=False)
     live._update_command()
@@ -137,8 +124,7 @@ def test_heading_tracking_actually_moves_the_yaw():
 
 
 def test_heading_command_off_is_respected():
-    """The cfg default is `False`, and then mjlab never touches yaw — even with
-    `is_heading_env` set, which it would not have sampled."""
+    """With the cfg default `False`, mjlab never touches yaw, even with `is_heading_env`."""
     cfg = _cfg(
         heading_command=False,
         ranges=UniformVelocityCommandCfg.Ranges(
@@ -157,8 +143,8 @@ def test_heading_command_off_is_respected():
 
 
 def test_a_forward_only_env_gets_mjlabs_clamp():
-    """mjlab's velocity tasks set `rel_forward_envs=0.2`, and `play=True` does not
-    clear it, so a rewrite without this differs from mjlab one resample in five."""
+    """mjlab's velocity tasks set `rel_forward_envs=0.2` and `play=True` keeps it, so
+    without this the rewrite differs one resample in five."""
     _, rewritten = _pair(_cfg(rel_forward_envs=1.0))
     torch.manual_seed(0)
     rewritten._resample_command(torch.arange(1))

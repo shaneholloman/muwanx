@@ -727,6 +727,8 @@ mjswan.velocity_command(
 
 Build a standard `"velocity"` command group (three sliders: `lin_vel_x`, `lin_vel_y`, `ang_vel_z`). Pass it via `commands={"velocity": mjswan.velocity_command(...)}` to `add_policy()`.
 
+This is a manual control panel, not mjlab's `UniformVelocityCommand` — nothing resamples, and the command is whatever the slider says. A scene built on an mjlab task should pass `UniformVelocityCommandCfg` itself, which mjswan binds to a traced term and gives mjlab's own joystick (Enable + per-axis `Max` + `Zero`).
+
 ### register_command
 
 ```python
@@ -909,9 +911,9 @@ API-compatible with their mjlab counterparts, so an mjlab config assigns straigh
 | `params` | `dict` | `{}` | Forwarded at trace time. `SceneEntityCfg` patterns resolve to static indices baked into the graph. |
 | `scale` | `float \| tuple \| None` | `None` | Element-wise scale, applied after `clip`. |
 | `clip` | `tuple[float, float] \| None` | `None` | Applied before `scale`, matching mjlab's order. |
-| `history_length` | `int` | `0` | Frames to stack. `0` = current frame only. |
-| `history_steps` | `tuple[int, ...] \| None` | `None` | Sparse look-back offsets instead of every frame — `(0, 1, 2, 4, 8, 16)` reaches 17 frames back with 6 values. Takes precedence over `history_length`. |
-| `history_interleaved` | `bool` | `False` | Isaac-style joint-major layout instead of frame-major. |
+| `history_length` | `int` | `0` | Frames to stack, **oldest first** (`[x_{t-n+1} … x_t]`), as mjlab's history buffer flattens them. `0` = current frame only. |
+| `history_steps` | `tuple[int, ...] \| None` | `None` | Look-back offsets in the order the policy reads them, instead of a count — `(16, 8, 4, 2, 1, 0)` reaches 17 frames back with 6 values, and `(0, 1, 2)` is `history_length=3` reversed. Takes precedence over `history_length`. |
+| `history_interleaved` | `bool` | `False` | Isaac-style element-major layout instead of frame-major. |
 
 `noise`, `delay_*`, and `flatten_history_dim` are accepted for mjlab compatibility and
 ignored — there is no training in the browser.
@@ -921,7 +923,7 @@ ignored — there is no training in the browser.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `terms` | `dict[str, ObservationTermCfg]` | `{}` | Concatenated in declaration order. |
-| `history_length` | `int \| None` | `None` | Group-level override applied to every term. |
+| `history_length` | `int \| None` | `None` | Group-level override applied to every term whenever it is set — `0` included, which switches the group's history off, as in mjlab. |
 
 `concatenate_terms`, `enable_corruption`, and `flatten_history_dim` are accepted and
 ignored.

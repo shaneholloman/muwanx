@@ -725,19 +725,14 @@ _WRITE_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-#: A write is keyed by the entity it was made on as well as its kind: one term may
-#: write several entities — mjlab's own `reset_scene_to_default` writes every entity
-#: in the scene — and each needs its own outputs and its own target.
+#: Keyed by entity as well as kind: one term may write several entities (mjlab's
+#: `reset_scene_to_default` writes them all), each needing its own target and outputs.
 WriteKey = tuple[str | None, str]
 WriteCaptures = dict[WriteKey, tuple[torch.Tensor, ...]]
 
 
 def _write_output_name(key: WriteKey, field_name: str) -> str:
-    """Graph-output name for one written tensor.
-
-    Unprefixed when the write carries no entity, which is what a single-entity command
-    term records.
-    """
+    """Graph-output name for one written tensor; unprefixed when no entity was named."""
     entity, kind = key
     return f"{entity}__{kind}__{field_name}" if entity else f"{kind}__{field_name}"
 
@@ -745,12 +740,11 @@ def _write_output_name(key: WriteKey, field_name: str) -> str:
 class _WriteCaptureMixin:
     """Records ``write_*_to_sim`` calls into ``self._captures``.
 
-    A term names its target however it likes — mjlab's own convention is an
-    ``asset_cfg`` param, but a task is free to take a plain ``ball_name`` — so the
-    entity comes from the write itself rather than from the params.
+    The entity comes from the write itself, not the params: a term names its target
+    however it likes (``asset_cfg``, or a plain ``ball_name``).
     """
 
-    #: Entity this proxy stands for; None for a command term whose cfg names none.
+    #: Entity this proxy stands for; None when the cfg names none.
     _name: str | None
     _captures: WriteCaptures
 
@@ -851,9 +845,8 @@ class _EvRecScene:
 
     def __getattr__(self, name: str) -> Any:
         if name == "entities":
-            # Recording stand-ins, not the live entities: a term that iterates the
-            # scene (mjlab's `reset_scene_to_default`) would otherwise write straight
-            # into the tracing env, leaving every later term traced against a moved sim.
+            # Stand-ins, not the live entities: a term iterating the scene would
+            # otherwise write into the tracing env, moving the sim under later terms.
             return {
                 key: _EvRecEntity(real, key, self._log, self._captures)
                 for key, real in self._real.entities.items()
@@ -917,8 +910,8 @@ class _EvReplayScene:
 
     def __getattr__(self, name: str) -> Any:
         if name == "entities":
-            # Which entities the scene holds is static structure, so it comes from the
-            # real env, as `num_envs` does — only their tensors are recorded slots.
+            # Static structure, so it comes from the real env, as `num_envs` does —
+            # only the entities' tensors are recorded slots.
             return {
                 key: _EvReplayEntity(key, self._served, self._captures)
                 for key in self._real_env.scene.entities
@@ -1093,8 +1086,7 @@ def trace_event_term(
         opset=opset,
     )
 
-    # The write itself says which entity it landed on; `asset_cfg` is the fallback for a
-    # term whose write the proxies did not attribute.
+    # The write says which entity it landed on; `asset_cfg` is the fallback.
     asset_cfg = params.get("asset_cfg")
     asset_name = getattr(asset_cfg, "name", None)
     write_targets = []

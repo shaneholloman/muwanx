@@ -52,9 +52,9 @@ COMMAND_TASKS = [
 def _registrations() -> None:
     """`LiftingCommandCfg`'s traced body lives author-side; load it before resolving.
 
-    Without it the adapter raises for an unregistered class — which is how a missing
-    import surfaces, and is the same footgun that cost `g1_spinkick` its RSI jitter.
-    `UniformVelocityCommandCfg` no longer needs it: mjswan binds that one itself.
+    Without it the adapter raises for an unregistered class — the footgun that cost
+    `g1_spinkick` its RSI jitter. `UniformVelocityCommandCfg` needs no import: mjswan
+    binds that one itself.
     """
     pytest.importorskip("examples.mjlab.defaults.commands")
 
