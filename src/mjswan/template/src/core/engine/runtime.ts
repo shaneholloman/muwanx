@@ -43,7 +43,7 @@ import type { PolicyConfig } from '../policy/types';
 import { TrackingPolicy } from '../policy/modules/TrackingPolicy';
 import { LocomotionPolicy } from '../policy/modules/LocomotionPolicy';
 import { CommandManager, type CommandTermContext, type CommandsConfig } from '../command';
-import { EventManager } from '../event/EventManager';
+import { EventManager, type EventControl } from '../event/EventManager';
 import { Events } from '../event/events';
 import type { EventConfig, EventContext, TerrainData } from '../event/EventBase';
 import { OnnxSessionCache, type SlotReader } from '../onnx/session';
@@ -631,6 +631,32 @@ export class mjswanRuntime {
   /** The seed this instance's traced terms draw from, so an app can persist it. */
   get seed(): number {
     return this.termSeed;
+  }
+
+  /** The event controls this scene offers: a button per manual term, a checkbox per interval. */
+  eventControls(): EventControl[] {
+    return this.eventManager?.controls() ?? [];
+  }
+
+  /** Fire one `mode="manual"` event term — the operator pressed its button. */
+  async fireEvent(name: string): Promise<void> {
+    if (!this.eventManager || !this.mjModel || !this.mjData) return;
+    try {
+      await this.eventManager.fire(name, this.eventContext());
+    } catch (error) {
+      console.warn(`[mjswanRuntime] manual event "${name}" failed:`, error);
+      return;
+    }
+    // Publish the write even while paused, so the operator sees what they asked for.
+    if (!this.running && this.mjModel && this.mjData) {
+      this.mujoco.mj_forward(this.mjModel, this.mjData);
+      this.updateCachedState();
+    }
+  }
+
+  /** Start or stop one `mode="interval"` term's schedule. */
+  setEventArmed(name: string, armed: boolean): void {
+    this.eventManager?.setArmed(name, armed);
   }
 
   /** Resume the physics loop (rendering runs continuously regardless). */

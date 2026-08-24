@@ -16,6 +16,7 @@ import type {
   CommandDescriptor,
   CreateEngineOptions,
   DebugVisControls,
+  EventControls,
   MjswanEngine,
   MjswanEngineState,
   PolicyInput,
@@ -83,6 +84,7 @@ class Engine implements MjswanEngine {
   readonly camera: CameraControls;
   readonly commands: CommandControls;
   readonly debugVis: DebugVisControls;
+  readonly events: EventControls;
 
   constructor(runtime: mjswanRuntime) {
     this.runtime = runtime;
@@ -102,6 +104,17 @@ class Engine implements MjswanEngine {
     this.debugVis = {
       set: (term, enabled) => this.runtime.commands.setDebugVisEnabled(term, enabled),
     };
+    this.events = {
+      // Refresh either way: a manual fire changes nothing in the state, but an arm
+      // toggle does, and the panel reads its checkbox from there.
+      fire: (name) => {
+        void this.runtime.fireEvent(name);
+      },
+      setArmed: (name, armed) => {
+        this.runtime.setEventArmed(name, armed);
+        this.refresh();
+      },
+    };
   }
 
   private onCommandEvent: CommandEventListener = () => this.refresh();
@@ -116,6 +129,7 @@ class Engine implements MjswanEngine {
       commands: cm.getCommands().map(toDescriptor),
       commandValues: cm.getValues(),
       debugVis: cm.getDebugVisTerms().map(({ name, enabled }) => ({ term: name, enabled })),
+      events: this.runtime.eventControls(),
       termSeed: this.runtime.seed,
     };
   }

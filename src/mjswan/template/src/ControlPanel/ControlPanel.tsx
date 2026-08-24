@@ -23,7 +23,7 @@ import FloatingPanel from './FloatingPanel';
 import { LabeledInput } from './LabeledInput';
 import { CommandSection } from './CommandSection';
 import { SplatSection } from './SplatSection';
-import type { CommandDescriptor, DebugVisDescriptor } from '../engine';
+import type { CommandDescriptor, DebugVisDescriptor, EventDescriptor } from '../engine';
 
 export interface SelectOption {
   value: string;
@@ -66,6 +66,12 @@ interface ControlPanelProps {
   commandValues: Record<string, number>;
   /** Write a slider/checkbox command value (engine.commands.set). */
   onCommandChange: (id: string, value: number) => void;
+  /** Event terms the operator can drive: manual buttons, interval schedules. */
+  events?: EventDescriptor[];
+  /** Fire a `mode="manual"` event term (engine.events.fire). */
+  onEventFire?: (name: string) => void;
+  /** Start or stop a `mode="interval"` term's schedule (engine.events.setArmed). */
+  onEventArmedChange?: (name: string, armed: boolean) => void;
   /** Command terms with a debug drawing to toggle. */
   debugVis?: DebugVisDescriptor[];
   /** Show or hide one term's debug drawing (engine.debugVis.set). */
@@ -271,6 +277,9 @@ function ControlPanel(props: ControlPanelProps) {
     commands,
     commandValues,
     onCommandChange,
+    events = [],
+    onEventFire,
+    onEventArmedChange,
     debugVis = [],
     onDebugVisChange,
     onReset,
@@ -667,6 +676,46 @@ function ControlPanel(props: ControlPanelProps) {
                 );
               })}
             </>
+          )}
+
+          {/* Events — the scene's disturbances: a button to fire one, a checkbox to
+              let its schedule run. Scene-level, so no policy is needed to drive them. */}
+          {events.length > 0 && (
+            <CommandSection label="Events" expandByDefault={true}>
+              {events.filter((event) => event.kind === 'manual').length > 0 && (
+                <Box px="xs" pb="0.375em" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375em' }}>
+                  {events
+                    .filter((event) => event.kind === 'manual')
+                    .map((event) => (
+                      <Button
+                        key={event.name}
+                        size="compact-xs"
+                        variant="light"
+                        radius="xs"
+                        onClick={() => onEventFire?.(event.name)}
+                        disabled={!onEventFire}
+                      >
+                        {event.label}
+                      </Button>
+                    ))}
+                </Box>
+              )}
+              {events
+                .filter((event) => event.kind === 'interval')
+                .map((event) => (
+                  <Box key={event.name} px="xs" pb="0.375em">
+                    <Checkbox
+                      label={event.label}
+                      checked={event.armed}
+                      onChange={(changed) =>
+                        onEventArmedChange?.(event.name, changed.currentTarget.checked)
+                      }
+                      disabled={!onEventArmedChange}
+                      size="xs"
+                    />
+                  </Box>
+                ))}
+            </CommandSection>
           )}
 
           {/* Debug Viz — mjlab's own folder, one checkbox per drawing term. */}

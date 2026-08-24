@@ -51,6 +51,30 @@ describe('IntervalTrigger', () => {
     expect(fired).toBeLessThanOrEqual(30);
   });
 
+  it('does not fire while disarmed, and does not bank the wait', () => {
+    // The operator's "auto off": the countdown stops rather than piling up, so
+    // re-arming cannot fire the disturbance on the very next frame.
+    const t = new IntervalTrigger({ intervalRangeS: [1.0, 1.0] }, new SeededRng(1));
+    t.setArmed(false);
+    let fired = 0;
+    for (let i = 0; i < 40; i++) if (t.tick(0.25)) fired++;
+    expect(fired).toBe(0);
+    expect(t.isArmed).toBe(false);
+
+    t.setArmed(true);
+    expect(t.isArmed).toBe(true);
+    expect(t.secondsUntilNextFiring).toBeCloseTo(1.0, 6);
+    for (let i = 0; i < 3; i++) expect(t.tick(0.25)).toBe(false);
+    expect(t.tick(0.25)).toBe(true);
+  });
+
+  it('arming an already-armed timer leaves its countdown alone', () => {
+    const t = new IntervalTrigger({ intervalRangeS: [1.0, 1.0] }, new SeededRng(1));
+    t.tick(0.75);
+    t.setArmed(true);
+    expect(t.secondsUntilNextFiring).toBeCloseTo(0.25, 6);
+  });
+
   it('per-episode timers restart on reset; global timers keep running', () => {
     const perEpisode = new IntervalTrigger(
       { intervalRangeS: [1.0, 1.0], isGlobalTime: false },

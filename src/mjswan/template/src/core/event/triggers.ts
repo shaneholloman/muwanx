@@ -9,7 +9,7 @@
 
 import type { SeededRng } from '../rng';
 
-export type EventMode = 'startup' | 'reset' | 'interval';
+export type EventMode = 'startup' | 'reset' | 'interval' | 'manual';
 
 export interface IntervalTriggerConfig {
   /** `[min, max]` seconds between firings, resampled after each firing. */
@@ -21,6 +21,7 @@ export interface IntervalTriggerConfig {
 /** Countdown timer for one `mode="interval"` event term. */
 export class IntervalTrigger {
   private timeLeft: number;
+  private armed = true;
 
   constructor(
     private readonly config: IntervalTriggerConfig,
@@ -34,6 +35,7 @@ export class IntervalTrigger {
    * long `dt` cannot drift the average rate, but still fires only once.
    */
   tick(dt: number): boolean {
+    if (!this.armed) return false;
     this.timeLeft -= dt;
     if (this.timeLeft > 0) return false;
     this.timeLeft += this.sampleInterval();
@@ -44,6 +46,21 @@ export class IntervalTrigger {
   /** Episode reset: per-episode timers restart, global timers keep running. */
   onReset(): void {
     if (!this.config.isGlobalTime) this.timeLeft = this.sampleInterval();
+  }
+
+  /**
+   * Arm or disarm the schedule, for an operator who wants the disturbance on demand
+   * only. A disarmed timer does not count down, and re-arming samples a fresh interval:
+   * a countdown that had run while disarmed would fire the instant it came back.
+   */
+  setArmed(armed: boolean): void {
+    if (armed === this.armed) return;
+    this.armed = armed;
+    if (armed) this.timeLeft = this.sampleInterval();
+  }
+
+  get isArmed(): boolean {
+    return this.armed;
   }
 
   get secondsUntilNextFiring(): number {

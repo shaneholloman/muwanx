@@ -19,6 +19,17 @@ export interface EventManagerDeps {
   readSlot?: SlotReader;
 }
 
+/** One control the panel offers for an event term. */
+export interface EventControl {
+  name: string;
+  /** The term's own `label`, or its name when it declared none. */
+  label: string;
+  /** `manual` renders a button, `interval` an arm checkbox. */
+  kind: 'manual' | 'interval';
+  /** `interval` only: whether its schedule is running. Always true for `manual`. */
+  armed: boolean;
+}
+
 /** A plugin-supplied event class — reset-only, no traced graph. */
 type PluginTerm = { kind: 'plugin'; term: EventBase; trigger: ResetTrigger };
 type OnnxResetTerm = { kind: 'onnx'; term: OnnxEvent; trigger: ResetTrigger };
@@ -27,7 +38,8 @@ type ResetEntry = PluginTerm | OnnxResetTerm;
 /**
  * Mode-aware event dispatch: `mode="reset"` terms fire on episode reset behind a
  * `ResetTrigger`, `mode="interval"` on the frames their `IntervalTrigger` allows,
- * `mode="startup"` once.
+ * `mode="startup"` once, and `mode="manual"` only when {@link fire} is called — the
+ * control panel's button, which is the whole schedule such a term has.
  *
  * One graph per term, unfused — the reference tasks have at most two reset terms and
  * none of the other modes, and fusing would have to reproduce the config-order write
@@ -36,6 +48,7 @@ type ResetEntry = PluginTerm | OnnxResetTerm;
 export class EventManager {
   private resetTerms: ResetEntry[] = [];
   private intervalTerms: Array<{ term: OnnxEvent; trigger: IntervalTrigger }> = [];
+  private manualTerms: OnnxEvent[] = [];
   private startupTerms: Array<{ term: OnnxEvent; trigger: StartupTrigger }> = [];
   /** Model-field randomizations, applied once by `startup()` (see `modelFieldDr`). */
   private modelFieldTerms: Array<{ config: ModelFieldDrConfig; trigger: StartupTrigger }> = [];
@@ -65,6 +78,9 @@ export class EventManager {
         }
         const term = new OnnxEvent(config, { session, rng: deps.rng, readSlot: deps.readSlot });
         switch (config.mode) {
+          case 'manual':
+            this.manualTerms.push(term);
+            break;
           case 'startup':
             this.startupTerms.push({ term, trigger: new StartupTrigger() });
             break;
@@ -151,6 +167,46 @@ export class EventManager {
   }
 
   /**
+   * Fire one `mode="manual"` term by name — the operator asked for it, so it fires
+   * whatever the interval terms are doing. `OnnxEvent.fire` drops a call that arrives
+   * while its own graph is still running, so a held-down button cannot queue a backlog.
+   */
+  async fire(name: string, context: EventContext): Promise<void> {
+    const term = this.manualTerms.find(entry => entry.name === name);
+    if (!term) {
+      console.warn(`[EventManager] No mode="manual" event named "${name}".`);
+      return;
+    }
+    await term.fire(context);
+  }
+
+  /** Start or stop one `mode="interval"` term's schedule. False if there is no such term. */
+  setArmed(name: string, armed: boolean): boolean {
+    const entry = this.intervalTerms.find(({ term }) => term.name === name);
+    if (!entry) return false;
+    entry.trigger.setArmed(armed);
+    return true;
+  }
+
+  /** What the control panel can offer: a button per manual term, a checkbox per interval one. */
+  controls(): EventControl[] {
+    return [
+      ...this.manualTerms.map(term => ({
+        name: term.name,
+        label: term.config.label ?? term.name,
+        kind: 'manual' as const,
+        armed: true,
+      })),
+      ...this.intervalTerms.map(({ term, trigger }) => ({
+        name: term.name,
+        label: term.config.label ?? term.name,
+        kind: 'interval' as const,
+        armed: trigger.isArmed,
+      })),
+    ];
+  }
+
+  /**
    * Fire every `mode="reset"` term whose gate allows it, **in config order**. Sequential
    * rather than `Promise.all`: every write is an assignment over `default_*`, so the
    * order decides which value survives an overlap.
@@ -168,6 +224,7 @@ export class EventManager {
     return (
       this.resetTerms.length +
       this.intervalTerms.length +
+      this.manualTerms.length +
       this.startupTerms.length +
       // Counted: a task whose only events are DR would otherwise report "0 loaded".
       this.modelFieldTerms.length

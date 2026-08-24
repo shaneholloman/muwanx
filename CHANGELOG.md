@@ -63,6 +63,25 @@ shortcuts were removed outright (no alias) — see Removed.**
   observation terms read these off mjlab's `MotionCommand` as properties, which the
   tracer turns into command slots — so with the browser answering to those names, the
   task's own functions trace unmodified.
+- **`mode="manual"` event terms, fired from the control panel.** A term with this mode
+  has no schedule at all: it runs when the operator presses its button, which is the
+  whole trigger. The panel's new `Events` section draws one button per manual term and
+  one checkbox per `mode="interval"` term, the checkbox arming or disarming that term's
+  schedule — a disarmed timer stops counting rather than banking the wait, so re-arming
+  cannot fire the disturbance on the next frame. Both are also engine verbs
+  (`engine.events.fire(name)` / `engine.events.setArmed(name, armed)`), and the terms
+  they offer are reported as `MjswanEngineState.events`. `label` on the term config is
+  the text either control carries, defaulting to the term name. This is mjswan's own
+  mode, not one of mjlab's four: mjlab has a viewer to bolt a button onto and plain
+  Python state to gate a term with, where a traced graph has neither — a task that wants
+  a disturbance on demand had to settle for one on a timer. A manual term left in an
+  mjlab config is inert there, which is what a mode mjlab never applies should be.
+- **`dr.geom_size` is described for the browser**, with the broadphase bounds mjlab
+  recomputes from it: `geom_rbound` and `geom_aabb` follow the new size in the same pass,
+  by geom type (sphere, capsule, ellipsoid, cylinder, box), because a geom that grows
+  while its bound stays as compiled simply stops colliding at its own surface. A size
+  randomization on any other geom type fails the build, naming the geoms and their types;
+  mjlab raises the same refusal, but at the first firing.
 
 ### Changed
 

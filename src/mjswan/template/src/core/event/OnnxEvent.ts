@@ -17,7 +17,7 @@ import type { OnnxInputSlot, OnnxSession, OnnxTensorLike, SlotReader } from '../
 import { applyEntityWrites, type WriteTarget, type WriteValues } from './entityWrite';
 import type { EventContext } from './EventBase';
 
-export type EventMode = 'startup' | 'reset' | 'interval';
+export type EventMode = 'startup' | 'reset' | 'interval' | 'manual';
 
 export interface OnnxEventConfig {
   name: string;
@@ -33,6 +33,8 @@ export interface OnnxEventConfig {
   is_global_time?: boolean;
   /** `mode="reset"` only: suppress firing on resets that arrive too soon. */
   min_step_count_between_reset?: number;
+  /** Control-panel text: a `manual` term's button, an `interval` term's arm checkbox. */
+  label?: string;
 }
 
 export function isOnnxEventConfig(config: unknown): config is OnnxEventConfig {

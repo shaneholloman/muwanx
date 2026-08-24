@@ -356,6 +356,9 @@ function AppContent() {
             commands={engineState?.commands ? [...engineState.commands] : []}
             commandValues={engineState?.commandValues ?? {}}
             onCommandChange={(id, value) => engineRef.current?.commands.set(id, value)}
+            events={engineState?.events ? [...engineState.events] : []}
+            onEventFire={(name) => engineRef.current?.events.fire(name)}
+            onEventArmedChange={(name, armed) => engineRef.current?.events.setArmed(name, armed)}
             debugVis={engineState?.debugVis ? [...engineState.debugVis] : []}
             onDebugVisChange={(term, enabled) => engineRef.current?.debugVis.set(term, enabled)}
             onReset={() => engineRef.current?.reset()}
