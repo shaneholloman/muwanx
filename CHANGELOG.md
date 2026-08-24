@@ -138,6 +138,16 @@ All kept as aliases via `_compat.py`, removed in 0.9:
 
 ### Fixed
 
+- **The control panel draws button commands.** `button` has been a command input type
+  all along, `CommandManager.triggerButton` has been wired to the term since, and
+  `engine.commands.trigger` has been a verb — but the panel filtered its controls down
+  to sliders and checkboxes, so no button was ever drawn. mjlab's own `Zero` (declared by
+  every `UniformVelocityCommand` GUI, and recorded faithfully by the GUI spy) simply did
+  not exist for a viewer. Buttons now render in declaration order, so `Zero` lands under
+  the sliders it zeroes, and the values a press moves are re-read from the term rather
+  than left stale in the panel's mirror. `UiCommand` answers to `zero` as well, so a
+  hand-written panel gets the same button for free, and a press no term answers to warns
+  once instead of leaving a control that looks live and does nothing.
 - A position action term now inherits its PD gains from the entity's actuator configs.
   mjlab's ideal-PD family (`IdealPdActuatorCfg` and subclasses, which is what
   `wbc-mjlab`'s G1 uses) puts a `<motor>` in the model and computes

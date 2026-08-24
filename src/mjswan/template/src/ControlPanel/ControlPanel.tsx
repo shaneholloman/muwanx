@@ -66,6 +66,8 @@ interface ControlPanelProps {
   commandValues: Record<string, number>;
   /** Write a slider/checkbox command value (engine.commands.set). */
   onCommandChange: (id: string, value: number) => void;
+  /** Press a button command (engine.commands.trigger) — mjlab's `Zero`, and any other. */
+  onCommandTrigger?: (id: string) => void;
   /** Event terms the operator can drive: manual buttons, interval schedules. */
   events?: EventDescriptor[];
   /** Fire a `mode="manual"` event term (engine.events.fire). */
@@ -277,6 +279,7 @@ function ControlPanel(props: ControlPanelProps) {
     commands,
     commandValues,
     onCommandChange,
+    onCommandTrigger,
     events = [],
     onEventFire,
     onEventArmedChange,
@@ -350,9 +353,12 @@ function ControlPanel(props: ControlPanelProps) {
     };
   }, [visible, onVisibleChange, handleReset]);
 
-  const getValueCommandsForGroup = (groupName: string): CommandDescriptor[] => {
+  const getCommandsForGroup = (groupName: string): CommandDescriptor[] => {
+    // Declaration order, so a `Zero` button lands under the sliders it zeroes.
     return commands.filter(
-      (cmd) => cmd.group === groupName && (cmd.type === 'slider' || cmd.type === 'checkbox')
+      (cmd) =>
+        cmd.group === groupName &&
+        (cmd.type === 'slider' || cmd.type === 'checkbox' || cmd.type === 'button')
     );
   };
 
@@ -630,10 +636,10 @@ function ControlPanel(props: ControlPanelProps) {
           )}
 
           {/* Command Groups - only show if there are commands */}
-          {commandGroups.length > 0 && commands.some(cmd => cmd.type === 'slider' || cmd.type === 'checkbox') && (
+          {commandGroups.length > 0 && commands.some(cmd => cmd.type === 'slider' || cmd.type === 'checkbox' || cmd.type === 'button') && (
             <>
               {commandGroups.map((groupName) => {
-                const groupCommands = getValueCommandsForGroup(groupName);
+                const groupCommands = getCommandsForGroup(groupName);
                 if (groupCommands.length === 0) return null;
 
                 return (
@@ -652,6 +658,21 @@ function ControlPanel(props: ControlPanelProps) {
                             onChange={onCommandChange}
                             disabled={!commandsEnabled}
                           />
+                        );
+                      }
+                      if (command.type === 'button') {
+                        return (
+                          <Box key={command.id} px="xs" pb="0.375em">
+                            <Button
+                              size="compact-xs"
+                              variant="light"
+                              radius="xs"
+                              onClick={() => onCommandTrigger?.(command.id)}
+                              disabled={!commandsEnabled || !onCommandTrigger}
+                            >
+                              {command.label}
+                            </Button>
+                          </Box>
                         );
                       }
                       if (command.type !== 'slider') {

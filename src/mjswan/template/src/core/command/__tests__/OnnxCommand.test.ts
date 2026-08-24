@@ -378,8 +378,16 @@ describe('OnnxCommand: UI override (mjlab play parity, §3a)', () => {
     await cmd.step(true);
     cmd.setValue('enabled', 1);
     cmd.setValue('lin_vel_x', 0.9);
-    cmd.triggerButton('zero');
+    expect(cmd.triggerButton('zero')).toBe(true);
     expect(Array.from(cmd.getCommand())).toEqual([0, 0, 0]);
+  });
+
+  it('says so for a button it has no action for', () => {
+    // The panel draws every button the build declared, and mjlab's command GUIs are
+    // free to declare one this class knows nothing about.
+    const session = new FakeSession(() => velocityOutputs(0.4, 0.1, -0.2));
+    const cmd = new OnnxCommand('twist', UI_CFG, null, { session, rng: new SeededRng(1) });
+    expect(cmd.triggerButton('start_here')).toBe(false);
   });
 });
 
