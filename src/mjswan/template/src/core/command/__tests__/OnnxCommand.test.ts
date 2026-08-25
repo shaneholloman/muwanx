@@ -383,8 +383,7 @@ describe('OnnxCommand: UI override (mjlab play parity, §3a)', () => {
   });
 
   it('says so for a button it has no action for', () => {
-    // The panel draws every button the build declared, and mjlab's command GUIs are
-    // free to declare one this class knows nothing about.
+    // mjlab's command GUIs are free to declare a button this class has no action for.
     const session = new FakeSession(() => velocityOutputs(0.4, 0.1, -0.2));
     const cmd = new OnnxCommand('twist', UI_CFG, null, { session, rng: new SeededRng(1) });
     expect(cmd.triggerButton('start_here')).toBe(false);

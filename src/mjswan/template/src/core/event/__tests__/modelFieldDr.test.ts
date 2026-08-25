@@ -241,8 +241,8 @@ describe('geom_size and the bounds that follow it', () => {
     });
 
   it("writes a sphere's radius and the broadphase bound with it", () => {
-    // Without the recompute the geom grows while the broadphase keeps 0.05, and the
-    // ball stops colliding at its own surface.
+    // Without the recompute the broadphase keeps 0.05 and the ball stops colliding
+    // at its own surface.
     expect(apply(sizeConfig(), new SeededRng(1))).toBe(true);
     const [size, rbound, aabbHalf] = bounds('robot/foot_collision');
     expect(size[0]).toBeCloseTo(0.125, 6);

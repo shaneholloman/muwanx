@@ -35,7 +35,7 @@ export interface ButtonCommandConfig {
   type: 'button';
   name: string;
   label: string;
-  /** Tabler icon name, as viser's `Icon` enum spells it; unknown ones simply go undrawn. */
+  /** Tabler icon name, as viser's `Icon` spells it; an unknown one goes undrawn. */
   icon?: string;
 }
 
@@ -118,8 +118,8 @@ export interface CommandTerm {
   /** Current value of one UI input, for the panel's mirror of it. */
   getUiValue?(inputName: string): number | undefined;
   /**
-   * A button press. Return false for a name the term does nothing with, so the panel's
-   * button is not silently dead; a term returning nothing is taken at its word.
+   * A button press. Return false for a name the term does nothing with, so the panel can
+   * say so; a term returning nothing is taken at its word.
    */
   triggerButton?(inputName: string): boolean | void;
   dispose?(): void;

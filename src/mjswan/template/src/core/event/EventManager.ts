@@ -38,8 +38,8 @@ type ResetEntry = PluginTerm | OnnxResetTerm;
 /**
  * Mode-aware event dispatch: `mode="reset"` terms fire on episode reset behind a
  * `ResetTrigger`, `mode="interval"` on the frames their `IntervalTrigger` allows,
- * `mode="startup"` once, and `mode="manual"` only when {@link fire} is called — the
- * control panel's button, which is the whole schedule such a term has.
+ * `mode="startup"` once, and `mode="manual"` only when {@link fire} is called, which is
+ * the whole schedule such a term has.
  *
  * One graph per term, unfused — the reference tasks have at most two reset terms and
  * none of the other modes, and fusing would have to reproduce the config-order write
@@ -167,9 +167,8 @@ export class EventManager {
   }
 
   /**
-   * Fire one `mode="manual"` term by name — the operator asked for it, so it fires
-   * whatever the interval terms are doing. `OnnxEvent.fire` drops a call that arrives
-   * while its own graph is still running, so a held-down button cannot queue a backlog.
+   * Fire one `mode="manual"` term by name, whatever the interval terms are doing.
+   * `OnnxEvent.fire` drops a press that lands while its own graph is still running.
    */
   async fire(name: string, context: EventContext): Promise<void> {
     const term = this.manualTerms.find(entry => entry.name === name);
@@ -188,7 +187,7 @@ export class EventManager {
     return true;
   }
 
-  /** What the control panel can offer: a button per manual term, a checkbox per interval one. */
+  /** A button per manual term, a checkbox per interval one. */
   controls(): EventControl[] {
     return [
       ...this.manualTerms.map(term => ({

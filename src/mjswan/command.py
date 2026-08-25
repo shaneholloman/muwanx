@@ -115,8 +115,8 @@ class ButtonConfig:
     name: str
     label: str
     icon: str | None = None
-    """Tabler icon name, as viser's ``Icon`` enum spells it (``Icon.SQUARE_X`` is
-    ``"square-x"``). The browser draws the ones it bundles and ignores the rest."""
+    """Tabler icon name, as viser's ``Icon`` spells it (``Icon.SQUARE_X`` is
+    ``"square-x"``). The browser draws the ones it bundles."""
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {

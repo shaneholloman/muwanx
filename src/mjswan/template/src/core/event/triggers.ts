@@ -49,9 +49,8 @@ export class IntervalTrigger {
   }
 
   /**
-   * Arm or disarm the schedule, for an operator who wants the disturbance on demand
-   * only. A disarmed timer does not count down, and re-arming samples a fresh interval:
-   * a countdown that had run while disarmed would fire the instant it came back.
+   * A disarmed timer does not count down, and re-arming samples a fresh interval: a
+   * countdown that had run while disarmed would fire the instant it came back.
    */
   setArmed(armed: boolean): void {
     if (armed === this.armed) return;

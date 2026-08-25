@@ -221,9 +221,8 @@ describe('CommandManager: UiCommand state field', () => {
 });
 
 /**
- * Button commands. The panel draws these now, so a press has to reach the term and the
- * values it moved have to reach back: mjlab's `Zero` sets its own sliders, and the
- * panel reads slider values off the manager's mirror of them.
+ * Button commands: a press has to reach the term, and the values it moved have to reach
+ * back — mjlab's `Zero` sets its own sliders and the panel reads them off the mirror.
  */
 describe('CommandManager: button commands', () => {
   const context = {

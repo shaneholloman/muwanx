@@ -213,7 +213,7 @@ export class OnnxCommand implements CommandTerm {
   }
 
   triggerButton(inputName: string): boolean {
-    // mjlab's Zero button, the one its command GUIs declare.
+    // mjlab's Zero button.
     if (inputName !== 'zero') return false;
     for (const input of this.cfg.ui?.inputs ?? []) {
       if (input.type === 'slider') this.uiValues.set(input.name, 0);

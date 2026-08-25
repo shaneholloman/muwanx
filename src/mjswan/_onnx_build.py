@@ -746,14 +746,13 @@ def model_field_dr_descriptor(
         # they never accumulate across events on one axis.
         "uses_defaults": operation in _DR_OPS_USING_DEFAULTS,
         "set_const": _dr_needs_recompute(func, field_name),
-        # `geom_size` feeds the broadphase, which mjlab recomputes from it in the same
-        # call; the browser owes the same afterwards.
+        # mjlab recomputes the broadphase bounds from the size in the same call.
         "recompute_bounds": field_name == "geom_size",
     }
 
 
-#: Geom types whose `rbound`/`aabb` follow from `geom_size` — mjlab's own list in
-#: `dr.geom_size._recompute_geom_bounds`, and the browser reproduces its arithmetic.
+#: Geom types whose bounds follow from `geom_size`, as
+#: `dr.geom_size._recompute_geom_bounds` lists them.
 _PRIMITIVE_GEOM_TYPES = frozenset(
     {
         int(mujoco.mjtGeom.mjGEOM_SPHERE),
@@ -768,8 +767,7 @@ _PRIMITIVE_GEOM_TYPES = frozenset(
 def _require_primitive_geoms(env: Any, names: list[str]) -> None:
     """Refuse a size randomization on a geom whose bounds cannot be recomputed.
 
-    mjlab raises the same refusal at runtime, once the event fires; the build knows the
-    geom types, so it raises before the bundle exists.
+    mjlab raises the same at the first firing; the build knows the types already.
     """
     model = env.sim.mj_model
     unsupported = {

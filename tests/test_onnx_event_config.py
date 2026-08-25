@@ -37,8 +37,7 @@ GEOM_NAMES = [
     "robot/rf_pad_collision",
 ]
 BODY_NAMES = ["world", "robot/torso", "robot/hand"]
-#: `mjtGeom`: the floor is a plane, the torso a mesh, the tips and pads spheres. Only
-#: `dr.geom_size` reads these — its bounds recompute is defined for primitives alone.
+#: `mjtGeom`: a plane, a mesh, then spheres — `dr.geom_size` refuses non-primitives.
 GEOM_TYPES = [0, 7, 2, 2, 2, 2]
 ROBOT_GEOM_IDS = [1, 2, 3, 4, 5]
 ROBOT_BODY_IDS = [1, 2]
@@ -58,11 +57,7 @@ class _Named:
 
 
 class _MjModel:
-    """Only the accessors the descriptor reaches for: names, and a geom's type.
-
-    Indexed by id or by name, as MuJoCo's own accessor is — `_dr_entity_names` asks by
-    id, `_require_primitive_geoms` by name.
-    """
+    """Names and a geom's type, indexed by id or by name as MuJoCo's accessor is."""
 
     def geom(self, key):
         index = GEOM_NAMES.index(key) if isinstance(key, str) else key
@@ -187,8 +182,7 @@ def body_mass(  # noqa: PLR0917 — mjlab's own arity; the signature is the fixt
 body_com_offset.recompute = 3
 body_mass.recompute = 3
 geom_friction.recompute = 0
-# `requires_model_fields("geom_size", "geom_rbound", "geom_aabb")` — recompute stays none:
-# the bounds are model fields, not the inertial constants `mj_setConst` rebuilds.
+# The bounds are model fields, not the inertial constants `mj_setConst` rebuilds.
 geom_size.recompute = 0
 
 
@@ -517,11 +511,9 @@ def test_serialize_event_emits_the_descriptor_with_its_name_and_mode(tmp_path):
 
 
 class TestGeomSize:
-    """`dr.geom_size`, whose broadphase bounds the browser owes after the write.
+    """`dr.geom_size`: the browser owes the bounds mjlab recomputes in the same call.
 
-    mjlab recomputes `geom_rbound`/`geom_aabb` inside the same call and raises for a geom
-    type whose bounds do not follow from its size; the build knows the types, so it
-    refuses before a bundle exists rather than at the first firing.
+    Geoms whose bounds do not follow from their size are refused at build time.
     """
 
     @staticmethod
@@ -536,7 +528,6 @@ class TestGeomSize:
         assert descriptor["field"] == "geom_size"
         assert descriptor["entity_type"] == "geom"
         assert descriptor["recompute_bounds"] is True
-        # The bounds are model fields, not inertial constants.
         assert descriptor["set_const"] is False
 
     def test_all_three_axes_by_default_as_mjlab_scales_them(self):
@@ -600,7 +591,6 @@ class TestManualEvents:
         )
         assert entry["mode"] == "manual"
         assert entry["label"] == "Throw overhead"
-        # Nothing schedules it, so it carries no schedule.
         assert "interval_range_s" not in entry
         assert "is_global_time" not in entry
         # Still a traced graph writing the entity it was made on.

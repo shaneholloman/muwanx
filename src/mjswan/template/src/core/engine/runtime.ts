@@ -638,7 +638,7 @@ export class mjswanRuntime {
     return this.eventManager?.controls() ?? [];
   }
 
-  /** Fire one `mode="manual"` event term — the operator pressed its button. */
+  /** Fire one `mode="manual"` event term. */
   async fireEvent(name: string): Promise<void> {
     if (!this.eventManager || !this.mjModel || !this.mjData) return;
     try {

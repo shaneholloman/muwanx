@@ -192,12 +192,10 @@ export function applyModelFieldDr(
 }
 
 /**
- * `geom_rbound` and `geom_aabb` from the sizes just written, as mjlab's
- * `dr.geom_size._recompute_geom_bounds` computes them: without it the broadphase keeps
- * the compiled bound and a grown geom stops colliding at its new radius.
- *
- * `geom_aabb` is `(ngeom, 2, 3)` — centre then half-size — and a primitive's centre
- * stays at its origin, so only the half-size is written.
+ * `geom_rbound` and `geom_aabb` from the sizes just written, as
+ * `dr.geom_size._recompute_geom_bounds` computes them: without it a grown geom keeps its
+ * compiled bound and stops colliding at its new radius. `geom_aabb` is `(ngeom, 2, 3)` —
+ * centre then half-size — and a primitive's centre stays at its origin.
  */
 function recomputeGeomBounds(mjModel: MjModel, name: string, indices: number[]): void {
   const size = mjModel.geom_size as ArrayLike<number> | undefined;
@@ -236,7 +234,7 @@ function recomputeGeomBounds(mjModel: MjModel, name: string, indices: number[]):
         half = [s0, s1, s2];
         break;
       default:
-        // The build refuses these, so this is the belt to that braces.
+        // The build refuses these; this is the backstop.
         console.warn(
           `[modelFieldDr] "${name}": geom ${index} is type ${types[index]}, whose ` +
             'bounds do not follow from its size; leaving them as compiled.',

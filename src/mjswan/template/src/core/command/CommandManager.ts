@@ -299,12 +299,10 @@ export class CommandManager {
 
     const term = this.terms.get(command.groupName);
     const handled = term?.triggerButton?.(command.config.name);
-    // A press can move the term's own inputs — mjlab's Zero sets its sliders — and the
-    // panel reads them from here, so re-read them rather than leave a stale mirror.
+    // mjlab's Zero moves the term's own sliders, and the panel reads them from here.
     this.syncValuesFromTerms();
     if (handled === false && !this.warnedButtons.has(id)) {
-      // The panel draws whatever the build declared, so a name no term answers to
-      // would otherwise be a control that looks live and does nothing.
+      // The panel draws whatever the build declared; an unanswered name looks live.
       this.warnedButtons.add(id);
       console.warn(
         `[CommandManager] "${command.groupName}" has no action for button ` +

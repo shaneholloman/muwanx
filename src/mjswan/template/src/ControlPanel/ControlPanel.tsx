@@ -21,10 +21,8 @@ import { useDisclosure } from '@mantine/hooks';
 import { IconChevronDown, IconRefresh, IconSquareX, IconX } from '@tabler/icons-react';
 
 /**
- * Icons an mjlab command GUI can ask for, by the tabler name viser's `Icon` enum spells
- * (`Icon.SQUARE_X` is the string `"square-x"`). Only the ones mjlab actually declares are
- * bundled; anything else renders as a button with no icon rather than pulling the whole
- * icon set into the app.
+ * Icons an mjlab command GUI can ask for, by tabler name (`Icon.SQUARE_X` is
+ * `"square-x"`). Only these are bundled; anything else renders without an icon.
  */
 const COMMAND_BUTTON_ICONS: Record<string, typeof IconSquareX> = {
   'square-x': IconSquareX,
@@ -78,7 +76,7 @@ interface ControlPanelProps {
   commandValues: Record<string, number>;
   /** Write a slider/checkbox command value (engine.commands.set). */
   onCommandChange: (id: string, value: number) => void;
-  /** Press a button command (engine.commands.trigger) — mjlab's `Zero`, and any other. */
+  /** Press a button command (engine.commands.trigger). */
   onCommandTrigger?: (id: string) => void;
   /** Event terms the operator can drive: manual buttons, interval schedules. */
   events?: EventDescriptor[];
@@ -120,15 +118,12 @@ function formatGroupName(groupName: string): string {
     .join(' ');
 }
 
-/** A bound as mjviser prints it under the track end: the number, without float noise. */
+/** The bound as printed under the track end: the number, without float noise. */
 function formatBound(value: number): string {
   return String(Number(value.toFixed(3)));
 }
 
-/**
- * One slider row, in mjviser's layout: the label, the track with its two ends marked,
- * and the value in a box that also takes typing.
- */
+/** One row: the label, the track with both ends marked, and a box that takes typing. */
 function SliderRow({
   id,
   label,
@@ -187,10 +182,7 @@ function SliderRow({
   );
 }
 
-/**
- * SliderControl - one command's slider, preceded by its "Max" companion when the build
- * asked for one, which is the order mjlab's own GUI declares them in.
- */
+/** One command's slider, preceded by its "Max" companion — the order mjlab declares. */
 function SliderControl({
   command,
   value,
@@ -728,8 +720,8 @@ function ControlPanel(props: ControlPanelProps) {
             </CommandSection>
           )}
 
-          {/* Events — the scene's disturbances: a button to fire one, a checkbox to
-              let its schedule run. Scene-level, so no policy is needed to drive them. */}
+          {/* Events: a button fires one, a checkbox lets its schedule run. Scene-level,
+              so no policy is needed to drive them. */}
           {events.length > 0 && (
             <CommandSection label="Events" expandByDefault={true}>
               {events

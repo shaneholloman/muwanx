@@ -106,8 +106,7 @@ class Engine implements MjswanEngine {
       set: (term, enabled) => this.runtime.commands.setDebugVisEnabled(term, enabled),
     };
     this.events = {
-      // Refresh either way: a manual fire changes nothing in the state, but an arm
-      // toggle does, and the panel reads its checkbox from there.
+      // Only the arm toggle changes the snapshot; the panel reads its checkbox from it.
       fire: (name) => {
         void this.runtime.fireEvent(name);
       },
