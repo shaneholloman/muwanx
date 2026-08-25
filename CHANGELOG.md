@@ -76,6 +76,10 @@ shortcuts were removed outright (no alias) — see Removed.**
   Python state to gate a term with, where a traced graph has neither — a task that wants
   a disturbance on demand had to settle for one on a timer. A manual term left in an
   mjlab config is inert there, which is what a mode mjlab never applies should be.
+  `disabled_when` names the `mode="interval"` term that owns the same job: while that
+  schedule is armed the button greys out and `fire()` refuses the press, so a launcher
+  with both a timer and a button is driven by one of them at a time. The build refuses a
+  gate that names no interval term of the scene, rather than shipping a dead control.
 - **`dr.geom_size` is described for the browser**, with the broadphase bounds mjlab
   recomputes from it: `geom_rbound` and `geom_aabb` follow the new size in the same pass,
   by geom type (sphere, capsule, ellipsoid, cylinder, box), because a geom that grows

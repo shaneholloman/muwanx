@@ -50,6 +50,10 @@ class EventTermCfg:
     """Control-panel text — a ``manual`` term's button, an ``interval`` term's arm
     checkbox. Defaults browser-side to the term name."""
 
+    disabled_when: str | None = None
+    """``mode="manual"`` only: the ``mode="interval"`` term that owns the same job. The
+    button greys out, and refuses to fire, while that term's schedule is armed."""
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize an ``EventBinding`` term.
 

@@ -115,7 +115,8 @@ export interface EventDescriptor {
   /** The term's own `label`, or its name when it declared none. */
   label: string;
   kind: 'manual' | 'interval';
-  /** `interval` only: whether its schedule is running. Always true for `manual`. */
+  /** `interval`: whether its schedule is running. `manual`: whether its button can
+   * fire — false while the term's `disabled_when` schedule owns the job. */
   armed: boolean;
 }
 

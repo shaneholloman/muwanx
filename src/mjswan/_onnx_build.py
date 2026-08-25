@@ -932,7 +932,29 @@ def serialize_event(
         entry["min_step_count_between_reset"] = term_cfg.min_step_count_between_reset
     if term_cfg.label is not None:
         entry["label"] = term_cfg.label
+    if term_cfg.disabled_when is not None:
+        entry["disabled_when"] = term_cfg.disabled_when
     return entry
+
+
+def _check_disabled_when(events: dict[str, EventTermCfg]) -> None:
+    """A gate naming nothing would grey a button out forever, or never — catch it here,
+    where the whole dict is in hand, rather than shipping a dead control."""
+    for name, term_cfg in events.items():
+        gate = getattr(term_cfg, "disabled_when", None)
+        if gate is None:
+            continue
+        if term_cfg.mode != "manual":
+            raise ValueError(
+                f'Event term {name!r} is mode="{term_cfg.mode}" and carries '
+                f"disabled_when={gate!r}. Only a manual term has a button to grey out."
+            )
+        if getattr(events.get(gate), "mode", None) != "interval":
+            raise ValueError(
+                f"Event term {name!r} declares disabled_when={gate!r}, which is not a "
+                f'mode="interval" term of this scene (it has '
+                f"{sorted(n for n, t in events.items() if t.mode == 'interval')})."
+            )
 
 
 def serialize_events(
@@ -947,6 +969,7 @@ def serialize_events(
     """
     if not events:
         return None
+    _check_disabled_when(events)
     result = []
     for name, term_cfg in events.items():
         if on_term is not None:

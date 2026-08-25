@@ -26,7 +26,8 @@ export interface EventControl {
   label: string;
   /** `manual` renders a button, `interval` an arm checkbox. */
   kind: 'manual' | 'interval';
-  /** `interval` only: whether its schedule is running. Always true for `manual`. */
+  /** `interval`: whether its schedule is running. `manual`: whether its button can
+   * fire — false while the term's `disabled_when` schedule owns the job. */
   armed: boolean;
 }
 
@@ -166,14 +167,28 @@ export class EventManager {
     }
   }
 
+  /** True while a manual term's `disabled_when` interval schedule is armed. */
+  private isGated(manual: OnnxEvent): boolean {
+    const gate = manual.config.disabled_when;
+    if (gate === undefined) return false;
+    return this.intervalTerms.find(({ term }) => term.name === gate)?.trigger.isArmed ?? false;
+  }
+
   /**
-   * Fire one `mode="manual"` term by name, whatever the interval terms are doing.
+   * Fire one `mode="manual"` term by name, unless its `disabled_when` schedule is armed.
    * `OnnxEvent.fire` drops a press that lands while its own graph is still running.
    */
   async fire(name: string, context: EventContext): Promise<void> {
     const term = this.manualTerms.find(entry => entry.name === name);
     if (!term) {
       console.warn(`[EventManager] No mode="manual" event named "${name}".`);
+      return;
+    }
+    if (this.isGated(term)) {
+      // The panel greys the button out, so only an API caller gets here; say why.
+      console.warn(
+        `[EventManager] "${name}" is disabled while "${term.config.disabled_when}" is armed.`,
+      );
       return;
     }
     await term.fire(context);
@@ -194,7 +209,7 @@ export class EventManager {
         name: term.name,
         label: term.config.label ?? term.name,
         kind: 'manual' as const,
-        armed: true,
+        armed: !this.isGated(term),
       })),
       ...this.intervalTerms.map(({ term, trigger }) => ({
         name: term.name,

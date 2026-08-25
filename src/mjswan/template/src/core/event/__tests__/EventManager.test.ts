@@ -292,6 +292,44 @@ describe('EventManager: mode="manual" — the operator is the schedule', () => {
     expect(runFn).toHaveBeenCalledTimes(2);
   });
 
+  it('disarms the button while its `disabled_when` schedule is armed', async () => {
+    const runFn = vi.fn(() => ({}));
+    const deps = await depsWithSession('event/throw.onnx', fakeSession(runFn));
+    const mgr = new EventManager(
+      [
+        {
+          name: 'throw_overhead',
+          mode: 'manual',
+          onnx: 'event/throw.onnx',
+          rand_dim: 0,
+          disabled_when: 'throw_ball',
+        },
+        {
+          name: 'throw_ball',
+          mode: 'interval',
+          onnx: 'event/throw.onnx',
+          rand_dim: 0,
+          interval_range_s: [1.0, 1.0],
+        },
+      ],
+      {},
+      deps,
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Interval terms load armed, so the panel greys the button out from the start.
+    expect(mgr.controls()[0].armed).toBe(false);
+    await mgr.fire('throw_overhead', NO_MODEL);
+    expect(runFn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+
+    // Auto throw off: the button is the only thrower again.
+    expect(mgr.setArmed('throw_ball', false)).toBe(true);
+    expect(mgr.controls()[0].armed).toBe(true);
+    await mgr.fire('throw_overhead', NO_MODEL);
+    expect(runFn).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a name it cannot arm rather than pretending', async () => {
     const mgr = await bothKinds(vi.fn(() => ({})));
     expect(mgr.setArmed('throw_overhead', false)).toBe(false);

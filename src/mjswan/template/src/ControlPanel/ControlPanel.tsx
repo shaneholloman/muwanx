@@ -733,7 +733,7 @@ function ControlPanel(props: ControlPanelProps) {
                       fullWidth
                       style={{ height: '2em' }}
                       onClick={() => onEventFire?.(event.name)}
-                      disabled={!onEventFire}
+                      disabled={!onEventFire || !event.armed}
                     >
                       {event.label}
                     </Button>

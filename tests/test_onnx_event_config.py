@@ -596,6 +596,64 @@ class TestManualEvents:
         # Still a traced graph writing the entity it was made on.
         assert entry["write_targets"][0]["entity"] == "ball"
 
+    def test_disabled_when_travels_to_the_browser(self, tmp_path):
+        torch = pytest.importorskip("torch")
+        pytest.importorskip("mjlab")
+        from mjswan._onnx_build import serialize_event
+        from mjswan.managers.event_manager import EventTermCfg
+
+        def throw(env, env_ids, ball_name="ball"):
+            env.scene[ball_name].write_root_link_pose_to_sim(
+                torch.zeros(1, 7), env_ids=env_ids
+            )
+
+        entry = serialize_event(
+            "throw_overhead",
+            EventTermCfg(
+                func=throw,
+                mode="manual",
+                params={"ball_name": "ball"},
+                disabled_when="throw_ball",
+            ),
+            TestWriteTargetEntity._env(),
+            tmp_path,
+        )
+        assert entry["disabled_when"] == "throw_ball"
+
+    def test_a_gate_that_names_no_interval_term_is_refused(self):
+        """A dead gate greys the button out forever, or never — and says nothing."""
+        from mjswan._onnx_build import _check_disabled_when
+        from mjswan.managers.event_manager import EventTermCfg
+
+        def throw(env, env_ids):
+            raise AssertionError("never traced")
+
+        auto = EventTermCfg(func=throw, mode="interval", interval_range_s=(1.0, 4.0))
+        gated = EventTermCfg(func=throw, mode="manual", disabled_when="throw_ball")
+        _check_disabled_when({"throw_overhead": gated, "throw_ball": auto})
+
+        with pytest.raises(ValueError, match="throw_ball"):
+            _check_disabled_when({"throw_overhead": gated})
+        with pytest.raises(ValueError, match="interval"):
+            # The gate must be the schedule, not another button.
+            _check_disabled_when(
+                {
+                    "throw_overhead": gated,
+                    "throw_ball": EventTermCfg(func=throw, mode="manual"),
+                }
+            )
+        with pytest.raises(ValueError, match="manual"):
+            _check_disabled_when(
+                {
+                    "throw_ball": EventTermCfg(
+                        func=throw,
+                        mode="interval",
+                        interval_range_s=(1.0, 4.0),
+                        disabled_when="throw_ball",
+                    )
+                }
+            )
+
     def test_a_manual_term_carrying_an_interval_is_refused(self, tmp_path):
         """Two triggers on one term reads as a mistake, and it is a cheap one to catch."""
         from mjswan._onnx_build import serialize_event

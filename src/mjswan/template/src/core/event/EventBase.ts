@@ -18,6 +18,8 @@ export type EventConfig = {
   min_step_count_between_reset?: number;
   /** Control-panel text: a `manual` term's button, an `interval` term's arm checkbox. */
   label?: string;
+  /** `mode="manual"` only: the `mode="interval"` term whose armed schedule greys it out. */
+  disabled_when?: string;
 };
 
 export type EventContext = {
