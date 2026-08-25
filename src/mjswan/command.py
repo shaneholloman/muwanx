@@ -114,13 +114,19 @@ class ButtonConfig:
 
     name: str
     label: str
+    icon: str | None = None
+    """Tabler icon name, as viser's ``Icon`` enum spells it (``Icon.SQUARE_X`` is
+    ``"square-x"``). The browser draws the ones it bundles and ignores the rest."""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "type": "button",
             "name": self.name,
             "label": self.label,
         }
+        if self.icon is not None:
+            data["icon"] = self.icon
+        return data
 
 
 Button = ButtonConfig

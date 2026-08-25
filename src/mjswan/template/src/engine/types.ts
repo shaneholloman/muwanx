@@ -79,6 +79,8 @@ export interface CommandDescriptor {
   enabledWhen?: string;
   /** Slider only: a presentational companion that rescales this slider's drag range. */
   adjustableRange?: SliderRangeControl;
+  /** Button only: tabler icon name the build recorded from the term's own GUI. */
+  icon?: string;
 }
 
 /** Bounds of an {@link CommandDescriptor.adjustableRange} companion slider. */

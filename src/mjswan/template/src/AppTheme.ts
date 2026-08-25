@@ -88,6 +88,16 @@ export const theme = createTheme({
             height: "0.75rem",
             background: "var(--slider-color)",
           },
+          // The ends of the range, marked and labelled under the track as mjviser
+          // does. `index.css` tucks the two labels inside the track's ends.
+          mark: {
+            transform: "scale(2)",
+          },
+          markLabel: {
+            fontSize: "0.6rem",
+            transform: "translate(-50%, 0.05rem)",
+            textAlign: "center",
+          },
         },
       },
     }),

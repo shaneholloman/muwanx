@@ -138,14 +138,20 @@ All kept as aliases via `_compat.py`, removed in 0.9:
 
 ### Fixed
 
-- **Buttons, sliders and checkboxes now match mjviser's**, control for control: the
-  slider's thumb is mjviser's bar rather than Mantine's dot (`thumbSize: 0` with a
-  `0.5rem × 0.75rem` box in the slider's own colour) on a square-cornered `xs` track, an
-  action button is `sm` at `2em` tall, and an inline one is a `compact-xs` outline. The
-  checkbox already agreed. Two viewers onto the same mjlab task should not look like two
-  products; the sizes are `em`-relative, so both panels stay identical under their own
-  root font size. The slider styling lives in the theme, so every slider in the app —
-  the splat calibration panel included — follows.
+- **The control panel is mjviser's, control for control.** Two viewers onto the same
+  mjlab task should not look like two products, so the panel now renders what mjlab's own
+  viser GUI renders: command groups nested inside a `Commands` folder, one row per
+  control with the label in a `5.975em` column, a slider carrying its two ends as marks
+  *and* a `3rem` number box that takes typing, the "Max" companion above the axis it
+  rescales (mjlab declares it first), a checkbox in the control column rather than
+  captioning itself, and a button that is full width and filled — with the icon its
+  mjlab GUI asked for, `Icon.SQUARE_X` on `Zero` being the one mjlab declares today.
+  The slider's thumb is mjviser's bar rather than Mantine's dot (`thumbSize: 0` with a
+  `0.5rem × 0.75rem` box in the slider's own colour) on a square-cornered `xs` track.
+  Sizes are `em`-relative, so both panels stay identical under their own root font size,
+  and the slider styling lives in the theme, so every slider in the app — the splat
+  calibration panel included — follows. `ButtonConfig` grew an `icon`, recorded by the
+  GUI spy from the term's own `create_gui`.
 - **The control panel draws button commands.** `button` has been a command input type
   all along, `CommandManager.triggerButton` has been wired to the term since, and
   `engine.commands.trigger` has been a verb — but the panel filtered its controls down

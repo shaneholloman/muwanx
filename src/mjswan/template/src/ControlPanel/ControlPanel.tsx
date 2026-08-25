@@ -6,9 +6,11 @@ import {
   Button,
   Checkbox,
   Divider,
+  Flex,
   Image,
   Menu,
   Modal,
+  NumberInput,
   Select,
   Slider,
   Stack,
@@ -16,7 +18,17 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconChevronDown, IconRefresh, IconX } from '@tabler/icons-react';
+import { IconChevronDown, IconRefresh, IconSquareX, IconX } from '@tabler/icons-react';
+
+/**
+ * Icons an mjlab command GUI can ask for, by the tabler name viser's `Icon` enum spells
+ * (`Icon.SQUARE_X` is the string `"square-x"`). Only the ones mjlab actually declares are
+ * bundled; anything else renders as a button with no icon rather than pulling the whole
+ * icon set into the app.
+ */
+const COMMAND_BUTTON_ICONS: Record<string, typeof IconSquareX> = {
+  'square-x': IconSquareX,
+};
 import type { SplatConfig } from '../core/scene/splat';
 import { MJSWAN_VERSION, GITHUB_CONTRIBUTORS, type Contributor } from '../Version';
 import FloatingPanel from './FloatingPanel';
@@ -108,8 +120,76 @@ function formatGroupName(groupName: string): string {
     .join(' ');
 }
 
+/** A bound as mjviser prints it under the track end: the number, without float noise. */
+function formatBound(value: number): string {
+  return String(Number(value.toFixed(3)));
+}
+
 /**
- * SliderControl - Renders a slider for a slider command with horizontal layout
+ * One slider row, in mjviser's layout: the label, the track with its two ends marked,
+ * and the value in a box that also takes typing.
+ */
+function SliderRow({
+  id,
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  /** A slider descriptor always carries one; Mantine's own default stands in if not. */
+  step?: number;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <LabeledInput id={id} label={label}>
+      <Flex justify="space-between">
+        <Slider
+          id={id}
+          value={value}
+          onChange={onChange}
+          min={min}
+          max={max}
+          step={step}
+          disabled={disabled}
+          marks={[
+            { value: min, label: formatBound(min) },
+            { value: max, label: formatBound(max) },
+          ]}
+          style={{ flexGrow: 1 }}
+        />
+        <NumberInput
+          value={value}
+          onChange={(next) => {
+            const parsed = typeof next === 'number' ? next : Number(next);
+            if (Number.isFinite(parsed)) onChange(parsed);
+          }}
+          min={min}
+          max={max}
+          step={step}
+          size="xs"
+          hideControls
+          clampBehavior="strict"
+          decimalScale={3}
+          disabled={disabled}
+          style={{ width: '3rem', marginLeft: 'var(--mantine-spacing-xs)' }}
+        />
+      </Flex>
+    </LabeledInput>
+  );
+}
+
+/**
+ * SliderControl - one command's slider, preceded by its "Max" companion when the build
+ * asked for one, which is the order mjlab's own GUI declares them in.
  */
 function SliderControl({
   command,
@@ -132,8 +212,9 @@ function SliderControl({
   // never sent to the engine, matching mjlab's play GUI. Symmetric around zero.
   const range = command.adjustableRange;
   const [reach, setReach] = useState(range?.default ?? 0);
-  const min = range ? -reach : command.min;
-  const max = range ? reach : command.max;
+  // `min`/`max` are declared optional because they are slider-only; a slider has them.
+  const min = range ? -reach : (command.min ?? 0);
+  const max = range ? reach : (command.max ?? 1);
 
   // Narrowing the reach past the current value would leave the thumb outside the
   // track, so bring the command with it rather than showing a stale position.
@@ -145,70 +226,28 @@ function SliderControl({
 
   return (
     <>
-      <Box
-        pb="0.5em"
-        px="xs"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-        }}
-      >
-        <Text
-          c="dimmed"
-          style={{
-            fontSize: '0.875em',
-            fontWeight: 450,
-            lineHeight: '1.375em',
-            letterSpacing: '-0.75px',
-            width: '50%',
-            flexShrink: 0,
-          }}
-        >
-          {command.label}
-        </Text>
-        <Box style={{ width: '50%' }}>
-          <Slider
-            value={value}
-            onChange={(val) => onChange(command.id, val)}
-            min={min}
-            max={max}
-            step={command.step}
-            disabled={isDisabled}
-          />
-        </Box>
-      </Box>
       {range && (
-        <Box
-          pb="0.5em"
-          px="xs"
-          style={{ display: 'flex', alignItems: 'center' }}
-        >
-          <Text
-            c="dimmed"
-            style={{
-              fontSize: '0.75em',
-              fontWeight: 400,
-              lineHeight: '1.375em',
-              letterSpacing: '-0.75px',
-              width: '50%',
-              flexShrink: 0,
-              opacity: 0.75,
-            }}
-          >
-            {range.label ?? `Max ${command.label}`}
-          </Text>
-          <Box style={{ width: '50%' }}>
-            <Slider
-              value={reach}
-              onChange={setReach}
-              min={range.min}
-              max={range.max}
-              step={range.step}
-              disabled={isDisabled}
-            />
-          </Box>
-        </Box>
+        <SliderRow
+          id={`${command.id}:max`}
+          label={range.label ?? `Max ${command.label}`}
+          value={reach}
+          min={range.min}
+          max={range.max}
+          step={range.step}
+          onChange={setReach}
+          disabled={isDisabled}
+        />
       )}
+      <SliderRow
+        id={command.id}
+        label={command.label}
+        value={value}
+        min={min}
+        max={max}
+        step={command.step}
+        onChange={(next) => onChange(command.id, next)}
+        disabled={isDisabled}
+      />
     </>
   );
 }
@@ -225,15 +264,15 @@ function CheckboxControl({
   disabled?: boolean;
 }) {
   return (
-    <Box pb="0.5em" px="xs">
+    <LabeledInput id={command.id} label={command.label}>
       <Checkbox
-        label={command.label}
+        id={command.id}
         checked={value >= 0.5}
         onChange={(event) => onChange(command.id, event.currentTarget.checked ? 1.0 : 0.0)}
         size="xs"
         disabled={disabled}
       />
-    </Box>
+    </LabeledInput>
   );
 }
 
@@ -625,7 +664,7 @@ function ControlPanel(props: ControlPanelProps) {
 
           {/* Command Groups - only show if there are commands */}
           {commandGroups.length > 0 && commands.some(cmd => cmd.type === 'slider' || cmd.type === 'checkbox' || cmd.type === 'button') && (
-            <>
+            <CommandSection label="Commands" expandByDefault={true}>
               {commandGroups.map((groupName) => {
                 const groupCommands = getCommandsForGroup(groupName);
                 if (groupCommands.length === 0) return null;
@@ -649,26 +688,19 @@ function ControlPanel(props: ControlPanelProps) {
                         );
                       }
                       if (command.type === 'button') {
+                        const Icon = command.icon ? COMMAND_BUTTON_ICONS[command.icon] : undefined;
                         return (
-                          <Box
-                            key={command.id}
-                            px="xs"
-                            pb="0.5em"
-                            style={{ display: 'flex', alignItems: 'center' }}
-                          >
-                            {/* The label column stays empty, so the button lines up
-                                under the controls it acts on, as mjviser's do. */}
-                            <Box style={{ width: '50%', flexShrink: 0 }} />
-                            <Box style={{ width: '50%' }}>
-                              <Button
-                                size="compact-xs"
-                                variant="outline"
-                                onClick={() => onCommandTrigger?.(command.id)}
-                                disabled={!commandsEnabled || !onCommandTrigger}
-                              >
-                                {command.label}
-                              </Button>
-                            </Box>
+                          <Box key={command.id} px="xs" pb="0.5em">
+                            <Button
+                              size="sm"
+                              fullWidth
+                              style={{ height: '2em' }}
+                              leftSection={Icon ? <Icon size="1em" /> : undefined}
+                              onClick={() => onCommandTrigger?.(command.id)}
+                              disabled={!commandsEnabled || !onCommandTrigger}
+                            >
+                              {command.label}
+                            </Button>
                           </Box>
                         );
                       }
@@ -693,7 +725,7 @@ function ControlPanel(props: ControlPanelProps) {
                   </CommandSection>
                 );
               })}
-            </>
+            </CommandSection>
           )}
 
           {/* Events — the scene's disturbances: a button to fire one, a checkbox to
@@ -718,9 +750,9 @@ function ControlPanel(props: ControlPanelProps) {
               {events
                 .filter((event) => event.kind === 'interval')
                 .map((event) => (
-                  <Box key={event.name} px="xs" pb="0.375em">
+                  <LabeledInput key={event.name} id={`event:${event.name}`} label={event.label}>
                     <Checkbox
-                      label={event.label}
+                      id={`event:${event.name}`}
                       checked={event.armed}
                       onChange={(changed) =>
                         onEventArmedChange?.(event.name, changed.currentTarget.checked)
@@ -728,7 +760,7 @@ function ControlPanel(props: ControlPanelProps) {
                       disabled={!onEventArmedChange}
                       size="xs"
                     />
-                  </Box>
+                  </LabeledInput>
                 ))}
             </CommandSection>
           )}
@@ -737,15 +769,19 @@ function ControlPanel(props: ControlPanelProps) {
           {debugVis.length > 0 && onDebugVisChange && (
             <CommandSection label="Debug Viz" expandByDefault={true}>
               {debugVis.map((term) => (
-                <Box key={term.term} px="xs" pb="0.375em">
+                <LabeledInput
+                  key={term.term}
+                  id={`debugvis:${term.term}`}
+                  // The section names what is toggled; the term only tells several apart.
+                  label={debugVis.length > 1 ? `Enable ${formatGroupName(term.term)}` : 'Enable'}
+                >
                   <Checkbox
-                    // The section names what is toggled; the term only tells several apart.
-                    label={debugVis.length > 1 ? `Enable ${formatGroupName(term.term)}` : 'Enable'}
+                    id={`debugvis:${term.term}`}
                     checked={term.enabled}
                     onChange={(event) => onDebugVisChange(term.term, event.currentTarget.checked)}
                     size="xs"
                   />
-                </Box>
+                </LabeledInput>
               ))}
             </CommandSection>
           )}

@@ -35,6 +35,8 @@ export interface ButtonCommandConfig {
   type: 'button';
   name: string;
   label: string;
+  /** Tabler icon name, as viser's `Icon` enum spells it; unknown ones simply go undrawn. */
+  icon?: string;
 }
 
 export interface CheckboxCommandConfig {
