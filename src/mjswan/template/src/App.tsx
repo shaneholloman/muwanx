@@ -12,9 +12,15 @@ import './App.css';
 
 const PANEL_QUERY_PARAM = 'panel';
 const REF_QUERY_PARAM = 'ref';
+const HANDS_QUERY_PARAM = 'hands';
 
 function paramFlag(param: string): boolean {
   return new URLSearchParams(window.location.search).get(param) !== '0';
+}
+
+/** Opt-in counterpart of `paramFlag`: absent means off. */
+function paramEnabled(param: string): boolean {
+  return new URLSearchParams(window.location.search).get(param) === '1';
 }
 
 /** Lazy fetch of a build-relative asset path against the SPA base URL. */
@@ -136,7 +142,10 @@ function AppContent() {
     let disposed = false;
     (async () => {
       showLoading('Loading MuJoCo…');
-      const engine = await createEngine(container, { multithreaded: __MUJOCO_MT__ });
+      const engine = await createEngine(container, {
+        multithreaded: __MUJOCO_MT__,
+        handTracking: paramEnabled(HANDS_QUERY_PARAM),
+      });
       if (disposed) {
         engine.dispose();
         return;

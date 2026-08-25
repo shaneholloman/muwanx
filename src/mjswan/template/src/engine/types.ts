@@ -128,6 +128,12 @@ export interface CreateEngineOptions {
    * from {@link MjswanEngineState.termSeed} to re-run a recorded session.
    */
   termSeed?: number;
+  /**
+   * Put WebXR-tracked hands in the simulation as mocap-driven fingertips, so a VR
+   * viewer can push and pick up what it is looking at. Opt-in: every scene loaded
+   * gains the hand bodies, which costs roughly a third more per physics step.
+   */
+  handTracking?: boolean;
 }
 
 /** A headless, instance-scoped simulation engine. Create with {@link createEngine}. */
