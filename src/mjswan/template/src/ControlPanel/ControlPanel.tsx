@@ -173,13 +173,7 @@ function SliderControl({
             min={min}
             max={max}
             step={command.step}
-            size="xs"
             disabled={isDisabled}
-            styles={{
-              root: { padding: '0' },
-              track: { height: 4 },
-              thumb: { width: 12, height: 12 },
-            }}
           />
         </Box>
       </Box>
@@ -210,13 +204,7 @@ function SliderControl({
               min={range.min}
               max={range.max}
               step={range.step}
-              size="xs"
               disabled={isDisabled}
-              styles={{
-                root: { padding: '0' },
-                track: { height: 3 },
-                thumb: { width: 10, height: 10 },
-              }}
             />
           </Box>
         </Box>
@@ -662,16 +650,25 @@ function ControlPanel(props: ControlPanelProps) {
                       }
                       if (command.type === 'button') {
                         return (
-                          <Box key={command.id} px="xs" pb="0.375em">
-                            <Button
-                              size="compact-xs"
-                              variant="light"
-                              radius="xs"
-                              onClick={() => onCommandTrigger?.(command.id)}
-                              disabled={!commandsEnabled || !onCommandTrigger}
-                            >
-                              {command.label}
-                            </Button>
+                          <Box
+                            key={command.id}
+                            px="xs"
+                            pb="0.5em"
+                            style={{ display: 'flex', alignItems: 'center' }}
+                          >
+                            {/* The label column stays empty, so the button lines up
+                                under the controls it acts on, as mjviser's do. */}
+                            <Box style={{ width: '50%', flexShrink: 0 }} />
+                            <Box style={{ width: '50%' }}>
+                              <Button
+                                size="compact-xs"
+                                variant="outline"
+                                onClick={() => onCommandTrigger?.(command.id)}
+                                disabled={!commandsEnabled || !onCommandTrigger}
+                              >
+                                {command.label}
+                              </Button>
+                            </Box>
                           </Box>
                         );
                       }
@@ -703,24 +700,21 @@ function ControlPanel(props: ControlPanelProps) {
               let its schedule run. Scene-level, so no policy is needed to drive them. */}
           {events.length > 0 && (
             <CommandSection label="Events" expandByDefault={true}>
-              {events.filter((event) => event.kind === 'manual').length > 0 && (
-                <Box px="xs" pb="0.375em" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375em' }}>
-                  {events
-                    .filter((event) => event.kind === 'manual')
-                    .map((event) => (
-                      <Button
-                        key={event.name}
-                        size="compact-xs"
-                        variant="light"
-                        radius="xs"
-                        onClick={() => onEventFire?.(event.name)}
-                        disabled={!onEventFire}
-                      >
-                        {event.label}
-                      </Button>
-                    ))}
-                </Box>
-              )}
+              {events
+                .filter((event) => event.kind === 'manual')
+                .map((event) => (
+                  <Box key={event.name} px="xs" pb="0.5em">
+                    <Button
+                      size="sm"
+                      fullWidth
+                      style={{ height: '2em' }}
+                      onClick={() => onEventFire?.(event.name)}
+                      disabled={!onEventFire}
+                    >
+                      {event.label}
+                    </Button>
+                  </Box>
+                ))}
               {events
                 .filter((event) => event.kind === 'interval')
                 .map((event) => (
@@ -762,8 +756,9 @@ function ControlPanel(props: ControlPanelProps) {
             <Button
               variant="light"
               color="red"
-              size="xs"
+              size="sm"
               fullWidth
+              style={{ height: '2em' }}
               leftSection={<IconRefresh size={14} />}
               onClick={handleReset}
             >

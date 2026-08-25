@@ -2,6 +2,7 @@ import {
   Checkbox,
   ColorInput,
   Select,
+  Slider,
   TextInput,
   NumberInput,
   Paper,
@@ -65,6 +66,27 @@ export const theme = createTheme({
         styles: {
           label: {
             fontWeight: 450,
+          },
+        },
+      },
+    }),
+    // mjviser's slider, prop for prop: a thin `xs` track with square corners and a
+    // thumb that is a *bar* rather than a dot — `thumbSize: 0` collapses Mantine's
+    // circle so the box below is the whole shape.
+    Slider: Slider.extend({
+      defaultProps: {
+        size: "xs",
+        radius: "xs",
+        thumbSize: 0,
+        styles: {
+          root: {
+            paddingTop: "0.3em",
+            paddingBottom: "0.2em",
+          },
+          thumb: {
+            width: "0.5rem",
+            height: "0.75rem",
+            background: "var(--slider-color)",
           },
         },
       },
