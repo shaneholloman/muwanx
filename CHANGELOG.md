@@ -142,7 +142,8 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   mjlab task should not look like two products, so the panel now renders what mjlab's own
   viser GUI renders: command groups nested inside a `Commands` folder, one row per
   control with the label in a `5.975em` column, a slider carrying its two ends as marks
-  *and* a `3rem` number box that takes typing, the "Max" companion above the axis it
+  *and* a `3rem` number box that takes typing (at mjviser's own `1.875em` height, which
+  is what keeps a slider row the height of the checkbox row above it), the "Max" companion above the axis it
   rescales (mjlab declares it first), a checkbox in the control column rather than
   captioning itself, and a button that is full width and filled — with the icon its
   mjlab GUI asked for, `Icon.SQUARE_X` on `Zero` being the one mjlab declares today.

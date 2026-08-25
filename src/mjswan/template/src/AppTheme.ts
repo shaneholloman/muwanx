@@ -45,6 +45,17 @@ export const theme = createTheme({
     NumberInput: NumberInput.extend({
       defaultProps: {
         radius: "xs",
+        styles: {
+          // mjviser's own box: `1.875em` tall against its own `xs` type, which is what
+          // keeps a slider row the same height as the checkbox row above it. Mantine's
+          // `xs` input is a third taller and sets every row's rhythm from the box.
+          input: {
+            height: "1.875em",
+            minHeight: "1.875em",
+            padding: "0.375em",
+            letterSpacing: "-0.5px",
+          },
+        },
       },
     }),
     Paper: Paper.extend({
