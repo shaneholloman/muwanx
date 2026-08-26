@@ -34,7 +34,16 @@ export interface ModelFieldDrConfig {
   /** Combine against the compiled default rather than the live value. */
   uses_defaults: boolean;
   set_const: boolean;
+  /** `geom_size` only: redo `geom_rbound`/`geom_aabb`, as mjlab does in the same call. */
+  recompute_bounds?: boolean;
 }
+
+/** `mjtGeom` values whose bounds follow from `geom_size` — mjlab's supported set. */
+const GEOM_SPHERE = 2;
+const GEOM_CAPSULE = 3;
+const GEOM_ELLIPSOID = 4;
+const GEOM_CYLINDER = 5;
+const GEOM_BOX = 6;
 
 /**
  * The compiled field values, snapshotted on first touch, so a second `add`/`scale` event
@@ -173,9 +182,68 @@ export function applyModelFieldDr(
     }
   }
 
+  if (config.recompute_bounds) recomputeGeomBounds(mjModel, config.name, indices);
+
   if (config.set_const) {
     // Inertial fields feed precomputed constants, so without this it is half-applied.
     mujoco.mj_setConst(mjModel, mjData);
   }
   return true;
+}
+
+/**
+ * `geom_rbound` and `geom_aabb` from the sizes just written, as
+ * `dr.geom_size._recompute_geom_bounds` computes them — without it a grown geom keeps its
+ * compiled bound and stops colliding at its own surface. `geom_aabb` is `(ngeom, 2, 3)`,
+ * centre then half-size, and a primitive's centre stays at its origin.
+ */
+function recomputeGeomBounds(mjModel: MjModel, name: string, indices: number[]): void {
+  const size = mjModel.geom_size as ArrayLike<number> | undefined;
+  const types = mjModel.geom_type as ArrayLike<number> | undefined;
+  const rbound = mjModel.geom_rbound as unknown as { [index: number]: number } | undefined;
+  const aabb = mjModel.geom_aabb as unknown as { [index: number]: number } | undefined;
+  if (!size || !types || !rbound || !aabb) {
+    console.warn(`[modelFieldDr] "${name}": no geom bounds to recompute in this model.`);
+    return;
+  }
+  for (const index of indices) {
+    const s0 = size[index * 3];
+    const s1 = size[index * 3 + 1];
+    const s2 = size[index * 3 + 2];
+    let bound: number;
+    let half: [number, number, number];
+    switch (types[index]) {
+      case GEOM_SPHERE:
+        bound = s0;
+        half = [s0, s0, s0];
+        break;
+      case GEOM_CAPSULE:
+        bound = s0 + s1;
+        half = [s0, s0, s0 + s1];
+        break;
+      case GEOM_ELLIPSOID:
+        bound = Math.max(s0, s1, s2);
+        half = [s0, s1, s2];
+        break;
+      case GEOM_CYLINDER:
+        bound = Math.sqrt(s0 * s0 + s1 * s1);
+        half = [s0, s0, s1];
+        break;
+      case GEOM_BOX:
+        bound = Math.sqrt(s0 * s0 + s1 * s1 + s2 * s2);
+        half = [s0, s1, s2];
+        break;
+      default:
+        // The build refuses these; this is the backstop.
+        console.warn(
+          `[modelFieldDr] "${name}": geom ${index} is type ${types[index]}, whose ` +
+            'bounds do not follow from its size; leaving them as compiled.',
+        );
+        continue;
+    }
+    rbound[index] = bound;
+    aabb[index * 6 + 3] = half[0];
+    aabb[index * 6 + 4] = half[1];
+    aabb[index * 6 + 5] = half[2];
+  }
 }

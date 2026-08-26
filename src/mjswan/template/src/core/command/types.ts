@@ -35,6 +35,8 @@ export interface ButtonCommandConfig {
   type: 'button';
   name: string;
   label: string;
+  /** Tabler icon name, as viser's `Icon` spells it; an unknown one goes undrawn. */
+  icon?: string;
 }
 
 export interface CheckboxCommandConfig {
@@ -115,7 +117,8 @@ export interface CommandTerm {
   setValue?(inputName: string, value: number): number | void;
   /** Current value of one UI input, for the panel's mirror of it. */
   getUiValue?(inputName: string): number | undefined;
-  triggerButton?(inputName: string): void;
+  /** A press. Return false for a name the term does nothing with; nothing means handled. */
+  triggerButton?(inputName: string): boolean | void;
   dispose?(): void;
 }
 

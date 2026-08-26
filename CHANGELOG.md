@@ -63,6 +63,29 @@ shortcuts were removed outright (no alias) — see Removed.**
   observation terms read these off mjlab's `MotionCommand` as properties, which the
   tracer turns into command slots — so with the browser answering to those names, the
   task's own functions trace unmodified.
+- **`mode="manual"` event terms, fired from the control panel.** A term with this mode
+  has no schedule at all: it runs when the operator presses its button, which is the
+  whole trigger. The panel's new `Events` section draws one button per manual term and
+  one checkbox per `mode="interval"` term, the checkbox arming or disarming that term's
+  schedule — a disarmed timer stops counting rather than banking the wait, so re-arming
+  cannot fire the disturbance on the next frame. Both are also engine verbs
+  (`engine.events.fire(name)` / `engine.events.setArmed(name, armed)`), and the terms
+  they offer are reported as `MjswanEngineState.events`. `label` on the term config is
+  the text either control carries, defaulting to the term name. This is mjswan's own
+  mode, not one of mjlab's four: mjlab has a viewer to bolt a button onto and plain
+  Python state to gate a term with, where a traced graph has neither — a task that wants
+  a disturbance on demand had to settle for one on a timer. A manual term left in an
+  mjlab config is inert there, which is what a mode mjlab never applies should be.
+  `disabled_when` names the `mode="interval"` term that owns the same job: while that
+  schedule is armed the button greys out and `fire()` refuses the press, so a launcher
+  with both a timer and a button is driven by one of them at a time. The build refuses a
+  gate that names no interval term of the scene, rather than shipping a dead control.
+- **`dr.geom_size` is described for the browser**, with the broadphase bounds mjlab
+  recomputes from it: `geom_rbound` and `geom_aabb` follow the new size in the same pass,
+  by geom type (sphere, capsule, ellipsoid, cylinder, box), because a geom that grows
+  while its bound stays as compiled simply stops colliding at its own surface. A size
+  randomization on any other geom type fails the build, naming the geoms and their types;
+  mjlab raises the same refusal, but at the first firing.
 
 ### Changed
 
@@ -119,6 +142,31 @@ All kept as aliases via `_compat.py`, removed in 0.9:
 
 ### Fixed
 
+- **The control panel is mjviser's, control for control.** Two viewers onto the same
+  mjlab task should not look like two products, so the panel now renders what mjlab's own
+  viser GUI renders: command groups nested inside a `Commands` folder, one row per
+  control with the label in a `5.975em` column, a slider carrying its two ends as marks
+  *and* a `3rem` number box that takes typing (at mjviser's own `1.875em` height, which
+  is what keeps a slider row the height of the checkbox row above it), the "Max" companion above the axis it
+  rescales (mjlab declares it first), a checkbox in the control column rather than
+  captioning itself, and a button that is full width and filled — with the icon its
+  mjlab GUI asked for, `Icon.SQUARE_X` on `Zero` being the one mjlab declares today.
+  The slider's thumb is mjviser's bar rather than Mantine's dot (`thumbSize: 0` with a
+  `0.5rem × 0.75rem` box in the slider's own colour) on a square-cornered `xs` track.
+  Sizes are `em`-relative, so both panels stay identical under their own root font size,
+  and the slider styling lives in the theme, so every slider in the app — the splat
+  calibration panel included — follows. `ButtonConfig` grew an `icon`, recorded by the
+  GUI spy from the term's own `create_gui`.
+- **The control panel draws button commands.** `button` has been a command input type
+  all along, `CommandManager.triggerButton` has been wired to the term since, and
+  `engine.commands.trigger` has been a verb — but the panel filtered its controls down
+  to sliders and checkboxes, so no button was ever drawn. mjlab's own `Zero` (declared by
+  every `UniformVelocityCommand` GUI, and recorded faithfully by the GUI spy) simply did
+  not exist for a viewer. Buttons now render in declaration order, so `Zero` lands under
+  the sliders it zeroes, and the values a press moves are re-read from the term rather
+  than left stale in the panel's mirror. `UiCommand` answers to `zero` as well, so a
+  hand-written panel gets the same button for free, and a press no term answers to warns
+  once instead of leaving a control that looks live and does nothing.
 - A position action term now inherits its PD gains from the entity's actuator configs.
   mjlab's ideal-PD family (`IdealPdActuatorCfg` and subclasses, which is what
   `wbc-mjlab`'s G1 uses) puts a `<motor>` in the model and computes

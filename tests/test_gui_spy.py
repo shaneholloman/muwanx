@@ -30,7 +30,7 @@ class _JoystickTerm:
                 server.gui.add_slider(
                     label, min=-limit, max=limit, step=0.05, initial_value=0.0
                 )
-            server.gui.add_button("Zero")
+            server.gui.add_button("Zero", icon="square-x")
 
 
 class _SilentTerm:
@@ -108,6 +108,28 @@ def test_an_unknown_viser_control_raises_rather_than_dropping_it():
         record_gui(_Term(), "twist")
 
 
+def test_a_buttons_icon_is_recorded_for_the_panel_to_draw():
+    inputs = _inputs(_JoystickTerm())
+    assert inputs[-1] == {
+        "type": "button",
+        "name": "zero",
+        "label": "Zero",
+        "icon": "square-x",
+    }
+
+
+def test_a_button_without_an_icon_says_nothing_about_one():
+    class _Term:
+        def create_gui(
+            self, name, server, get_env_idx, on_change=None, request_action=None
+        ):
+            server.gui.add_button("Start Here")
+
+    assert _inputs(_Term()) == [
+        {"type": "button", "name": "start_here", "label": "Start Here"}
+    ]
+
+
 @pytest.mark.mjlab
 def test_records_mjlabs_real_velocity_joystick():
     """`UniformVelocityCommand.create_gui` reads only `self.cfg.ranges`, so no
@@ -129,6 +151,7 @@ def test_records_mjlabs_real_velocity_joystick():
     inputs = _inputs(term)
 
     # mjlab's viewer labels, verbatim.
+    assert inputs[-1]["icon"] == "square-x"
     assert [(i["type"], i["name"], i["label"]) for i in inputs] == [
         ("checkbox", "enabled", "Enable"),
         ("slider", "lin_vel_x", "lin_vel_x"),

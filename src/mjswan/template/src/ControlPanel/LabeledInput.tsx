@@ -15,7 +15,7 @@ export function LabeledInput({ id, label, children }: LabeledInputProps) {
         <Box
           pr="xs"
           style={{
-            width: "7.25em",
+            width: "5.975em",
             flexShrink: 0,
             position: "relative",
           }}
@@ -29,6 +29,7 @@ export function LabeledInput({ id, label, children }: LabeledInputProps) {
               letterSpacing: "-0.75px",
               width: "100%",
               boxSizing: "content-box",
+              overflowWrap: "anywhere",
             }}
           >
             <label htmlFor={id}>{label}</label>

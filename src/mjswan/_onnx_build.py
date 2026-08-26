@@ -19,6 +19,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import mujoco
+
 from .command import ButtonConfig, CommandTermConfig
 from .envs.mdp.events import EventBinding
 from .envs.mdp.observations import ObservationBinding
@@ -728,6 +730,8 @@ def model_field_dr_descriptor(
         axis_ranges = {a: [float(ranges[0]), float(ranges[1])] for a in axes}
 
     operation = _dr_name_of(_dr_arg(func, params, "operation"), "abs")
+    if field_name == "geom_size":
+        _require_primitive_geoms(env, names)
     return {
         "kind": "model_field",
         "field": field_name,
@@ -742,7 +746,38 @@ def model_field_dr_descriptor(
         # they never accumulate across events on one axis.
         "uses_defaults": operation in _DR_OPS_USING_DEFAULTS,
         "set_const": _dr_needs_recompute(func, field_name),
+        # mjlab recomputes the broadphase bounds from the size in the same call.
+        "recompute_bounds": field_name == "geom_size",
     }
+
+
+#: The geom types `dr.geom_size._recompute_geom_bounds` supports.
+_PRIMITIVE_GEOM_TYPES = frozenset(
+    {
+        int(mujoco.mjtGeom.mjGEOM_SPHERE),
+        int(mujoco.mjtGeom.mjGEOM_CAPSULE),
+        int(mujoco.mjtGeom.mjGEOM_ELLIPSOID),
+        int(mujoco.mjtGeom.mjGEOM_CYLINDER),
+        int(mujoco.mjtGeom.mjGEOM_BOX),
+    }
+)
+
+
+def _require_primitive_geoms(env: Any, names: list[str]) -> None:
+    """Refuse a size randomization on a geom whose bounds cannot be recomputed."""
+    model = env.sim.mj_model
+    unsupported = {
+        name: mujoco.mjtGeom(int(model.geom(name).type)).name
+        for name in names
+        if int(model.geom(name).type) not in _PRIMITIVE_GEOM_TYPES
+    }
+    if unsupported:
+        raise ValueError(
+            "dr.geom_size only supports primitive geom types (sphere, capsule, "
+            f"ellipsoid, cylinder, box); these are not: {unsupported}. mjlab raises "
+            "the same, because the broadphase bounds it recomputes from the size are "
+            "only defined for those."
+        )
 
 
 # mjlab's `Operation.uses_defaults`: `abs` reads the live value, `add`/`scale` the default.
@@ -770,6 +805,7 @@ def _dr_needs_recompute(func: Any, field_name: str) -> bool:
 # nothing can introspect them. An author's own wrapper can set `_mjswan_dr_field`.
 _DR_FIELD_BY_FUNC: dict[str, tuple[str, str, list[int]]] = {
     "geom_friction": ("geom_friction", "geom", [0]),
+    "geom_size": ("geom_size", "geom", [0, 1, 2]),
     "geom_rgba": ("geom_rgba", "geom", [0, 1, 2, 3]),
     "body_com_offset": ("body_ipos", "body", [0, 1, 2]),
     "body_ipos": ("body_ipos", "body", [0, 1, 2]),
@@ -825,6 +861,14 @@ def serialize_event(
     name: str, term_cfg: EventTermCfg, env: Any, out_dir: Path
 ) -> dict[str, Any] | None:
     """Serialize one event term, or ``None`` if there is genuinely nothing to emit."""
+    # Before the torch import below: a config mistake should not need a tracer to report.
+    if term_cfg.mode == "manual" and term_cfg.interval_range_s is not None:
+        raise ValueError(
+            f'Event term {name!r} is mode="manual" and carries '
+            f"interval_range_s={term_cfg.interval_range_s!r}. A manual term has no "
+            "schedule — the operator's button is its only trigger. Declare a second "
+            'mode="interval" term if it should also fire on its own.'
+        )
     from .compile import trace_event_term
     from .compile.tracer import slots_json
 
@@ -882,7 +926,31 @@ def serialize_event(
         entry["is_global_time"] = term_cfg.is_global_time
     if term_cfg.mode == "reset" and term_cfg.min_step_count_between_reset:
         entry["min_step_count_between_reset"] = term_cfg.min_step_count_between_reset
+    if term_cfg.label is not None:
+        entry["label"] = term_cfg.label
+    if term_cfg.disabled_when is not None:
+        entry["disabled_when"] = term_cfg.disabled_when
     return entry
+
+
+def _check_disabled_when(events: dict[str, EventTermCfg]) -> None:
+    """Refuse a `disabled_when` naming no `mode="interval"` term: a gate that resolves to
+    nothing greys its button out forever, or never."""
+    for name, term_cfg in events.items():
+        gate = getattr(term_cfg, "disabled_when", None)
+        if gate is None:
+            continue
+        if term_cfg.mode != "manual":
+            raise ValueError(
+                f'Event term {name!r} is mode="{term_cfg.mode}" and carries '
+                f"disabled_when={gate!r}. Only a manual term has a button to grey out."
+            )
+        if getattr(events.get(gate), "mode", None) != "interval":
+            raise ValueError(
+                f"Event term {name!r} declares disabled_when={gate!r}, which is not a "
+                f'mode="interval" term of this scene (it has '
+                f"{sorted(n for n, t in events.items() if t.mode == 'interval')})."
+            )
 
 
 def serialize_events(
@@ -897,6 +965,7 @@ def serialize_events(
     """
     if not events:
         return None
+    _check_disabled_when(events)
     result = []
     for name, term_cfg in events.items():
         if on_term is not None:

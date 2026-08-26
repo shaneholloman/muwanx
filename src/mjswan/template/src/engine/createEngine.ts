@@ -16,6 +16,7 @@ import type {
   CommandDescriptor,
   CreateEngineOptions,
   DebugVisControls,
+  EventControls,
   MjswanEngine,
   MjswanEngineState,
   PolicyInput,
@@ -27,16 +28,17 @@ import type {
 function toDescriptor(def: CommandDefinition): CommandDescriptor {
   const config = def.config;
   const base = { id: def.id, group: def.groupName, type: config.type, label: config.label };
-  return config.type === 'slider'
-    ? {
-        ...base,
-        min: config.min,
-        max: config.max,
-        step: config.step,
-        enabledWhen: config.enabled_when,
-        adjustableRange: config.adjustable_range,
-      }
-    : base;
+  if (config.type === 'slider') {
+    return {
+      ...base,
+      min: config.min,
+      max: config.max,
+      step: config.step,
+      enabledWhen: config.enabled_when,
+      adjustableRange: config.adjustable_range,
+    };
+  }
+  return config.type === 'button' ? { ...base, icon: config.icon } : base;
 }
 
 /**
@@ -83,6 +85,7 @@ class Engine implements MjswanEngine {
   readonly camera: CameraControls;
   readonly commands: CommandControls;
   readonly debugVis: DebugVisControls;
+  readonly events: EventControls;
 
   constructor(runtime: mjswanRuntime) {
     this.runtime = runtime;
@@ -102,6 +105,16 @@ class Engine implements MjswanEngine {
     this.debugVis = {
       set: (term, enabled) => this.runtime.commands.setDebugVisEnabled(term, enabled),
     };
+    this.events = {
+      // Only the arm toggle changes the snapshot; the panel reads its checkbox from it.
+      fire: (name) => {
+        void this.runtime.fireEvent(name);
+      },
+      setArmed: (name, armed) => {
+        this.runtime.setEventArmed(name, armed);
+        this.refresh();
+      },
+    };
   }
 
   private onCommandEvent: CommandEventListener = () => this.refresh();
@@ -116,6 +129,7 @@ class Engine implements MjswanEngine {
       commands: cm.getCommands().map(toDescriptor),
       commandValues: cm.getValues(),
       debugVis: cm.getDebugVisTerms().map(({ name, enabled }) => ({ term: name, enabled })),
+      events: this.runtime.eventControls(),
       termSeed: this.runtime.seed,
     };
   }

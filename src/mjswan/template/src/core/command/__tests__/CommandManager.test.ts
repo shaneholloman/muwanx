@@ -221,6 +221,88 @@ describe('CommandManager: UiCommand state field', () => {
 });
 
 /**
+ * Button commands: a press has to reach the term, and the values it moved have to reach
+ * back — mjlab's `Zero` sets its own sliders and the panel reads them off the mirror.
+ */
+describe('CommandManager: button commands', () => {
+  const context = {
+    mujoco: {} as unknown as CommandTermContext['mujoco'],
+    mjModel: null,
+    mjData: null,
+    scene: {} as unknown as CommandTermContext['scene'],
+  };
+  const withButton = (buttonName: string): CommandsConfig =>
+    ({
+      twist: {
+        name: 'UiCommand',
+        ui: {
+          inputs: [
+            { type: 'slider', name: 'lin_vel_x', label: 'Forward', min: -1, max: 1, default: 0.5, step: 0.05 },
+            { type: 'slider', name: 'ang_vel_z', label: 'Yaw', min: -1, max: 1, default: -0.4, step: 0.05 },
+            { type: 'button', name: buttonName, label: 'Zero' },
+          ],
+        },
+      },
+    }) as unknown as CommandsConfig;
+
+  it('registers a button as a command of its own, with no value', () => {
+    const mgr = new CommandManager();
+    mgr.initialize(withButton('zero'), context as CommandTermContext);
+    const button = mgr.getCommands().find(cmd => cmd.config.type === 'button');
+    expect(button?.id).toBe('twist:zero');
+    // Only value inputs are mirrored; a button has nothing to mirror.
+    expect(mgr.getValues()['twist:zero']).toBeUndefined();
+  });
+
+  it('zeroes the sliders it belongs to, and the panel sees it', () => {
+    const mgr = new CommandManager();
+    mgr.initialize(withButton('zero'), context as CommandTermContext);
+    expect(mgr.getValues()['twist:lin_vel_x']).toBe(0.5);
+    mgr.triggerButton('twist:zero');
+    // The term moved its own sliders; the mirror the panel reads must follow.
+    expect(mgr.getValues()['twist:lin_vel_x']).toBe(0);
+    expect(mgr.getValues()['twist:ang_vel_z']).toBe(0);
+    const term = mgr.getTerm('twist') as unknown as {
+      getStateField(field: string): Float32Array | null;
+    };
+    expect(Array.from(term.getStateField('command')!)).toEqual([0, 0]);
+  });
+
+  it('emits a button event so a host app can hear the press', () => {
+    const mgr = new CommandManager();
+    mgr.initialize(withButton('zero'), context as CommandTermContext);
+    const seen: string[] = [];
+    mgr.addEventListener(event => {
+      if (event.type === 'button') seen.push(event.commandId);
+    });
+    mgr.triggerButton('twist:zero');
+    expect(seen).toEqual(['twist:zero']);
+  });
+
+  it('warns once for a name no term answers to, rather than looking live', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mgr = new CommandManager();
+    mgr.initialize(withButton('launch'), context as CommandTermContext);
+    mgr.triggerButton('twist:launch');
+    mgr.triggerButton('twist:launch');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('launch');
+    warn.mockRestore();
+  });
+
+  it('ignores an id that is not a button', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mgr = new CommandManager();
+    mgr.initialize(withButton('zero'), context as CommandTermContext);
+    mgr.triggerButton('twist:lin_vel_x');
+    mgr.triggerButton('nope');
+    expect(mgr.getValues()['twist:lin_vel_x']).toBe(0.5);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+/**
  * What the Debug Viz panel section lists, mirroring mjlab's `create_debug_vis_gui`:
  * only terms that draw, toggled through the term itself rather than a UI-side copy.
  */

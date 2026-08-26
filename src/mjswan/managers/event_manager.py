@@ -1,8 +1,8 @@
 """Event manager configuration for mjswan.
 
 Provides ``EventTermCfg`` for scene-level events: ``reset``, ``interval``
-(e.g. periodic disturbances), and ``startup`` (e.g. domain randomization run
-once at load) — ADR 0005 §4.
+(e.g. periodic disturbances), ``startup`` (e.g. domain randomization run
+once at load), and ``manual``, fired from the control panel.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Any, Callable, Literal
 
 from ..envs.mdp.events import EventBinding
 
-EventMode = Literal["reset", "interval", "startup"]
+EventMode = Literal["reset", "interval", "startup", "manual"]
 
 
 @dataclass
@@ -30,7 +30,9 @@ class EventTermCfg:
     """Event function — EventBinding sentinel (legacy) or a traceable mjlab-style body."""
 
     mode: EventMode = "reset"
-    """Event trigger mode: ``reset``, ``interval``, or ``startup`` (ADR 0005 §4/§5)."""
+    """Event trigger mode: ``reset``, ``interval``, ``startup``, or ``manual`` — no
+    schedule, the control panel's button is the whole trigger. ``manual`` is mjswan's
+    own: an mjlab config carrying one is inert there."""
 
     params: dict[str, Any] = field(default_factory=dict)
     """Parameters forwarded to the TS event constructor or traced function."""
@@ -43,6 +45,14 @@ class EventTermCfg:
 
     min_step_count_between_reset: int | None = None
     """``mode="reset"`` only: suppress firing on resets that arrive too soon."""
+
+    label: str | None = None
+    """Control-panel text — a ``manual`` term's button, an ``interval`` term's arm
+    checkbox. Defaults browser-side to the term name."""
+
+    disabled_when: str | None = None
+    """``mode="manual"`` only: the ``mode="interval"`` term that owns the same job. The
+    button greys out, and refuses to fire, while that term's schedule is armed."""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize an ``EventBinding`` term.
