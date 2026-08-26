@@ -109,7 +109,6 @@ def test_an_unknown_viser_control_raises_rather_than_dropping_it():
 
 
 def test_a_buttons_icon_is_recorded_for_the_panel_to_draw():
-    """viser's `Icon` members are plain tabler names, and mjlab's `Zero` carries one."""
     inputs = _inputs(_JoystickTerm())
     assert inputs[-1] == {
         "type": "button",

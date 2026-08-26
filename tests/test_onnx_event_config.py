@@ -536,7 +536,6 @@ class TestGeomSize:
         assert set(descriptor["axis_ranges"]) == {0, 1, 2}
 
     def test_a_sphere_radius_alone_is_axis_zero(self):
-        """A ball's own randomization: `operation="abs"`, `axes=[0]`."""
         descriptor = model_field_dr_descriptor(
             self._ball(operation="abs", axes=[0]), _Env()
         )
@@ -655,7 +654,6 @@ class TestManualEvents:
             )
 
     def test_a_manual_term_carrying_an_interval_is_refused(self, tmp_path):
-        """Two triggers on one term reads as a mistake, and it is a cheap one to catch."""
         from mjswan._onnx_build import serialize_event
         from mjswan.managers.event_manager import EventTermCfg
 

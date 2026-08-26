@@ -751,8 +751,7 @@ def model_field_dr_descriptor(
     }
 
 
-#: Geom types whose bounds follow from `geom_size`, as
-#: `dr.geom_size._recompute_geom_bounds` lists them.
+#: The geom types `dr.geom_size._recompute_geom_bounds` supports.
 _PRIMITIVE_GEOM_TYPES = frozenset(
     {
         int(mujoco.mjtGeom.mjGEOM_SPHERE),
@@ -765,10 +764,7 @@ _PRIMITIVE_GEOM_TYPES = frozenset(
 
 
 def _require_primitive_geoms(env: Any, names: list[str]) -> None:
-    """Refuse a size randomization on a geom whose bounds cannot be recomputed.
-
-    mjlab raises the same at the first firing; the build knows the types already.
-    """
+    """Refuse a size randomization on a geom whose bounds cannot be recomputed."""
     model = env.sim.mj_model
     unsupported = {
         name: mujoco.mjtGeom(int(model.geom(name).type)).name
@@ -938,8 +934,8 @@ def serialize_event(
 
 
 def _check_disabled_when(events: dict[str, EventTermCfg]) -> None:
-    """A gate naming nothing would grey a button out forever, or never — catch it here,
-    where the whole dict is in hand, rather than shipping a dead control."""
+    """Refuse a `disabled_when` naming no `mode="interval"` term: a gate that resolves to
+    nothing greys its button out forever, or never."""
     for name, term_cfg in events.items():
         gate = getattr(term_cfg, "disabled_when", None)
         if gate is None:

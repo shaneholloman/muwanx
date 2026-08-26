@@ -80,8 +80,8 @@ body {
 }
 
 /*
- * A slider's end labels, tucked inside the track as mjviser tucks them — centred, the
- * first hangs off the left edge. Mantine has no `styles` hook for a single mark.
+ * A slider's end labels, tucked inside the track as mjviser tucks them; centred, the
+ * first would hang off the left edge. Mantine has no `styles` hook for a single mark.
  */
 .mantine-Slider-markWrapper:first-of-type .mantine-Slider-markLabel {
   transform: translate(-0.1rem, 0.03rem) !important;

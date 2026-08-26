@@ -49,8 +49,8 @@ export class IntervalTrigger {
   }
 
   /**
-   * A disarmed timer does not count down, and re-arming samples a fresh interval: a
-   * countdown that had run while disarmed would fire the instant it came back.
+   * A disarmed timer stops counting rather than banking the wait, and re-arming samples a
+   * fresh interval — one disarmed near zero would otherwise fire the moment it came back.
    */
   setArmed(armed: boolean): void {
     if (armed === this.armed) return;

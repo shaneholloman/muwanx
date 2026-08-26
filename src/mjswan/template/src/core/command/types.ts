@@ -117,10 +117,7 @@ export interface CommandTerm {
   setValue?(inputName: string, value: number): number | void;
   /** Current value of one UI input, for the panel's mirror of it. */
   getUiValue?(inputName: string): number | undefined;
-  /**
-   * A button press. Return false for a name the term does nothing with, so the panel can
-   * say so; a term returning nothing is taken at its word.
-   */
+  /** A press. Return false for a name the term does nothing with; nothing means handled. */
   triggerButton?(inputName: string): boolean | void;
   dispose?(): void;
 }

@@ -52,7 +52,6 @@ describe('IntervalTrigger', () => {
   });
 
   it('does not fire while disarmed, and does not bank the wait', () => {
-    // The countdown stops rather than piling up, so re-arming cannot fire immediately.
     const t = new IntervalTrigger({ intervalRangeS: [1.0, 1.0] }, new SeededRng(1));
     t.setArmed(false);
     let fired = 0;

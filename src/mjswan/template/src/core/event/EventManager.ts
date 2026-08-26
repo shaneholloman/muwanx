@@ -26,8 +26,8 @@ export interface EventControl {
   label: string;
   /** `manual` renders a button, `interval` an arm checkbox. */
   kind: 'manual' | 'interval';
-  /** `interval`: whether its schedule is running. `manual`: whether its button can
-   * fire — false while the term's `disabled_when` schedule owns the job. */
+  /** `interval`: its schedule is running. `manual`: its button can fire — false while
+   * the term's `disabled_when` schedule owns the job. */
   armed: boolean;
 }
 
@@ -39,8 +39,7 @@ type ResetEntry = PluginTerm | OnnxResetTerm;
 /**
  * Mode-aware event dispatch: `mode="reset"` terms fire on episode reset behind a
  * `ResetTrigger`, `mode="interval"` on the frames their `IntervalTrigger` allows,
- * `mode="startup"` once, and `mode="manual"` only when {@link fire} is called, which is
- * the whole schedule such a term has.
+ * `mode="startup"` once, and `mode="manual"` only when {@link fire} is called.
  *
  * One graph per term, unfused — the reference tasks have at most two reset terms and
  * none of the other modes, and fusing would have to reproduce the config-order write
@@ -202,7 +201,6 @@ export class EventManager {
     return true;
   }
 
-  /** A button per manual term, a checkbox per interval one. */
   controls(): EventControl[] {
     return [
       ...this.manualTerms.map(term => ({

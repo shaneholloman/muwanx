@@ -302,7 +302,6 @@ export class CommandManager {
     // mjlab's Zero moves the term's own sliders, and the panel reads them from here.
     this.syncValuesFromTerms();
     if (handled === false && !this.warnedButtons.has(id)) {
-      // The panel draws whatever the build declared; an unanswered name looks live.
       this.warnedButtons.add(id);
       console.warn(
         `[CommandManager] "${command.groupName}" has no action for button ` +

@@ -193,9 +193,9 @@ export function applyModelFieldDr(
 
 /**
  * `geom_rbound` and `geom_aabb` from the sizes just written, as
- * `dr.geom_size._recompute_geom_bounds` computes them: without it a grown geom keeps its
- * compiled bound and stops colliding at its new radius. `geom_aabb` is `(ngeom, 2, 3)` —
- * centre then half-size — and a primitive's centre stays at its origin.
+ * `dr.geom_size._recompute_geom_bounds` computes them — without it a grown geom keeps its
+ * compiled bound and stops colliding at its own surface. `geom_aabb` is `(ngeom, 2, 3)`,
+ * centre then half-size, and a primitive's centre stays at its origin.
  */
 function recomputeGeomBounds(mjModel: MjModel, name: string, indices: number[]): void {
   const size = mjModel.geom_size as ArrayLike<number> | undefined;

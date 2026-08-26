@@ -116,7 +116,7 @@ class ButtonConfig:
     label: str
     icon: str | None = None
     """Tabler icon name, as viser's ``Icon`` spells it (``Icon.SQUARE_X`` is
-    ``"square-x"``). The browser draws the ones it bundles."""
+    ``"square-x"``); the browser draws only the ones it bundles."""
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {

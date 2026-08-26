@@ -20,10 +20,7 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import { IconChevronDown, IconRefresh, IconSquareX, IconX } from '@tabler/icons-react';
 
-/**
- * Icons an mjlab command GUI can ask for, by tabler name (`Icon.SQUARE_X` is
- * `"square-x"`). Only these are bundled; anything else renders without an icon.
- */
+/** Icons an mjlab GUI can ask for; the rest of tabler is unbundled, so goes undrawn. */
 const COMMAND_BUTTON_ICONS: Record<string, typeof IconSquareX> = {
   'square-x': IconSquareX,
 };
@@ -118,7 +115,7 @@ function formatGroupName(groupName: string): string {
     .join(' ');
 }
 
-/** The bound as printed under the track end: the number, without float noise. */
+/** The bound as printed under a track end, without float noise. */
 function formatBound(value: number): string {
   return String(Number(value.toFixed(3)));
 }
@@ -720,8 +717,8 @@ function ControlPanel(props: ControlPanelProps) {
             </CommandSection>
           )}
 
-          {/* Events: a button fires one, a checkbox lets its schedule run. Scene-level,
-              so no policy is needed to drive them. */}
+          {/* Events: a button fires one, a checkbox lets its schedule run — scene-level,
+              so no policy has to be loaded for either. */}
           {events.length > 0 && (
             <CommandSection label="Events" expandByDefault={true}>
               {events

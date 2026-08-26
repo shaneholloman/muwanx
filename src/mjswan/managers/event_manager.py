@@ -31,8 +31,8 @@ class EventTermCfg:
 
     mode: EventMode = "reset"
     """Event trigger mode: ``reset``, ``interval``, ``startup`` (ADR 0005 §4/§5), or
-    ``manual`` — no schedule at all, fired from the control panel's button. ``manual`` is
-    mjswan's own, and inert in an mjlab config: mjlab never applies that mode."""
+    ``manual`` — no schedule, the control panel's button is the whole trigger. ``manual``
+    is mjswan's own: an mjlab config carrying one is inert there."""
 
     params: dict[str, Any] = field(default_factory=dict)
     """Parameters forwarded to the TS event constructor or traced function."""
