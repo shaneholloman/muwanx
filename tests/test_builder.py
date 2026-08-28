@@ -669,6 +669,10 @@ def _fake_joint_pos_rel(env, *, entity_name="robot", **_):
     return d.joint_pos - d.default_joint_pos
 
 
+def _fake_projected_gravity(env, *, entity_name="robot", **_):
+    return env.scene[entity_name].data.projected_gravity_b
+
+
 def _fake_bad_orientation(env, *, limit_angle, entity_name="robot", **_):
     import torch
 
@@ -840,7 +844,7 @@ class TestSaveWebPolicyJson:
         assert data["actions"]["effort"]["type"] == "torque"
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["onnx"] == "term/fallen.onnx"
+        assert fallen["onnx"] == "policy/term/fallen.onnx"
         assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
 
     def test_no_config_path_actions_absent_when_not_set(
@@ -1056,13 +1060,58 @@ class TestSaveWebPolicyJson:
 
         out = self._run(builder, tmp_path)
         data = self._policy_json(out, "Policy")
-        # The group fuses: one graph named for it, with `scale` folded in rather than shipped.
+        # The group fuses: one graph named for it, under the owning policy's directory,
+        # with `scale` folded in rather than shipped.
         group = data["observations"]["policy"]
-        assert group["fused"] == "obs/policy.onnx"
+        assert group["fused"] == "policy/obs/policy.onnx"
         assert group["layout"] == [{"name": "joint_pos", "size": 2}]
         assert group["size"] == 2
         assert "scale" not in group
         assert (out / "main" / "assets" / "s" / group["fused"]).exists()
+
+    def test_two_policies_in_one_scene_keep_their_own_graphs(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """A graph's path is scoped to its policy, so a sibling cannot overwrite it.
+
+        Both policies name their observation group `"policy"` — the ONNX input name
+        their networks read, not a label either is free to change — so an unscoped path
+        gave them one file. The build never noticed, and neither did playback: the
+        loser's config still declared its own `size`, and `conformToSize` pads or
+        truncates the winner's vector to it without an error.
+        """
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
+        groups = {
+            "Walk": {"joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel)},
+            "Crawl": {
+                "joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel),
+                "gravity": ObservationTermCfg(func=_fake_projected_gravity),
+            },
+        }
+        for policy_name, terms in groups.items():
+            scene.add_policy(
+                name=policy_name,
+                policy=minimal_onnx,
+                observations={"policy": ObservationGroupCfg(terms=terms)},
+            )
+
+        out = self._run(builder, tmp_path)
+        walk = self._policy_json(out, "Walk")["observations"]["policy"]
+        crawl = self._policy_json(out, "Crawl")["observations"]["policy"]
+
+        assert walk["fused"] == "walk/obs/policy.onnx"
+        assert crawl["fused"] == "crawl/obs/policy.onnx"
+        assert (walk["size"], crawl["size"]) == (2, 5)
+
+        scene_dir = out / "main" / "assets" / "s"
+        walk_bytes = (scene_dir / walk["fused"]).read_bytes()
+        crawl_bytes = (scene_dir / crawl["fused"]).read_bytes()
+        assert walk_bytes != crawl_bytes
 
     def test_last_action_with_a_term_name_emits_its_slice_offset(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1166,7 +1215,7 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(out, "Policy")
         terms = data["observations"]["policy"]
         assert isinstance(terms, list)
-        assert terms[0]["onnx"] == "obs/joint_pos.onnx"
+        assert terms[0]["onnx"] == "policy/obs/joint_pos.onnx"
         assert terms[0]["scale"] == 0.5
         assert terms[0]["history_length"] == 3
 
@@ -1229,7 +1278,7 @@ class TestSaveWebPolicyJson:
         assert "terminations" in data
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["onnx"] == "term/fallen.onnx"
+        assert fallen["onnx"] == "policy/term/fallen.onnx"
         assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
         assert data["existing_key"] == "kept"
 
@@ -1264,7 +1313,7 @@ class TestSaveWebPolicyJson:
         assert data["actions"]["effort"]["scale"] == 1.5
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         height_entry = data["terminations"]["height"]
-        assert height_entry["onnx"] == "term/height.onnx"
+        assert height_entry["onnx"] == "policy/term/height.onnx"
         assert (out / "main" / "assets" / "s" / height_entry["onnx"]).exists()
 
     def test_config_path_overwrites_existing_actions_block(
@@ -1485,7 +1534,7 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(out, "Policy")
         # Traced to ONNX, with `limit_angle` closed over by the function, not serialized.
         fallen = data["terminations"]["fallen"]
-        assert fallen["onnx"] == "term/fallen.onnx"
+        assert fallen["onnx"] == "policy/term/fallen.onnx"
         assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
         assert "time_out" not in fallen
 

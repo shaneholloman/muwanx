@@ -290,9 +290,10 @@ dist/
             ├── scene.mjz          ← or scene.mjb
             ├── <policy>.onnx      ← the trained network
             ├── <policy>.json      ← its config: slots, layout, actions, commands
-            ├── obs/<group>.onnx   ← traced observation group (usually fused into one)
-            ├── term/<name>.onnx   ← traced termination bodies
-            ├── command/<name>.onnx
+            ├── <policy>/          ← that policy's traced graphs
+            │   ├── obs/<group>.onnx     ← traced observation group (usually fused into one)
+            │   ├── term/<name>.onnx     ← traced termination bodies
+            │   └── command/<name>.onnx
             ├── event/<name>.onnx  ← scene-scoped, referenced from config.json
             ├── <motion>.npz       ← one per distinct clip, shared by the scene's policies
             └── <splat>.spz        ← only when source= is used
@@ -301,7 +302,8 @@ dist/
 The result is a fully static site: copy `dist/` to any static host (GitHub Pages, Netlify, S3, …) and it works without a server.
 
 The `obs/`, `term/`, `command/` and `event/` directories hold the MDP term bodies traced to
-ONNX at build time — see [How the Build Works](../guides/how-it-works.md).
+ONNX at build time. Each policy's graphs live under its own directory, so two policies in
+one scene never share a file — see [How the Build Works](../guides/how-it-works.md).
 
 ## Environment variables
 

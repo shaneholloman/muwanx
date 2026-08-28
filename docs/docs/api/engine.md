@@ -122,7 +122,7 @@ The engine never fetches. Every asset arrives as `Bytes` — an `ArrayBuffer`, o
     interface PolicyInput {
       config: object;                      // parsed policy.json
       onnx: Bytes;                         // the trained network
-      graphs?: Record<string, Bytes>;      // "obs/policy.onnx" → bytes
+      graphs?: Record<string, Bytes>;      // "walk/obs/policy.onnx" → bytes
       motions?: MotionInput[];
       plugins?: EnginePlugins;             // policy-scoped custom terms
     }
@@ -139,7 +139,7 @@ The engine never fetches. Every asset arrives as `Bytes` — an `ArrayBuffer`, o
     ```
 
 `graphs` is keyed by the path the config refers to a graph by — the same
-`obs/`, `term/`, `command/`, `event/` layout the
+`<policy-id>/obs/`, `term/`, `command/` and scene-scoped `event/` layout the
 [build emits](../guides/how-it-works.md#artifact-layout). A missing entry warns and skips
 that term rather than failing the load. `policyGraphRefs(config)` and
 `eventGraphRefs(events)` enumerate what a config needs, for a caller assembling inputs by

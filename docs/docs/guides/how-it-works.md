@@ -194,16 +194,22 @@ dist/main/assets/mjlab_velocity_flat_unitree_g1/
 ├── scene.mjz              # the MuJoCo model
 ├── model_2000.onnx        # the trained policy network (one per checkpoint)
 ├── model_2000.json        # its policy config: slots, layout, actions, commands
-├── obs/policy.onnx        # fused observation group
-├── term/fell_over.onnx    # traced termination body
-├── command/twist.onnx     # traced command body (stateful)
+├── model_2000/            # that checkpoint's traced graphs
+│   ├── obs/policy.onnx        # fused observation group
+│   ├── term/fell_over.onnx    # traced termination body
+│   └── command/twist.onnx     # traced command body (stateful)
 └── event/
     ├── reset_base.onnx
     └── reset_robot_joints.onnx
 ```
 
-`obs/`, `term/` and `command/` are referenced from `policy.json`; `event/` is referenced
-from `config.json`, because events are scene-scoped and survive a policy switch.
+`<policy-id>/obs/`, `term/` and `command/` are referenced from `policy.json`; `event/` is
+referenced from `config.json`, because events are scene-scoped and survive a policy switch.
+
+Each policy owns the directory its graphs sit in. A group or term name is unique within a
+policy but not within a scene — every policy calls its observation group `policy`, which
+is the ONNX input name its network reads rather than a label it is free to change — so
+without the prefix the eleven checkpoints above would write eleven graphs to one path.
 
 Some randomization needs no graph at all. Startup domain randomization that perturbs
 `mjModel` rather than `mjData` — geom friction, body COM offsets — is emitted as a

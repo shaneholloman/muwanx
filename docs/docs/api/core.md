@@ -962,9 +962,10 @@ dist/
             ├── scene.mjz          ← or scene.mjb (depending on add_scene argument)
             ├── <policy-id>.onnx   ← the trained network
             ├── <policy-id>.json   ← present when config_path / commands / observations / actions / terminations are set
-            ├── obs/<group>.onnx   ← traced observation group (usually fused into one graph)
-            ├── term/<name>.onnx   ← traced termination bodies
-            ├── command/<name>.onnx
+            ├── <policy-id>/       ← that policy's traced graphs
+            │   ├── obs/<group>.onnx      ← traced observation group (usually fused into one graph)
+            │   ├── term/<name>.onnx      ← traced termination bodies
+            │   └── command/<name>.onnx
             ├── event/<name>.onnx  ← scene-scoped, referenced from config.json
             ├── <motion-id>.npz    ← one per distinct clip in the scene, shared by its policies
             └── <splat-id>.spz     ← only when source= is used
@@ -972,6 +973,8 @@ dist/
 
 Copy `dist/` to any static host (GitHub Pages, Netlify, S3, …) and it works without a server.
 
-`obs/`, `term/` and `command/` are referenced from `<policy-id>.json`; `event/` from
-`config.json`, since events are scene-scoped. See
+`<policy-id>/obs/`, `term/` and `command/` are referenced from `<policy-id>.json`;
+`event/` from `config.json`, since events are scene-scoped. A policy's graphs sit under
+its own directory because a group or term name is unique only within a policy — every
+policy names its observation group `policy`, the ONNX input name its network reads. See
 [How the Build Works](../guides/how-it-works.md#artifact-layout).

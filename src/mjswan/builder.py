@@ -598,6 +598,11 @@ class Builder:
         if not config_path and not has_mdp:
             return None
 
+        # Every graph this policy traces goes under its own directory. A group or term
+        # name is scene-wide otherwise, and two policies in one scene routinely name
+        # their observation group "policy" — the ONNX input name, not a free label.
+        scope = policy_path.stem
+
         if env is None and (policy.observations or policy.terminations):
             raise ValueError(
                 f"Policy {policy.name!r} on scene {scene_dir.name!r} has "
@@ -656,7 +661,7 @@ class Builder:
 
         if policy.commands:
             data["commands"] = {
-                name: serialize_command(name, cmd, env, scene_dir)
+                name: serialize_command(name, cmd, env, scene_dir, scope=scope)
                 for name, cmd in policy.commands.items()
             }
         if policy.observations:
@@ -669,7 +674,7 @@ class Builder:
                 if target_key in obs_config:
                     target_key = f"{key}_monitor"
                 obs_config[target_key] = serialize_observation_group(
-                    group, env, scene_dir, target_key, native_sizes
+                    group, env, scene_dir, target_key, native_sizes, scope=scope
                 )
             data["observations"] = obs_config
         if policy.actions:
@@ -681,7 +686,9 @@ class Builder:
                 for name, cfg in policy.actions.items()
             }
         if policy.terminations:
-            terminations = serialize_terminations(policy.terminations, env, scene_dir)
+            terminations = serialize_terminations(
+                policy.terminations, env, scene_dir, scope=scope
+            )
             if terminations:
                 data["terminations"] = terminations
         if policy.motions:
@@ -736,6 +743,8 @@ class Builder:
                         ├── scene.mjz/.mjb
                         ├── <policy-id>.onnx
                         ├── <policy-id>.json
+                        ├── <policy-id>/obs|term|command/<name>.onnx  (traced graphs)
+                        ├── event/<name>.onnx  (scene-scoped, so unprefixed)
                         └── <splat-id>.spz  (when local source provided)
         """
         if output_path.exists():
