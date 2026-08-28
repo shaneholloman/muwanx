@@ -5,15 +5,6 @@ import { createTexture, createSkyboxTexture } from './textures';
 import { createTendonMeshes } from './tendons';
 
 
-/**
- * Map a MuJoCo material onto three.js PBR parameters.
- *
- * `metallic` and `roughness` are MuJoCo's own PBR attributes and pass straight
- * through; negative means the model left them unset, and the Blinn-Phong
- * `specular` / `shininess` pair every material carries stands in. `reflectance`
- * is not mapped here at all — it is mirror-reflection strength, which is what
- * `envMapIntensity` below spends it on, not a dielectric F0.
- */
 export function reflectanceParams(
   mjModel: MjModel,
   matId: number
@@ -26,9 +17,6 @@ export function reflectanceParams(
   return {
     specularIntensity: specular,
     roughness: roughnessAttr >= 0 ? roughnessAttr : 1.0 - shininess,
-    // A material that declares no `metallic` is a dielectric: three.js scales diffuse
-    // by (1 - metalness) and there is no scene.environment for the metallic half to
-    // reflect, so any non-zero fallback just eats the base colour.
     metalness: metallic >= 0 ? metallic : 0,
   };
 }
