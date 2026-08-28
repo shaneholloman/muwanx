@@ -142,6 +142,19 @@ All kept as aliases via `_compat.py`, removed in 0.9:
 
 ### Fixed
 
+- **White robots render white.** A `<material>` that declares no `metallic` — which is
+  every material in Menagerie and mjlab, G1's `0.7 0.7 0.7` and Microduck's included —
+  was handed MuJoCo's `specular` as its `metalness`. The two are unrelated quantities:
+  `specular` is a Blinn-Phong highlight coefficient that MuJoCo *adds* to full diffuse
+  albedo, `metalness` is three.js' dielectric/conductor switch, and its 0.5 default
+  therefore made every such material half metal. three.js scales diffuse by
+  `(1 - metalness)`, and the metallic half has no `scene.environment` to reflect, so
+  half of every base colour simply vanished: a pure-white surface came out at 62% grey
+  and the whole albedo range compressed, which is what read as "grey metal". Materials
+  that do declare `metallic` are unaffected. `reflectance` no longer feeds
+  `reflectivity` either — it is mirror-reflection strength, already spent on
+  `envMapIntensity`, and its 0 default was forcing `ior` to 1.0, which flattened the
+  dielectric highlight that is now the only one these materials get.
 - **The control panel is mjviser's, control for control.** Two viewers onto the same
   mjlab task should not look like two products, so the panel now renders what mjlab's own
   viser GUI renders: command groups nested inside a `Commands` folder, one row per
