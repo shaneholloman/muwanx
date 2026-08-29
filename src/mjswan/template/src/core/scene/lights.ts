@@ -26,10 +26,9 @@ function headlightSpec(mjModel: MjModel): HeadlightSpec | undefined {
 }
 
 /**
- * MuJoCo drives highlights from each light's own `light_specular`, but a three.js
- * light has a single colour that its diffuse and specular terms share. Intensity
- * below follows `light_diffuse`, so the ratio the lights can no longer carry is
- * folded into the material's `specularIntensity` instead.
+ * A three.js light shares one colour between diffuse and specular, so it cannot
+ * carry MuJoCo's separate `light_specular`. Intensity follows `light_diffuse`
+ * and the ratio goes into the material's `specularIntensity` instead.
  */
 export function lightSpecularRatio(mjModel: MjModel): number {
   const peak = (channels: ArrayLike<number> | undefined, l: number): number =>
@@ -106,8 +105,7 @@ export function createLights({
         light.color = new THREE.Color(0, 0, 0);
       }
 
-      // three.js divides irradiance by pi, so pi * diffuse reproduces MuJoCo's
-      // albedo * light_diffuse * NdotL.
+      // three.js divides irradiance by pi, so the pi cancels back to MuJoCo's diffuse.
       if ('intensity' in light && typeof (light as { intensity?: number }).intensity === 'number') {
         (light as THREE.PointLight | THREE.DirectionalLight | THREE.SpotLight).intensity =
           luminance * Math.PI;
@@ -203,8 +201,7 @@ export function createLights({
   }
 
   if (!ambientSum.equals(new THREE.Color(0, 0, 0))) {
-    // Same pi as above: at intensity 1 this lands pi times darker than MuJoCo's
-    // rgba * ambient.
+    // Same pi as above: intensity 1 would land pi times too dark.
     const ambientLight = new THREE.AmbientLight(ambientSum, Math.PI);
     mujocoRoot.add(ambientLight);
     lights.push(ambientLight);
