@@ -86,6 +86,7 @@ shortcuts were removed outright (no alias) — see Removed.**
   while its bound stays as compiled simply stops colliding at its own surface. A size
   randomization on any other geom type fails the build, naming the geoms and their types;
   mjlab raises the same refusal, but at the first firing.
+- The `mjlab-to-mjswan` agent skill ([skills/mjlab-to-mjswan/](skills/mjlab-to-mjswan/)), published as a Claude Code plugin from this repo: it ports one mjlab task from any repo into a browser app.
 
 ### Changed
 
