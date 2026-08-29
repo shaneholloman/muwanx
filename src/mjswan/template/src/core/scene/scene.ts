@@ -500,15 +500,15 @@ export async function loadSceneFromURL(
             (currentMaterial as THREE.MeshPhysicalMaterial).envMap = texture;
             (currentMaterial as THREE.MeshPhysicalMaterial).envMapIntensity =
               mjModel.geom_matid[g] !== -1
-                ? mjModel.mat_reflectance?.[mjModel.geom_matid[g]] || 0.5
-                : 0.5;
+                ? (mjModel.mat_reflectance?.[mjModel.geom_matid[g]] ?? 0)
+                : 0;
           }
         } else {
           (currentMaterial as THREE.MeshPhysicalMaterial).envMap = texture;
           (currentMaterial as THREE.MeshPhysicalMaterial).envMapIntensity =
             mjModel.geom_matid[g] !== -1
-              ? mjModel.mat_reflectance?.[mjModel.geom_matid[g]] || 0.5
-              : 0.5;
+              ? (mjModel.mat_reflectance?.[mjModel.geom_matid[g]] ?? 0)
+              : 0;
         }
       }
     }

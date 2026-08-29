@@ -171,6 +171,10 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   costing up to 56% of the saturation in coloured regions; the renderer no longer tone
   maps. `outputColorSpace` stays `LinearSRGBColorSpace` — MuJoCo does no colour
   management either, so the untransformed pipeline is the faithful one.
+- **A material that declares `reflectance="0"` no longer reflects.** `envMapIntensity`
+  read it as `mat_reflectance || 0.5`, and MuJoCo's default *is* 0, so every material
+  that left the attribute out — or set it to zero deliberately — was given a half-strength
+  environment reflection.
 - **The control panel is mjviser's, control for control.** Two viewers onto the same
   mjlab task should not look like two products, so the panel now renders what mjlab's own
   viser GUI renders: command groups nested inside a `Commands` folder, one row per
