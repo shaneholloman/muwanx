@@ -52,6 +52,13 @@ describe('reflectanceParams', () => {
     expect(params.specularIntensity).toBeCloseTo(0.9);
   });
 
+  it("scales the highlight by the scene's specular/diffuse ratio", () => {
+    const params = reflectanceParams(modelWithMaterial(), 0, 0.3 / 1.3);
+
+    expect(params.specularIntensity).toBeCloseTo(0.5 * (0.3 / 1.3));
+    expect(params.roughness).toBeCloseTo(0.5);
+  });
+
   it('falls back to MuJoCo defaults for a geom carrying no material', () => {
     const params = reflectanceParams(modelWithMaterial({ metallic: 1 }), -1);
 

@@ -155,6 +155,22 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   `reflectivity` either — it is mirror-reflection strength, already spent on
   `envMapIntensity`, and its 0 default was forcing `ior` to 1.0, which flattened the
   dielectric highlight that is now the only one these materials get.
+- **The scene is lit in MuJoCo's units, so mjswan matches the MuJoCo viewer.** Measured
+  against MuJoCo 3.12's own renderer over five robots at a matched camera, mean absolute
+  error per pixel drops from **39.5 to 5.5** (8-bit, no exposure fitting). Four
+  mismatches, none of which a viewer setting could compensate for on its own:
+  `AmbientLight` was built at intensity 1.0, but three.js' Lambert BRDF divides
+  irradiance by pi, so ambient landed pi times darker than MuJoCo's `rgba * ambient` —
+  the single largest term, and worst on mjlab scenes, whose headlight ambient is 0.3.
+  Each light's intensity folded `specular` into `diffuse` and then scaled it by an
+  invented `light_intensity || 0.5`, brightening the diffuse term while leaving
+  highlights undriven; intensity is now `max(light_diffuse) * pi`, and the
+  `specular/diffuse` ratio the lights can no longer carry is folded into the material's
+  `specularIntensity`, which under MuJoCo's own defaults is what stops highlights being
+  4x too hot. And `ACESFilmicToneMapping` was applying a film curve MuJoCo does not have,
+  costing up to 56% of the saturation in coloured regions; the renderer no longer tone
+  maps. `outputColorSpace` stays `LinearSRGBColorSpace` — MuJoCo does no colour
+  management either, so the untransformed pipeline is the faithful one.
 - **The control panel is mjviser's, control for control.** Two viewers onto the same
   mjlab task should not look like two products, so the panel now renders what mjlab's own
   viser GUI renders: command groups nested inside a `Commands` folder, one row per

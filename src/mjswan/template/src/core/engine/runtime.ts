@@ -296,8 +296,9 @@ export class mjswanRuntime {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    // MuJoCo writes its shading straight to the framebuffer; any tone curve here
+    // shows up as mjswan being darker and less saturated than the MuJoCo viewer.
+    this.renderer.toneMapping = THREE.NoToneMapping;
     this.container.appendChild(this.renderer.domElement);
 
     this.vrButton = null;

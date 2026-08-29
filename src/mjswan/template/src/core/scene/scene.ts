@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import type { MainModule, MjData, MjModel } from 'mujoco';
-import { createLights } from './lights';
+import { createLights, lightSpecularRatio } from './lights';
 import { createTexture, createSkyboxTexture } from './textures';
 import { createTendonMeshes } from './tendons';
 
 
 export function reflectanceParams(
   mjModel: MjModel,
-  matId: number
+  matId: number,
+  specularRatio = 1
 ): Pick<THREE.MeshPhysicalMaterialParameters, 'specularIntensity' | 'roughness' | 'metalness'> {
   const specular = matId !== -1 ? (mjModel.mat_specular?.[matId] ?? 0.5) : 0.5;
   const shininess = matId !== -1 ? (mjModel.mat_shininess?.[matId] ?? 0.5) : 0.5;
@@ -15,7 +16,7 @@ export function reflectanceParams(
   const roughnessAttr = matId !== -1 ? (mjModel.mat_roughness?.[matId] ?? -1) : -1;
 
   return {
-    specularIntensity: specular,
+    specularIntensity: specular * specularRatio,
     roughness: roughnessAttr >= 0 ? roughnessAttr : 1.0 - shininess,
     metalness: metallic >= 0 ? metallic : 0,
   };
@@ -265,6 +266,7 @@ export async function loadSceneFromURL(
 
   const bodies: Record<number, THREE.Group> = {};
   const meshes: Record<number, THREE.BufferGeometry> = {};
+  const specularRatio = lightSpecularRatio(mjModel);
 
   for (let g = 0; g < mjModel.ngeom; g++) {
     if (!(mjModel.geom_group[g] < 3)) {
@@ -456,7 +458,7 @@ export async function loadSceneFromURL(
         color: new THREE.Color(color[0], color[1], color[2]),
         transparent: color[3] < 1.0,
         opacity: color[3],
-        ...reflectanceParams(mjModel, mjModel.geom_matid[g]),
+        ...reflectanceParams(mjModel, mjModel.geom_matid[g], specularRatio),
       });
 
     if (texture) {
@@ -488,7 +490,7 @@ export async function loadSceneFromURL(
                 color: new THREE.Color(color[0], color[1], color[2]),
                 transparent: color[3] < 1.0,
                 opacity: color[3],
-                ...reflectanceParams(mjModel, mjModel.geom_matid[g]),
+                ...reflectanceParams(mjModel, mjModel.geom_matid[g], specularRatio),
                 map: faceTex,
               });
               materials.push(m);
