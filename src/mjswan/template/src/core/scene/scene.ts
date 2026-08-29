@@ -1,25 +1,24 @@
 import * as THREE from 'three';
 import type { MainModule, MjData, MjModel } from 'mujoco';
-import { createLights } from './lights';
+import { createLights, lightSpecularRatio } from './lights';
 import { createTexture, createSkyboxTexture } from './textures';
 import { createTendonMeshes } from './tendons';
 
 
-function reflectanceParams(
+export function reflectanceParams(
   mjModel: MjModel,
-  matId: number
-): Pick<THREE.MeshPhysicalMaterialParameters, 'specularIntensity' | 'reflectivity' | 'roughness' | 'metalness'> {
+  matId: number,
+  specularRatio = 1
+): Pick<THREE.MeshPhysicalMaterialParameters, 'specularIntensity' | 'roughness' | 'metalness'> {
   const specular = matId !== -1 ? (mjModel.mat_specular?.[matId] ?? 0.5) : 0.5;
   const shininess = matId !== -1 ? (mjModel.mat_shininess?.[matId] ?? 0.5) : 0.5;
-  const reflectance = matId !== -1 ? (mjModel.mat_reflectance?.[matId] ?? 0) : 0;
   const metallic = matId !== -1 ? (mjModel.mat_metallic?.[matId] ?? -1) : -1;
   const roughnessAttr = matId !== -1 ? (mjModel.mat_roughness?.[matId] ?? -1) : -1;
 
   return {
-    specularIntensity: specular,
-    reflectivity: reflectance,
+    specularIntensity: specular * specularRatio,
     roughness: roughnessAttr >= 0 ? roughnessAttr : 1.0 - shininess,
-    metalness: metallic >= 0 ? metallic : specular,
+    metalness: metallic >= 0 ? metallic : 0,
   };
 }
 
@@ -267,6 +266,7 @@ export async function loadSceneFromURL(
 
   const bodies: Record<number, THREE.Group> = {};
   const meshes: Record<number, THREE.BufferGeometry> = {};
+  const specularRatio = lightSpecularRatio(mjModel);
 
   for (let g = 0; g < mjModel.ngeom; g++) {
     if (!(mjModel.geom_group[g] < 3)) {
@@ -458,7 +458,7 @@ export async function loadSceneFromURL(
         color: new THREE.Color(color[0], color[1], color[2]),
         transparent: color[3] < 1.0,
         opacity: color[3],
-        ...reflectanceParams(mjModel, mjModel.geom_matid[g]),
+        ...reflectanceParams(mjModel, mjModel.geom_matid[g], specularRatio),
       });
 
     if (texture) {
@@ -490,7 +490,7 @@ export async function loadSceneFromURL(
                 color: new THREE.Color(color[0], color[1], color[2]),
                 transparent: color[3] < 1.0,
                 opacity: color[3],
-                ...reflectanceParams(mjModel, mjModel.geom_matid[g]),
+                ...reflectanceParams(mjModel, mjModel.geom_matid[g], specularRatio),
                 map: faceTex,
               });
               materials.push(m);
@@ -500,15 +500,15 @@ export async function loadSceneFromURL(
             (currentMaterial as THREE.MeshPhysicalMaterial).envMap = texture;
             (currentMaterial as THREE.MeshPhysicalMaterial).envMapIntensity =
               mjModel.geom_matid[g] !== -1
-                ? mjModel.mat_reflectance?.[mjModel.geom_matid[g]] || 0.5
-                : 0.5;
+                ? (mjModel.mat_reflectance?.[mjModel.geom_matid[g]] ?? 0)
+                : 0;
           }
         } else {
           (currentMaterial as THREE.MeshPhysicalMaterial).envMap = texture;
           (currentMaterial as THREE.MeshPhysicalMaterial).envMapIntensity =
             mjModel.geom_matid[g] !== -1
-              ? mjModel.mat_reflectance?.[mjModel.geom_matid[g]] || 0.5
-              : 0.5;
+              ? (mjModel.mat_reflectance?.[mjModel.geom_matid[g]] ?? 0)
+              : 0;
         }
       }
     }
