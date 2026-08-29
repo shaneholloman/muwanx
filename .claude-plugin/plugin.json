@@ -1,0 +1,5 @@
+{
+  "name": "mjlab-to-mjswan",
+  "version": "0.1.0",
+  "description": "Port an mjlab task from any repo into a browser app built by mjswan."
+}
