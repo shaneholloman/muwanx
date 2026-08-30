@@ -1,5 +1,5 @@
 {
-  "name": "mjlab-to-mjswan",
+  "name": "mjswan",
   "version": "0.1.0",
-  "description": "Port an mjlab task from any repo into a browser app built by mjswan."
+  "description": "Skills for mjswan: build, port and ship MuJoCo scenes as browser apps."
 }

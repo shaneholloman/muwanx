@@ -1,15 +1,15 @@
 {
-  "name": "mjswan",
+  "name": "ttktjmt",
   "owner": {
     "name": "mjswan Developers",
     "url": "https://github.com/ttktjmt/mjswan"
   },
   "plugins": [
     {
-      "name": "mjlab-to-mjswan",
+      "name": "mjswan",
       "source": "./",
       "skills": ["./skills/mjlab-to-mjswan"],
-      "description": "Port an mjlab task from any repo into a browser app built by mjswan.",
+      "description": "Skills for mjswan: build, port and ship MuJoCo scenes as browser apps.",
       "license": "Apache-2.0"
     }
   ]

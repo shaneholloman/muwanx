@@ -10,13 +10,13 @@ E.g., **Claude Code**
 
 ```
 /plugin marketplace add ttktjmt/mjswan
-/plugin install mjlab-to-mjswan@mjswan
+/plugin install mjswan@ttktjmt
 ```
 
 Then invoke it with the target repo:
 
 ```
-/mjlab-to-mjswan https://github.com/mujocolab/g1_spinkick_example
+/mjswan:mjlab-to-mjswan https://github.com/mujocolab/g1_spinkick_example
 ```
 
 Any other agent can follow `SKILL.md` directly, it is plain Markdown with no vendor-specific syntax.
