@@ -10,6 +10,12 @@
 > in-browser internals to mirror mjlab's manager/`envs.mdp` layout. Scope,
 > security posture, and the five-manager restriction are inherited from ADRs
 > 0003/0004 and are **not** relitigated here — only the representation changes.
+>
+> **Superseded in part by [ADR 0006](0006-swn-simulation-document.md):** §1's
+> *"No new `manifest.json`"* no longer holds — the build writes one
+> `manifest.json` at the document root. ADR 0006 also amends §2 (PRNG behaviour
+> at an MDP switch) and §4 (graph references resolve against the scene
+> directory). §3 and §5–§9 stand as written.
 
 ## Context
 
