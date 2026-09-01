@@ -26,6 +26,10 @@ velocity-command shortcuts were removed outright, see Removed.
   in the browser, completing `height_scan`) and `ContactSensor`.
 - Seeded PRNG behind every term's randomness (`createEngine({ termSeed })`, reported
   back as `MjswanEngineState.termSeed`), so a recorded session replays.
+- **WebXR hand tracking as bodies in the simulation** (`createEngine({ handTracking:
+  true })`, or `?hands=1` on the bundled app). Six mocap spheres a hand, each welded to
+  a dynamic twin that owns the contact, so a headset can push a scene's objects around
+  and pick them up. Opt-in: roughly a third more per physics step, in every scene.
 - Debug visualisation for command terms, mirroring mjlab's `debug_vis`: `default_viz()`
   emits arrows and markers as data, toggled via `engine.debugVis.set`, on by default.
 - **`UniformVelocityCommandCfg` binds to a traced command term in mjswan itself**, so a

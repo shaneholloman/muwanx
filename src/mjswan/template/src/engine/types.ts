@@ -151,6 +151,8 @@ export interface CreateEngineOptions {
    * from {@link MjswanEngineState.termSeed} to re-run a recorded session.
    */
   termSeed?: number;
+  /** Put WebXR-tracked hands in the simulation as mocap-driven fingertips. */
+  handTracking?: boolean;
 }
 
 /** A headless, instance-scoped simulation engine. Create with {@link createEngine}. */
