@@ -26,6 +26,7 @@ class _Handle:
     min: float | None = None
     max: float | None = None
     step: float | None = None
+    icon: str | None = None
 
     def on_update(self, fn: Any) -> Any:
         return fn
@@ -84,8 +85,11 @@ class _GuiRecorder:
             _Handle("slider", label, value=initial_value, min=min, max=max, step=step)
         )
 
-    def add_button(self, label: str, **_: Any) -> _Handle:
-        return self._record(_Handle("button", label))
+    def add_button(self, label: str, icon: Any = None, **_: Any) -> _Handle:
+        # viser's `Icon` members are plain tabler names (`Icon.SQUARE_X` == "square-x").
+        return self._record(
+            _Handle("button", label, icon=str(icon) if icon is not None else None)
+        )
 
 
 @dataclass
@@ -151,9 +155,14 @@ def to_ui_descriptor(handles: list[_Handle]) -> dict[str, Any] | None:
                 companion = None
             inputs.append(entry)
         elif handle.kind == "button":
-            inputs.append(
-                {"type": "button", "name": _slug(handle.label), "label": handle.label}
-            )
+            entry = {
+                "type": "button",
+                "name": _slug(handle.label),
+                "label": handle.label,
+            }
+            if handle.icon is not None:
+                entry["icon"] = handle.icon
+            inputs.append(entry)
 
     return {"inputs": inputs} if inputs else None
 

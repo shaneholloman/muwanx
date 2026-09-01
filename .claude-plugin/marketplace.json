@@ -1,0 +1,16 @@
+{
+  "name": "ttktjmt",
+  "owner": {
+    "name": "mjswan Developers",
+    "url": "https://github.com/ttktjmt/mjswan"
+  },
+  "plugins": [
+    {
+      "name": "mjswan",
+      "source": "./",
+      "skills": ["./skills/mjlab-to-mjswan"],
+      "description": "Skills for mjswan: build, port and ship MuJoCo scenes as browser apps.",
+      "license": "Apache-2.0"
+    }
+  ]
+}

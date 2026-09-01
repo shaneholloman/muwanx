@@ -185,6 +185,158 @@ describe('EventManager: mode="interval" — genuinely new dispatch', () => {
   });
 });
 
+describe('EventManager: mode="manual" — the operator is the schedule', () => {
+  /** One manual term and one interval term over the same graph path. */
+  async function bothKinds(runFn: () => Record<string, never>) {
+    const deps = await depsWithSession('event/throw.onnx', fakeSession(runFn));
+    return new EventManager(
+      [
+        {
+          name: 'throw_overhead',
+          mode: 'manual',
+          onnx: 'event/throw.onnx',
+          rand_dim: 0,
+          label: 'Throw overhead',
+        },
+        {
+          name: 'throw_ball',
+          mode: 'interval',
+          onnx: 'event/throw.onnx',
+          rand_dim: 0,
+          interval_range_s: [1.0, 1.0],
+          label: 'Auto throw',
+        },
+      ],
+      {},
+      deps,
+    );
+  }
+
+  it('never fires on its own — not on startup, reset or a tick', async () => {
+    const runFn = vi.fn(() => ({}));
+    const deps = await depsWithSession('event/throw.onnx', fakeSession(runFn));
+    const mgr = new EventManager(
+      [{ name: 'throw_overhead', mode: 'manual', onnx: 'event/throw.onnx', rand_dim: 0 }],
+      {},
+      deps,
+    );
+    await mgr.startup(NO_MODEL);
+    await mgr.onReset(NO_MODEL);
+    await mgr.tick(10, NO_MODEL);
+    expect(runFn).not.toHaveBeenCalled();
+    // Counted all the same: a scene whose only event is manual is not "0 loaded".
+    expect(mgr.size).toBe(1);
+  });
+
+  it('fires when asked, by name, as often as asked', async () => {
+    const runFn = vi.fn(() => ({}));
+    const mgr = await bothKinds(runFn);
+    await mgr.fire('throw_overhead', NO_MODEL);
+    await mgr.fire('throw_overhead', NO_MODEL);
+    expect(runFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('warns rather than throwing for a name that is not a manual term', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runFn = vi.fn(() => ({}));
+    const mgr = await bothKinds(runFn);
+    // An interval term is not the operator's to fire directly.
+    await mgr.fire('throw_ball', NO_MODEL);
+    expect(runFn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('offers one control per term, labelled as the build declared', async () => {
+    const mgr = await bothKinds(vi.fn(() => ({})));
+    expect(mgr.controls()).toEqual([
+      { name: 'throw_overhead', label: 'Throw overhead', kind: 'manual', armed: true },
+      { name: 'throw_ball', label: 'Auto throw', kind: 'interval', armed: true },
+    ]);
+  });
+
+  it('falls back to the term name when the build declared no label', async () => {
+    const deps = await depsWithSession('event/throw.onnx', fakeSession(vi.fn(() => ({}))));
+    const mgr = new EventManager(
+      [{ name: 'throw_overhead', mode: 'manual', onnx: 'event/throw.onnx', rand_dim: 0 }],
+      {},
+      deps,
+    );
+    expect(mgr.controls()[0].label).toBe('throw_overhead');
+  });
+
+  it('disarming an interval term stops it while the button keeps working', async () => {
+    const runFn = vi.fn(() => ({}));
+    const mgr = await bothKinds(runFn);
+    expect(mgr.setArmed('throw_ball', false)).toBe(true);
+    for (let i = 0; i < 12; i++) {
+      await mgr.tick(0.25, NO_MODEL);
+      await settle();
+    }
+    expect(runFn).not.toHaveBeenCalled();
+    expect(mgr.controls()[1].armed).toBe(false);
+
+    // The operator's own throw is unaffected by the schedule being off.
+    await mgr.fire('throw_overhead', NO_MODEL);
+    expect(runFn).toHaveBeenCalledTimes(1);
+
+    // Re-armed, it runs again — after a fresh interval, not the moment it comes back.
+    expect(mgr.setArmed('throw_ball', true)).toBe(true);
+    await mgr.tick(0.25, NO_MODEL);
+    await settle();
+    expect(runFn).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 4; i++) {
+      await mgr.tick(0.25, NO_MODEL);
+      await settle();
+    }
+    expect(runFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('disarms the button while its `disabled_when` schedule is armed', async () => {
+    const runFn = vi.fn(() => ({}));
+    const deps = await depsWithSession('event/throw.onnx', fakeSession(runFn));
+    const mgr = new EventManager(
+      [
+        {
+          name: 'throw_overhead',
+          mode: 'manual',
+          onnx: 'event/throw.onnx',
+          rand_dim: 0,
+          disabled_when: 'throw_ball',
+        },
+        {
+          name: 'throw_ball',
+          mode: 'interval',
+          onnx: 'event/throw.onnx',
+          rand_dim: 0,
+          interval_range_s: [1.0, 1.0],
+        },
+      ],
+      {},
+      deps,
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Interval terms load armed, so the panel greys the button out from the start.
+    expect(mgr.controls()[0].armed).toBe(false);
+    await mgr.fire('throw_overhead', NO_MODEL);
+    expect(runFn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+
+    // Auto throw off: the button is the only thrower again.
+    expect(mgr.setArmed('throw_ball', false)).toBe(true);
+    expect(mgr.controls()[0].armed).toBe(true);
+    await mgr.fire('throw_overhead', NO_MODEL);
+    expect(runFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a name it cannot arm rather than pretending', async () => {
+    const mgr = await bothKinds(vi.fn(() => ({})));
+    expect(mgr.setArmed('throw_overhead', false)).toBe(false);
+    expect(mgr.setArmed('nope', false)).toBe(false);
+  });
+});
+
 describe('EventManager: mode="startup"', () => {
   it('fires exactly once, on startup(), not on reset or tick', async () => {
     const runFn = vi.fn(() => ({}));

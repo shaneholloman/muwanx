@@ -19,6 +19,18 @@ export interface EventManagerDeps {
   readSlot?: SlotReader;
 }
 
+/** One control the panel offers for an event term. */
+export interface EventControl {
+  name: string;
+  /** The term's own `label`, or its name when it declared none. */
+  label: string;
+  /** `manual` renders a button, `interval` an arm checkbox. */
+  kind: 'manual' | 'interval';
+  /** `interval`: its schedule is running. `manual`: its button can fire — false while
+   * the term's `disabled_when` schedule owns the job. */
+  armed: boolean;
+}
+
 /** A plugin-supplied event class — reset-only, no traced graph. */
 type PluginTerm = { kind: 'plugin'; term: EventBase; trigger: ResetTrigger };
 type OnnxResetTerm = { kind: 'onnx'; term: OnnxEvent; trigger: ResetTrigger };
@@ -27,7 +39,7 @@ type ResetEntry = PluginTerm | OnnxResetTerm;
 /**
  * Mode-aware event dispatch: `mode="reset"` terms fire on episode reset behind a
  * `ResetTrigger`, `mode="interval"` on the frames their `IntervalTrigger` allows,
- * `mode="startup"` once.
+ * `mode="startup"` once, and `mode="manual"` only when {@link fire} is called.
  *
  * One graph per term, unfused — the reference tasks have at most two reset terms and
  * none of the other modes, and fusing would have to reproduce the config-order write
@@ -36,6 +48,7 @@ type ResetEntry = PluginTerm | OnnxResetTerm;
 export class EventManager {
   private resetTerms: ResetEntry[] = [];
   private intervalTerms: Array<{ term: OnnxEvent; trigger: IntervalTrigger }> = [];
+  private manualTerms: OnnxEvent[] = [];
   private startupTerms: Array<{ term: OnnxEvent; trigger: StartupTrigger }> = [];
   /** Model-field randomizations, applied once by `startup()` (see `modelFieldDr`). */
   private modelFieldTerms: Array<{ config: ModelFieldDrConfig; trigger: StartupTrigger }> = [];
@@ -65,6 +78,9 @@ export class EventManager {
         }
         const term = new OnnxEvent(config, { session, rng: deps.rng, readSlot: deps.readSlot });
         switch (config.mode) {
+          case 'manual':
+            this.manualTerms.push(term);
+            break;
           case 'startup':
             this.startupTerms.push({ term, trigger: new StartupTrigger() });
             break;
@@ -150,6 +166,58 @@ export class EventManager {
     }
   }
 
+  /** True while a manual term's `disabled_when` interval schedule is armed. */
+  private isGated(manual: OnnxEvent): boolean {
+    const gate = manual.config.disabled_when;
+    if (gate === undefined) return false;
+    return this.intervalTerms.find(({ term }) => term.name === gate)?.trigger.isArmed ?? false;
+  }
+
+  /**
+   * Fire one `mode="manual"` term by name, unless its `disabled_when` schedule is armed.
+   * `OnnxEvent.fire` drops a press that lands while its own graph is still running.
+   */
+  async fire(name: string, context: EventContext): Promise<void> {
+    const term = this.manualTerms.find(entry => entry.name === name);
+    if (!term) {
+      console.warn(`[EventManager] No mode="manual" event named "${name}".`);
+      return;
+    }
+    if (this.isGated(term)) {
+      // The panel greys the button out, so only an API caller gets here; say why.
+      console.warn(
+        `[EventManager] "${name}" is disabled while "${term.config.disabled_when}" is armed.`,
+      );
+      return;
+    }
+    await term.fire(context);
+  }
+
+  /** Start or stop one `mode="interval"` term's schedule. False if there is no such term. */
+  setArmed(name: string, armed: boolean): boolean {
+    const entry = this.intervalTerms.find(({ term }) => term.name === name);
+    if (!entry) return false;
+    entry.trigger.setArmed(armed);
+    return true;
+  }
+
+  controls(): EventControl[] {
+    return [
+      ...this.manualTerms.map(term => ({
+        name: term.name,
+        label: term.config.label ?? term.name,
+        kind: 'manual' as const,
+        armed: !this.isGated(term),
+      })),
+      ...this.intervalTerms.map(({ term, trigger }) => ({
+        name: term.name,
+        label: term.config.label ?? term.name,
+        kind: 'interval' as const,
+        armed: trigger.isArmed,
+      })),
+    ];
+  }
+
   /**
    * Fire every `mode="reset"` term whose gate allows it, **in config order**. Sequential
    * rather than `Promise.all`: every write is an assignment over `default_*`, so the
@@ -168,6 +236,7 @@ export class EventManager {
     return (
       this.resetTerms.length +
       this.intervalTerms.length +
+      this.manualTerms.length +
       this.startupTerms.length +
       // Counted: a task whose only events are DR would otherwise report "0 loaded".
       this.modelFieldTerms.length

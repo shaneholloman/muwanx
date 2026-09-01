@@ -213,6 +213,85 @@ describe('applyModelFieldDr', () => {
   });
 });
 
+describe('geom_size and the bounds that follow it', () => {
+  /** `[size, rbound, aabbHalf]` for one geom, by name. */
+  function bounds(name: string): [number[], number, number[]] {
+    const names = ['floor', 'robot/torso_collision', 'robot/foot_collision'];
+    const i = names.indexOf(name);
+    const size = mjModel.geom_size as ArrayLike<number>;
+    const rbound = mjModel.geom_rbound as ArrayLike<number>;
+    const aabb = mjModel.geom_aabb as ArrayLike<number>;
+    return [
+      [size[i * 3], size[i * 3 + 1], size[i * 3 + 2]],
+      rbound[i],
+      [aabb[i * 6 + 3], aabb[i * 6 + 4], aabb[i * 6 + 5]],
+    ];
+  }
+
+  const sizeConfig = (over: Partial<ModelFieldDrConfig> = {}): ModelFieldDrConfig =>
+    config({
+      name: 'randomize_ball_size',
+      field: 'geom_size',
+      entity_names: ['robot/foot_collision'],
+      axis_ranges: { '0': [0.125, 0.125] },
+      operation: 'abs',
+      uses_defaults: false,
+      recompute_bounds: true,
+      ...over,
+    });
+
+  it("writes a sphere's radius and the broadphase bound with it", () => {
+    // Without the recompute the broadphase keeps 0.05 and the ball stops colliding
+    // at its own surface.
+    expect(apply(sizeConfig(), new SeededRng(1))).toBe(true);
+    const [size, rbound, aabbHalf] = bounds('robot/foot_collision');
+    expect(size[0]).toBeCloseTo(0.125, 6);
+    expect(rbound).toBeCloseTo(0.125, 6);
+    expect(aabbHalf).toEqual([0.125, 0.125, 0.125]);
+  });
+
+  it("leaves an untargeted geom's bounds as compiled", () => {
+    const before = bounds('robot/torso_collision');
+    apply(sizeConfig(), new SeededRng(1));
+    expect(bounds('robot/torso_collision')).toEqual(before);
+  });
+
+  it("uses the box's own bound formula, not the sphere's", () => {
+    apply(
+      sizeConfig({
+        entity_names: ['robot/torso_collision'],
+        axis_ranges: { '0': [2, 2], '1': [2, 2], '2': [2, 2] },
+        operation: 'scale',
+        uses_defaults: true,
+      }),
+      new SeededRng(1),
+    );
+    const [size, rbound, aabbHalf] = bounds('robot/torso_collision');
+    // 0.1 half-extents doubled; a box's bounding sphere is its diagonal.
+    expect(size).toEqual([0.2, 0.2, 0.2]);
+    expect(rbound).toBeCloseTo(Math.sqrt(3) * 0.2, 6);
+    expect(aabbHalf).toEqual([0.2, 0.2, 0.2]);
+  });
+
+  it('leaves the bounds alone for a geom whose size does not define them', () => {
+    // The build refuses a plane, so the runtime only warns rather than inventing one.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const before = bounds('floor');
+    apply(sizeConfig({ entity_names: ['floor'] }), new SeededRng(1));
+    expect(bounds('floor')[1]).toBe(before[1]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('does not touch the bounds when the build did not ask', () => {
+    const before = bounds('robot/foot_collision');
+    apply(sizeConfig({ recompute_bounds: false }), new SeededRng(1));
+    expect(bounds('robot/foot_collision')[0][0]).toBeCloseTo(0.125, 6);
+    // Stale on purpose: this is what mjlab's own `geom_friction` path leaves behind.
+    expect(bounds('robot/foot_collision')[1]).toBeCloseTo(before[1], 6);
+  });
+});
+
 describe('isModelFieldDrConfig', () => {
   it('separates it from a traced event', () => {
     expect(isModelFieldDrConfig(config())).toBe(true);

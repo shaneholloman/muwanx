@@ -79,6 +79,8 @@ export interface CommandDescriptor {
   enabledWhen?: string;
   /** Slider only: a presentational companion that rescales this slider's drag range. */
   adjustableRange?: SliderRangeControl;
+  /** Button only: tabler icon name the build recorded from the term's own GUI. */
+  icon?: string;
 }
 
 /** Bounds of an {@link CommandDescriptor.adjustableRange} companion slider. */
@@ -106,6 +108,25 @@ export interface DebugVisControls {
   set(term: string, enabled: boolean): void;
 }
 
+/** One event term the operator can drive: a `manual` button or an `interval` schedule. */
+export interface EventDescriptor {
+  /** The term's config name, and the id {@link EventControls} takes. */
+  name: string;
+  /** The term's own `label`, or its name when it declared none. */
+  label: string;
+  kind: 'manual' | 'interval';
+  /** `interval`: its schedule is running. `manual`: its button can fire — false while
+   * the term's `disabled_when` schedule owns the job. */
+  armed: boolean;
+}
+
+export interface EventControls {
+  /** Fire a `mode="manual"` term now. */
+  fire(name: string): void;
+  /** Start or stop a `mode="interval"` term's schedule. */
+  setArmed(name: string, armed: boolean): void;
+}
+
 /** Immutable snapshot pushed to {@link MjswanEngine.subscribe} listeners. */
 export interface MjswanEngineState {
   phase: 'running' | 'paused';
@@ -116,6 +137,8 @@ export interface MjswanEngineState {
   commandValues: Readonly<Record<string, number>>;
   /** Terms with a debug drawing to toggle; empty when the policy has none. */
   debugVis: ReadonlyArray<DebugVisDescriptor>;
+  /** Event terms the operator can drive; empty when the scene has none. */
+  events: ReadonlyArray<EventDescriptor>;
   /** Reported so an app recording a session can persist it rather than guess. */
   termSeed: number;
 }
@@ -152,6 +175,7 @@ export interface MjswanEngine {
   readonly camera: CameraControls;
   readonly commands: CommandControls;
   readonly debugVis: DebugVisControls;
+  readonly events: EventControls;
 
   // state
   getState(): MjswanEngineState;

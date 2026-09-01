@@ -37,6 +37,8 @@ GEOM_NAMES = [
     "robot/rf_pad_collision",
 ]
 BODY_NAMES = ["world", "robot/torso", "robot/hand"]
+#: `mjtGeom`: a plane, a mesh, then spheres — `dr.geom_size` refuses non-primitives.
+GEOM_TYPES = [0, 7, 2, 2, 2, 2]
 ROBOT_GEOM_IDS = [1, 2, 3, 4, 5]
 ROBOT_BODY_IDS = [1, 2]
 
@@ -49,15 +51,17 @@ class _Ids(list):
 
 
 class _Named:
-    def __init__(self, name):
+    def __init__(self, name, type=0):
         self.name = name
+        self.type = type
 
 
 class _MjModel:
-    """Only the name accessors `_dr_entity_names` reaches for."""
+    """Names and a geom's type, indexed by id or by name as MuJoCo's accessor is."""
 
-    def geom(self, i):
-        return _Named(GEOM_NAMES[i])
+    def geom(self, key):
+        index = GEOM_NAMES.index(key) if isinstance(key, str) else key
+        return _Named(GEOM_NAMES[index], GEOM_TYPES[index])
 
     def body(self, i):
         return _Named(BODY_NAMES[i])
@@ -105,7 +109,10 @@ class _Env:
 
 
 class _TermCfg:
-    """Stands in for `EventTermCfg` (only `.func` / `.params` / `.mode` are read)."""
+    """Stands in for `EventTermCfg` (only these fields are read)."""
+
+    interval_range_s = None
+    label = None
 
     def __init__(self, func, params, mode="startup"):
         self.func = func
@@ -145,6 +152,19 @@ def body_com_offset(  # noqa: PLR0917 — mjlab's own arity; the signature is th
     del env, env_ids, ranges, asset_cfg, distribution, operation, axes, shared_random
 
 
+def geom_size(  # noqa: PLR0917 — mjlab's own arity; the signature is the fixture
+    env,
+    env_ids,
+    ranges,
+    asset_cfg=None,
+    distribution="uniform",
+    operation="scale",
+    axes=None,
+    shared_random=False,
+):
+    del env, env_ids, ranges, asset_cfg, distribution, operation, axes, shared_random
+
+
 def body_mass(  # noqa: PLR0917 — mjlab's own arity; the signature is the fixture
     env,
     env_ids,
@@ -162,6 +182,8 @@ def body_mass(  # noqa: PLR0917 — mjlab's own arity; the signature is the fixt
 body_com_offset.recompute = 3
 body_mass.recompute = 3
 geom_friction.recompute = 0
+# The bounds are model fields, not the inertial constants `mj_setConst` rebuilds.
+geom_size.recompute = 0
 
 
 def _fingertips():
@@ -486,6 +508,166 @@ def test_serialize_event_emits_the_descriptor_with_its_name_and_mode(tmp_path):
     # No graph: the browser draws these itself from the seeded stream.
     assert "onnx" not in entry
     assert not list(tmp_path.rglob("*.onnx"))
+
+
+class TestGeomSize:
+    """`dr.geom_size`: the browser owes the bounds mjlab recomputes in the same call.
+
+    Geoms whose bounds do not follow from their size are refused at build time.
+    """
+
+    @staticmethod
+    def _ball(**params):
+        return _TermCfg(
+            geom_size,
+            {"asset_cfg": _fingertips(), "ranges": (0.075, 0.125), **params},
+        )
+
+    def test_it_describes_the_field_and_asks_for_the_bounds(self):
+        descriptor = model_field_dr_descriptor(self._ball(), _Env())
+        assert descriptor["field"] == "geom_size"
+        assert descriptor["entity_type"] == "geom"
+        assert descriptor["recompute_bounds"] is True
+        assert descriptor["set_const"] is False
+
+    def test_all_three_axes_by_default_as_mjlab_scales_them(self):
+        descriptor = model_field_dr_descriptor(self._ball(), _Env())
+        assert descriptor["operation"] == "scale"
+        assert set(descriptor["axis_ranges"]) == {0, 1, 2}
+
+    def test_a_sphere_radius_alone_is_axis_zero(self):
+        descriptor = model_field_dr_descriptor(
+            self._ball(operation="abs", axes=[0]), _Env()
+        )
+        assert descriptor["operation"] == "abs"
+        assert descriptor["axis_ranges"] == {0: [0.075, 0.125]}
+
+    def test_a_geom_whose_bounds_do_not_follow_from_its_size_is_refused(self):
+        term = _TermCfg(
+            geom_size,
+            {
+                "asset_cfg": _EntityCfg("robot", geom_names=("robot/torso_collision",)),
+                "ranges": (0.9, 1.1),
+            },
+        )
+        with pytest.raises(ValueError, match="primitive geom types") as excinfo:
+            model_field_dr_descriptor(term, _Env())
+        assert "robot/torso_collision" in str(excinfo.value)
+        assert "MESH" in str(excinfo.value)
+
+    def test_another_field_does_not_ask_for_the_bounds(self):
+        descriptor = model_field_dr_descriptor(
+            _TermCfg(geom_friction, {"asset_cfg": _fingertips(), "ranges": (0.3, 1.5)}),
+            _Env(),
+        )
+        assert descriptor["recompute_bounds"] is False
+
+
+class TestManualEvents:
+    """`mode="manual"`: no schedule at all, fired from the control panel's button."""
+
+    def test_it_serializes_with_its_label_and_no_schedule(self, tmp_path):
+        torch = pytest.importorskip("torch")
+        pytest.importorskip("mjlab")
+        from mjswan._onnx_build import serialize_event
+        from mjswan.managers.event_manager import EventTermCfg
+
+        def throw(env, env_ids, ball_name="ball"):
+            env.scene[ball_name].write_root_link_pose_to_sim(
+                torch.zeros(1, 7), env_ids=env_ids
+            )
+
+        entry = serialize_event(
+            "throw_overhead",
+            EventTermCfg(
+                func=throw,
+                mode="manual",
+                params={"ball_name": "ball"},
+                label="Throw overhead",
+            ),
+            TestWriteTargetEntity._env(),
+            tmp_path,
+        )
+        assert entry["mode"] == "manual"
+        assert entry["label"] == "Throw overhead"
+        assert "interval_range_s" not in entry
+        assert "is_global_time" not in entry
+        # Still a traced graph writing the entity it was made on.
+        assert entry["write_targets"][0]["entity"] == "ball"
+
+    def test_disabled_when_travels_to_the_browser(self, tmp_path):
+        torch = pytest.importorskip("torch")
+        pytest.importorskip("mjlab")
+        from mjswan._onnx_build import serialize_event
+        from mjswan.managers.event_manager import EventTermCfg
+
+        def throw(env, env_ids, ball_name="ball"):
+            env.scene[ball_name].write_root_link_pose_to_sim(
+                torch.zeros(1, 7), env_ids=env_ids
+            )
+
+        entry = serialize_event(
+            "throw_overhead",
+            EventTermCfg(
+                func=throw,
+                mode="manual",
+                params={"ball_name": "ball"},
+                disabled_when="throw_ball",
+            ),
+            TestWriteTargetEntity._env(),
+            tmp_path,
+        )
+        assert entry["disabled_when"] == "throw_ball"
+
+    def test_a_gate_that_names_no_interval_term_is_refused(self):
+        """A dead gate greys the button out forever, or never — and says nothing."""
+        from mjswan._onnx_build import _check_disabled_when
+        from mjswan.managers.event_manager import EventTermCfg
+
+        def throw(env, env_ids):
+            raise AssertionError("never traced")
+
+        auto = EventTermCfg(func=throw, mode="interval", interval_range_s=(1.0, 4.0))
+        gated = EventTermCfg(func=throw, mode="manual", disabled_when="throw_ball")
+        _check_disabled_when({"throw_overhead": gated, "throw_ball": auto})
+
+        with pytest.raises(ValueError, match="throw_ball"):
+            _check_disabled_when({"throw_overhead": gated})
+        with pytest.raises(ValueError, match="interval"):
+            # The gate must be the schedule, not another button.
+            _check_disabled_when(
+                {
+                    "throw_overhead": gated,
+                    "throw_ball": EventTermCfg(func=throw, mode="manual"),
+                }
+            )
+        with pytest.raises(ValueError, match="manual"):
+            _check_disabled_when(
+                {
+                    "throw_ball": EventTermCfg(
+                        func=throw,
+                        mode="interval",
+                        interval_range_s=(1.0, 4.0),
+                        disabled_when="throw_ball",
+                    )
+                }
+            )
+
+    def test_a_manual_term_carrying_an_interval_is_refused(self, tmp_path):
+        from mjswan._onnx_build import serialize_event
+        from mjswan.managers.event_manager import EventTermCfg
+
+        def throw(env, env_ids):
+            raise AssertionError("never traced")
+
+        with pytest.raises(ValueError, match="manual") as excinfo:
+            serialize_event(
+                "throw",
+                EventTermCfg(func=throw, mode="manual", interval_range_s=(1.0, 4.0)),
+                _Env(),
+                tmp_path,
+            )
+        assert "interval" in str(excinfo.value)
 
 
 class TestAnUntraceableEventFailsTheBuild:

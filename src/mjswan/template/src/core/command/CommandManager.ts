@@ -96,6 +96,15 @@ class UiCommand implements CommandTerm {
     this.values.set(input.name, clamped);
     return clamped;
   }
+
+  /** `zero` resets every slider, as mjlab's own Zero button does. */
+  triggerButton(inputName: string): boolean {
+    if (inputName !== 'zero') return false;
+    for (const input of this.inputs) {
+      if (input.type === 'slider') this.values.set(input.name, 0);
+    }
+    return true;
+  }
 }
 
 const BuiltinCommandTerms: Record<string, CommandTermConstructor> = {
@@ -110,6 +119,8 @@ export class CommandManager {
   private values: Map<string, number> = new Map();
   private listeners: Set<CommandEventListener> = new Set();
   private context: CommandTermContext | null = null;
+  /** Buttons already reported as unhandled, so a repeated press is not a repeated log. */
+  private warnedButtons: Set<string> = new Set();
 
   initialize(
     commandsConfig: CommandsConfig,
@@ -287,7 +298,16 @@ export class CommandManager {
     }
 
     const term = this.terms.get(command.groupName);
-    term?.triggerButton?.(command.config.name);
+    const handled = term?.triggerButton?.(command.config.name);
+    // mjlab's Zero moves the term's own sliders, and the panel reads them from here.
+    this.syncValuesFromTerms();
+    if (handled === false && !this.warnedButtons.has(id)) {
+      this.warnedButtons.add(id);
+      console.warn(
+        `[CommandManager] "${command.groupName}" has no action for button ` +
+          `"${command.config.name}".`,
+      );
+    }
 
     this.emit({
       type: 'button',
@@ -316,6 +336,7 @@ export class CommandManager {
     this.commands.clear();
     this.commandGroups.clear();
     this.values.clear();
+    this.warnedButtons.clear();
     this.context = null;
     this.emit({ type: 'clear', commandId: '' });
   }

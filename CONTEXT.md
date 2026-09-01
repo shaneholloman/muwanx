@@ -48,6 +48,7 @@ examples/            Runnable examples
   tutorial/            hello_world, minimum_policy, mujoco_models
 
 tests/               pytest suite + dump_*_fixture.py generators for the TS parity fixtures
+skills/              Agent skills this repo publishes (mjlab-to-mjswan: port an mjlab task)
 docs/                zensical (MkDocs-based) site → Read the Docs; adr/ design records
 typings/             MuJoCo stub generator script
 scripts/             Maintenance scripts (sync_contributors.py)

@@ -30,7 +30,8 @@
 
 ## News
 
-<!-- - **2026-07-24**: Released a beta version of [mjswan Cloud](https://mjswan.com) 🎉 -->
+- **2026-08-17**: Created [mjswan_playground](https://github.com/ttktjmt/mjswan_playground), a collection of mjswan demos
+- **2026-08-15**: Became mjlab-native, covering most tasks in [mjlab](https://github.com/mujocolab/mjlab)
 - **2026-06-02**: Adopted for the [MuscleMimic](https://github.com/amathislab/musclemimic) live demo [[Demo](https://mjswan-musclemimic.pages.dev/)]
 - **2026-05-06**: Adopted for the [GentleHumanoid](https://gentle-humanoid.axell.top/#/) live demo [[Demo](https://mjswan-gentlehumanoid.pages.dev/), [X](https://x.com/Axell_wppr/status/2051878574874148953)]
 - **2026-04-08**: Featured in the [MuJoCo README](https://github.com/google-deepmind/mujoco#first-party-bindings)
@@ -45,6 +46,7 @@
 - **Client-only**: All computation runs in the browser. No server for simulation is required.
 - **Easy Sharing**: Host as a static site for effortless demo distribution (e.g., GitHub Pages).
 - **Portable**: Embed the simulation in a web page or Google Colab notebook.
+- **mjlab-native**: Create a web demo of any [mjlab](https://github.com/mujocolab/mjlab) tasks with minimal effort.
 - **Customizable**: Visualize your mujoco models and onnx policies quickly.
 
 

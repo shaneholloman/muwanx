@@ -1,0 +1,5 @@
+{
+  "name": "mjswan",
+  "version": "0.1.0",
+  "description": "Skills for mjswan: build, port and ship MuJoCo scenes as browser apps."
+}

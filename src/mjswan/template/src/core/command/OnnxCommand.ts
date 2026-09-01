@@ -212,12 +212,13 @@ export class OnnxCommand implements CommandTerm {
     return value;
   }
 
-  triggerButton(inputName: string): void {
+  triggerButton(inputName: string): boolean {
     // mjlab's Zero button.
-    if (inputName !== 'zero') return;
+    if (inputName !== 'zero') return false;
     for (const input of this.cfg.ui?.inputs ?? []) {
       if (input.type === 'slider') this.uiValues.set(input.name, 0);
     }
+    return true;
   }
 
   /** Run one graph evaluation. Exposed for tests//deterministic stepping. */
