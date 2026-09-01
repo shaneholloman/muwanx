@@ -39,14 +39,13 @@ termination set, one command set, one event set — yet the build traces and
 writes all of it once per policy, because the policy is the only unit that owns
 an MDP. There are 7 distinct MDPs in that example and dozens of copies of them.
 
-That example also exposes a second failure of the same cause. Policies are named
-for the W&B file they came from — `name = pt_path.stem`, so `model_0`,
-`model_50`, … (`wandb_io.py:344`) — which means the four runs of
-`Mjlab-Velocity-Rough-Unitree-G1` all produce the same names.
-`add_policy_wandb` guards against the resulting overwrite with a `seen_names`
-set and `continue` (`scene.py:729-731`), so **every checkpoint whose step
-already appeared is silently dropped**: runs 2–4 contribute only the steps run 1
-never reached, in the one scene whose whole purpose is comparing them.
+Policies are named for the W&B file they came from — `name = pt_path.stem`, so
+`model_0`, `model_50`, … (`wandb_io.py:344`) — and mjlab's runs for one task are
+a **resume chain**: run *n+1* starts from run *n*'s last checkpoint, so the only
+name two runs share is that boundary. `add_policy_wandb` drops the repeat with a
+`seen_names` set (`scene.py:729-731`), which is the right answer for a resume
+chain and is left alone. Across *scenes*, though, the same names recur in full,
+and nothing separates them.
 
 **3. `event` has no owner at all.** `Scene._derive_term_sets` handles
 observations, actions, terminations, and commands; events are held on the scene
@@ -305,11 +304,12 @@ at an already-published newer one. No backporting, no new release line, no
 rewriting of stored documents. The same row form handles a document stamped with
 an unpublished development version.
 
-This ADR does not settle whether mjswan Cloud pins the engine per document or
-migrates stored documents forward so that everything runs the newest engine.
-The intent is the latter; what makes it only partly reachable is recorded under
-*Open questions*. `format` is required either way — a migrator needs it to know
-what it is reading, and a pinning host needs it as the engine's own guard.
+mjswan Cloud's intent is to **migrate stored documents forward** so everything
+runs the newest engine, rather than pinning each to the engine that wrote it; the
+override table is then the fallback for the documents migration cannot reach.
+See *Migrating stored documents* for which those are. `format` is required under
+either policy — a migrator needs it to know what it is reading, and a pinning
+host needs it as the engine's own guard.
 
 ### 8. The `.swn` container, and the two output modes
 
@@ -405,9 +405,11 @@ engine will silently ignore something in this document". **Rejected** — see §
 - `examples/mjlab/defaults` traces 7 MDPs — one per scene — instead of one per
   checkpoint. Build time and document size fall by the checkpoint multiplicity,
   which is the dominant term for a W&B comparison build.
-- The four runs of `Mjlab-Velocity-Rough-Unitree-G1` all appear, as
-  `model_0`, `model_0_1`, `model_0_2`, `model_0_3` and so on, each with a
-  warning. Today the later runs contribute only steps the first never reached.
+- Deduplication and renaming stay separate concerns, which is worth stating
+  because they look alike. `add_policy_wandb`'s `seen_names` drops a checkpoint
+  that is *the same checkpoint* seen twice at a resume boundary. §4's rename
+  handles two *different* objects that happen to sanitize to one id. Neither
+  should grow into the other.
 - `event` becomes switchable per policy, which is the feature this reorganization
   exists to enable.
 - A document is one file with one descriptor, readable by unzipping it.
@@ -417,8 +419,8 @@ engine will silently ignore something in this document". **Rejected** — see §
   `manifest.json` at the root. This is a pre-1.0 break taken deliberately and all
   at once rather than behind a compatibility shim.
 - Existing published Cloud documents are `format`-less and root-`config.json`
-  based. Whether they are migrated forward or read by a pinned older engine is
-  left open below.
+  based. They are migratable — see *Migrating stored documents* — because nothing
+  in this ADR reaches inside a traced graph.
 - The `?project=` value changes for any project whose name was not already
   lowercase-alphanumeric. Existing shared links to such projects fall back to the
   default project rather than erroring.
@@ -451,21 +453,104 @@ Phases are commit boundaries within one release, not separate releases.
    together, `in_keys` dropped for single-input policies, the `obs`→`policy`
    special case deleted, the build-time slot-count check added.
 
+## Migrating stored documents
+
+The intent for mjswan Cloud is that every stored simulation is migrated forward
+so it runs on the newest engine, rather than each being pinned to the engine that
+wrote it. This section is the reference for writing that migration script.
+
+### What R2 holds, and what a migrator can do to it
+
+Cloud stores exactly what `plan_publish` uploads — `.json`, `.mjz`, `.onnx`,
+`.npz`, `.ply`, `.spz` (`publish.py:41-43`).
+
+| Kind | What it is | Migratable |
+|---|---|---|
+| `manifest.json`, policy JSONs | mjswan-authored structured data | Yes — rewrite freely |
+| `.npz` motions | plain arrays | Yes |
+| `.ply` / `.spz` splats | geometry | Yes; no reason to |
+| `.onnx` policy networks | third-party trained weights | Untouched — ORT reads them by opset, not by any mjswan contract |
+| `.mjz` scenes | MuJoCo's format | In principle, but it needs MuJoCo in the migrator; treat as out of scope |
+| `.onnx` traced MDP graphs | mjswan compiler output | **Conditionally** — see below |
+
+### The traced graphs: torch's body, mjswan's interface
+
+The graph *body* is `torch.onnx.export`'s output and does not depend on mjswan.
+The graph's **interface does**, entirely, and the interface is what a migration
+would have to change:
+
+- Input names are mjswan's, not torch's: `_slot_input_name` (`tracer.py:530`)
+  produces `sensor__<name>`, `command__<name>`, `<namespace>__<name>`.
+- mjswan appends its own inputs: `rand` for event terms (`tracer.py:1072`),
+  `resample_mask` + `rand` + the previous-state tensors for command terms
+  (`tracer.py:1373`).
+- The batch-axis convention is mjswan's: `dynamic_axes={n: {0: "batch"}}`
+  (`tracer.py:379`).
+- The manifest's `input_slots` (`slots_json`, `tracer.py:588`) is the contract
+  telling the runtime what to feed each input, and a fused observation graph also
+  carries `layout` — the per-term widths in concat order (`_onnx_build.py:311`).
+- `slots_json` re-reads the exported graph's real inputs and **drops slots the
+  exporter folded into constants** (`tracer.py:600-604`). A graph and its slot
+  list are therefore a matched pair produced by one specific torch version; you
+  cannot derive either from the other.
+
+So the rule for a migrator is not "graphs can't be touched", it is:
+
+> **A traced graph migrates as long as the change is a rewrapping of computation
+> the graph already contains. It does not migrate when the new engine needs
+> computation the graph does not contain.**
+
+Rewrapping — mechanical, safe to script with `onnx`:
+
+- renaming or reordering graph inputs and outputs (rewrite `graph.input[i].name`
+  and the node references, and the manifest's `input_slots` alongside);
+- inserting a `Cast` at a boundary whose dtype convention changed (§6);
+- slicing a fused observation output back into per-term outputs, using `layout`;
+- composing several graphs into one.
+
+Not migratable — needs the Python term body, which is deliberately never uploaded
+(ADR 0005: no term's Python source ships to the browser):
+
+- a term body that must now read an input it was never traced with;
+- a change to what a state tensor *means* (§3);
+- a change to how randomness is threaded (§2), beyond renaming the `rand` input;
+- recovering independent per-term graphs from a fused one (slicing the output is
+  not the same thing).
+
+Everything ADR 0006 itself changes — paths, the manifest shape, the group key
+rename `policy` → `actor`, dropping `in_keys` — is metadata and file naming.
+None of it touches a graph's interior. **Documents already in R2 migrate
+forward under this ADR.**
+
+### Guidance for the migration script
+
+1. **Migrate lazily on first read, and cache the result.** A bulk rewrite over
+   every stored simulation has a blast radius of "all of them" and fails quietly;
+   lazily, a bad migration is one broken simulation, visible immediately, and the
+   fix is to drop the cache.
+2. **Never overwrite the original upload.** Write the migrated tree beside it and
+   serve that. This keeps "a published simulation is immutable" literally true —
+   what is immutable is the bytes the author uploaded — and makes a buggy
+   migrator revertible by deletion rather than by re-upload.
+3. **Record provenance in the migrated manifest.** Keep the original `format` and
+   `version` (e.g. under `built_with`) so the migration is idempotent, re-runnable
+   after a migrator fix, and auditable.
+4. **Migrate one `format` step at a time.** `1 → 2 → 3` composed from small
+   functions, not `1 → 3` written directly. Each step is testable against a
+   stored fixture, and a new format costs one function.
+5. **Leave `.mjz` and the policy `.onnx` alone.** Neither is mjswan's format;
+   pulling MuJoCo into the migration path buys nothing.
+6. **Refuse rather than guess.** A document the migrator cannot bring to the
+   current `format` is served by a pinned engine through the §7 override table,
+   or reported to its author to re-publish from source. Both are better than a
+   half-migrated document that loads and behaves subtly wrong.
+
+Migration and `format` are complements, not alternatives: the migrator needs
+`format` to know what it is reading, and the engine needs it as its own guard for
+the documents migration cannot reach.
+
 ## Open questions
 
-- **Migrating documents already in R2.** Cloud stores exactly what
-  `plan_publish` uploads: `.json`, `.mjz`, `.onnx`, `.npz`, `.ply`, `.spz`
-  (`publish.py:41-43`). The manifest and every `.json` are mjswan-authored
-  structured data and can be rewritten by a migrator. The **traced MDP `.onnx`
-  graphs cannot be regenerated from R2 alone** — they are compiler output whose
-  input (the Python term bodies) is deliberately never uploaded (ADR 0005: no
-  term's Python source ships to the browser). Any future change to the graph
-  calling convention — the traced signature, the fusion boundary (§4), the
-  boundary dtype (§6), the stateful-term convention (§3) — is therefore not
-  migratable, and must be handled by the engine dispatching on `format`.
-  Migration and `format` are complements, not alternatives.
-- Whether migration runs as a bulk rewrite or lazily on first read, and whether
-  the original upload is retained beside the migrated copy.
 - Whether the multi-input go2 assets keep `in_keys` in their own JSON or move it
   into the manifest with the rest of the policy metadata.
 - **PRNG semantics at an MDP switch** (§9 step 4). A switch-indexed substream
@@ -480,8 +565,6 @@ Phases are commit boundaries within one release, not separate releases.
 
 - [ ] `examples/mjlab/defaults` builds with one `mdp/` directory per scene, not
       one per policy.
-- [ ] Every checkpoint of all four `Mjlab-Velocity-Rough-Unitree-G1` runs
-      reaches the output; none is dropped for sharing a name.
 - [ ] `examples/demo` builds and plays identically to the current build for all
       four projects, including the three multi-input go2 policies.
 - [ ] Two scenes given the same name in one project produce `<id>` and `<id>_1`
