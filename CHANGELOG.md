@@ -29,14 +29,9 @@ shortcuts were removed outright (no alias) — see Removed.**
 - Seeded PRNG behind every term's randomness (`createEngine({ termSeed })`,
   reported back as `MjswanEngineState.termSeed`), so a recorded session replays.
 - **WebXR hand tracking as bodies in the simulation** (`createEngine({ handTracking:
-  true })`, or `?hands=1` on the bundled app). Six spheres a hand — wrist and
-  fingertips — are appended to the scene as mocap targets, each welded to a dynamic
-  sphere that owns the contact, so a headset can push a scene's objects around and
-  pick them up rather than watching through glass. Mocap bodies carry no degrees of
-  freedom, so the injection leaves `nq`, the actuators and the joint order a policy
-  reads untouched; the weld is what makes grasping work, since MuJoCo takes contact
-  velocity from body velocity and a teleported body has none. Opt-in: the bodies are
-  added to every scene the build loads, at roughly a third more per physics step.
+  true })`, or `?hands=1` on the bundled app). Six mocap spheres a hand, each welded to
+  a dynamic twin that owns the contact, so a headset can push a scene's objects around
+  and pick them up. Opt-in: roughly a third more per physics step, in every scene.
 - Debug visualisation for command terms, mirroring mjlab's `debug_vis` — arrows and
   markers are emitted as data by `default_viz()`, toggled via `engine.debugVis.set`,
   and on by default as in mjlab's viewer.

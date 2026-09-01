@@ -93,7 +93,7 @@ and chrome you mean rather than the first thing in the build:
 | `panel` | `panel=0` starts with the control panel hidden. Useful in a small iframe. |
 | `ref` | `ref=0` starts with the motion-tracking reference ghost hidden. |
 | `config` | Load a `config.json` from another URL entirely, relative to the page. |
-| `hands` | `hands=1` puts WebXR-tracked hands in the simulation — see below. |
+| `hands` | `hands=1` puts WebXR-tracked hands in the simulation, see below. |
 
 `panel` and `ref` are booleans read as "off only when exactly `0`", and the app writes the
 current state back into the URL — so you can arrange a view by hand and copy the address
@@ -105,21 +105,16 @@ bar into your `src`.
 
 ### Hand tracking in VR
 
-`hands=1` — or `createEngine(element, { handTracking: true })` when you drive the engine
-yourself — makes a headset's tracked hands part of the physics rather than a pair of
+`hands=1`, or `createEngine(element, { handTracking: true })` when you drive the engine
+yourself, makes a headset's tracked hands part of the physics rather than a pair of
 floating models. On **Enter VR**, six spheres per hand (the wrist and the five fingertips)
 follow the WebXR joint poses inside the simulation, so a Quest 3 can bat a scene's objects
-around, and pinch and lift them.
-
-Each sphere is a MuJoCo mocap body — no degrees of freedom, so the bodies can be appended
-to any scene without disturbing the joint order a policy reads — paired with a dynamic
-sphere welded to it. The weld is what makes grasping work: MuJoCo takes contact velocity
-from body velocity, and a mocap body that is teleported each step has none, so friction
-never transmits the hand's motion and a pinched object stays behind.
+around, and pinch and lift them. Each sphere is a mocap body welded to a dynamic twin,
+and that weld is what makes grasping work rather than only batting.
 
 It is opt-in because both halves cost something: every scene the build loads gains the
 hand bodies, which is roughly a third more work per physics step, and the headset must
-grant the `hand-tracking` feature. Ordinary desktop and mobile viewing is unaffected —
+grant the `hand-tracking` feature. Ordinary desktop and mobile viewing is unaffected:
 untracked hands sit parked far below the scene.
 
 ## Google Colab

@@ -1,18 +1,13 @@
 /**
- * WebXR hand tracking as bodies inside the simulation.
+ * WebXR hand tracking as bodies inside the simulation, so a hand can be touched back
+ * rather than only shoving forces in.
  *
- * A hand that only pushes forces into the scene cannot be touched back, so the
- * tracked joints go into the model itself. Mocap bodies are the cheap way in: they
- * carry no degrees of freedom, so appending them leaves `nq`, the actuators and the
- * joint order a policy reads untouched, and their pose is one write per step into
- * `mjData.mocap_pos` / `mocap_quat`.
- *
- * A mocap body alone can only shove things, though. MuJoCo takes contact velocity
- * from body velocity, and a teleported body has none, so friction never transmits
- * the hand's motion and a pinched object is left behind. Each joint is therefore a
- * pair: the mocap target this module writes, plus a dynamic sphere welded to it that
- * owns the contact. The weld carries the target's motion as real momentum, which is
- * what makes picking something up work rather than only batting it around.
+ * Each tracked joint is a pair: a mocap target this module writes, carrying no degrees
+ * of freedom so that appending it leaves `nq`, the actuators and the joint order a
+ * policy reads untouched, plus a dynamic sphere welded to it that owns the contact.
+ * The weld is what makes grasping work. MuJoCo takes contact velocity from body
+ * velocity and a teleported mocap body has none, so friction alone never transmits the
+ * hand's motion and a pinched object is left behind.
  */
 import * as THREE from 'three';
 import type { MainModule, MjData, MjModel } from 'mujoco';
@@ -29,13 +24,9 @@ export const DEFAULT_HAND_JOINTS: readonly XRHandJoint[] = [
   'pinky-finger-tip',
 ];
 
-export type HandMocapConfig = {
-  joints?: readonly XRHandJoint[];
-  /** Fingertip sphere radius, metres. */
-  radius?: number;
-  /** Fingertip mass — how hard the hand can shove something heavy. */
-  mass?: number;
-};
+/** Metres and kg; the mass is how hard the hand can shove something heavy. */
+const TIP_RADIUS = 0.012;
+const TIP_MASS = 0.05;
 
 /** Where an untracked hand waits: far below any scene, out of every collision. */
 const PARKED_Z = -100;
@@ -43,8 +34,9 @@ const PARKED_Z = -100;
 /** Spread along the parking row, so parked fingertips do not contact each other. */
 const PARKED_SPACING = 0.05;
 
-/** WebXR reports at most two hands, and `renderer.xr.getHand` indexes them. */
 const HAND_COUNT = 2;
+
+const IDENTITY_QUAT: readonly [number, number, number, number] = [1, 0, 0, 0];
 
 function bodyName(hand: number, joint: XRHandJoint, kind: 'target' | 'tip'): string {
   return `mjswan_xr${hand}_${joint}_${kind}`;
@@ -56,29 +48,24 @@ function parkedPosition(hand: number, jointIndex: number, jointCount: number): T
 }
 
 /**
- * Append the target/fingertip pairs to `xml` as a second `<worldbody>` and
- * `<equality>` — MJCF merges repeated sections, so this needs nothing from the model
- * it edits (the bodies may live entirely in `<include>`d files). Appending rather
- * than inserting is what keeps the robot's own free joint at `qpos[0]`, which
- * `PolicyStateBuilder` reads the root pose from.
+ * Append the target/fingertip pairs as a second `<worldbody>` and `<equality>`. MJCF
+ * merges repeated sections, so this needs nothing from the model it edits: the bodies
+ * may live entirely in `<include>`d files. Appended rather than inserted, so the
+ * robot's own free joint stays at `qpos[0]`, where `PolicyStateBuilder` reads it.
  */
-export function injectHandMocapXml(xml: string, config: HandMocapConfig = {}): string {
-  const joints = config.joints ?? DEFAULT_HAND_JOINTS;
-  const radius = config.radius ?? 0.012;
-  const mass = config.mass ?? 0.05;
-
+export function injectHandMocapXml(xml: string): string {
   const bodies: string[] = [];
   const welds: string[] = [];
   for (let hand = 0; hand < HAND_COUNT; hand++) {
-    for (const [index, joint] of joints.entries()) {
+    for (const [index, joint] of DEFAULT_HAND_JOINTS.entries()) {
       const target = bodyName(hand, joint, 'target');
       const tip = bodyName(hand, joint, 'tip');
-      const { x, y, z } = parkedPosition(hand, index, joints.length);
+      const { x, y, z } = parkedPosition(hand, index, DEFAULT_HAND_JOINTS.length);
       bodies.push(`    <body name="${target}" mocap="true" pos="${x} ${y} ${z}"/>`);
       bodies.push(
         `    <body name="${tip}" pos="${x} ${y} ${z}">\n` +
           `      <freejoint/>\n` +
-          `      <geom type="sphere" size="${radius}" mass="${mass}" condim="6"` +
+          `      <geom type="sphere" size="${TIP_RADIUS}" mass="${TIP_MASS}" condim="6"` +
           ` friction="2 0.05 0.001" rgba="0.35 0.75 1 0.55"/>\n` +
           `    </body>`,
       );
@@ -101,13 +88,9 @@ export function injectHandMocapXml(xml: string, config: HandMocapConfig = {}): s
 }
 
 /** Rewrite a scene XML in the Emscripten VFS in place, ahead of `mj_loadXML`. */
-export function injectHandMocapFile(
-  mujoco: MainModule,
-  path: string,
-  config: HandMocapConfig = {},
-): void {
+export function injectHandMocapFile(mujoco: MainModule, path: string): void {
   const xml = new TextDecoder().decode(mujoco.FS.readFile(path));
-  mujoco.FS.writeFile(path, injectHandMocapXml(xml, config));
+  mujoco.FS.writeFile(path, injectHandMocapXml(xml));
 }
 
 type BoundJoint = {
@@ -123,22 +106,19 @@ type BoundJoint = {
 
 export class HandMocap {
   private readonly hands: THREE.XRHandSpace[];
-  private readonly joints: readonly XRHandJoint[];
   private bound: BoundJoint[] = [];
   private readonly position = new THREE.Vector3();
   private readonly quaternion = new THREE.Quaternion();
 
-  constructor(hands: THREE.XRHandSpace[], config: HandMocapConfig = {}) {
+  constructor(hands: THREE.XRHandSpace[]) {
     this.hands = hands;
-    this.joints = config.joints ?? DEFAULT_HAND_JOINTS;
   }
 
-  /** Resolve the injected bodies in a freshly loaded model. */
   bind(mujoco: MainModule, mjModel: MjModel): void {
     const body = mujoco.mjtObj.mjOBJ_BODY.value;
     this.bound = [];
-    for (let hand = 0; hand < this.hands.length && hand < HAND_COUNT; hand++) {
-      for (const [index, joint] of this.joints.entries()) {
+    for (const [hand] of this.hands.entries()) {
+      for (const [index, joint] of DEFAULT_HAND_JOINTS.entries()) {
         const targetId = mujoco.mj_name2id(mjModel, body, bodyName(hand, joint, 'target'));
         const tipId = mujoco.mj_name2id(mjModel, body, bodyName(hand, joint, 'tip'));
         if (targetId < 0 || tipId < 0) {
@@ -152,7 +132,7 @@ export class HandMocap {
           mocapId: mjModel.body_mocapid[targetId],
           qposAdr: mjModel.jnt_qposadr[jntAdr],
           qvelAdr: mjModel.jnt_dofadr[jntAdr],
-          parked: parkedPosition(hand, index, this.joints.length),
+          parked: parkedPosition(hand, index, DEFAULT_HAND_JOINTS.length),
           tracked: false,
         });
       }
@@ -162,7 +142,6 @@ export class HandMocap {
     }
   }
 
-  /** The rendered bodies, for anything measuring the scene: parked hands are far outside it. */
   tipBodyIds(): number[] {
     return this.bound.map((bound) => bound.tipId);
   }
@@ -193,11 +172,6 @@ export class HandMocap {
     }
   }
 
-  /**
-   * Park every hand. Called after a sim reset: a keyframe written for the model
-   * before injection is zero-padded for the appended free joints, so the reset
-   * spawns the fingertips at the world origin, in the middle of the scene.
-   */
   park(mjData: MjData): void {
     for (const bound of this.bound) {
       this.parkJoint(mjData, bound);
@@ -205,9 +179,8 @@ export class HandMocap {
   }
 
   private parkJoint(mjData: MjData, bound: BoundJoint): void {
-    const identity: [number, number, number, number] = [1, 0, 0, 0];
-    this.writeTarget(mjData, bound, bound.parked, identity);
-    this.writeTip(mjData, bound, bound.parked, identity);
+    this.writeTarget(mjData, bound, bound.parked, IDENTITY_QUAT);
+    this.writeTip(mjData, bound, bound.parked, IDENTITY_QUAT);
     bound.tracked = false;
   }
 

@@ -162,7 +162,7 @@ TypeScript + React + Vite + three.js. Built by `Builder.build()` via `_build_cli
 - Loads the MuJoCo WASM module and runs physics in a Web Worker.
 - Runs the policy **and every traced MDP term body** via onnxruntime-web.
 - Renders via three.js (reflections, shadows, Gaussian Splat background).
-- Supports WebXR (VR), including tracked hands as mocap bodies inside the sim (`xr/handMocap.ts`, opt-in).
+- Supports WebXR (VR), including tracked hands as bodies inside the sim (opt-in).
 - Reads `config.json` to discover projects/scenes/policies at runtime.
 
 `src/core/` mirrors mjlab's layout — `observation/`, `termination/`, `action/`, `event/`, `command/` — plus `onnx/` (`session.ts` caches split by lifetime, `runQueue.ts`, `slotReader.ts` serving graph inputs from `mjModel`/`mjData`, `raycast.ts` casting height-scan rays with `mj_ray`, `contact.ts`, `graphRefs.ts`), `rng.ts` (xoshiro128\*\*, snapshot-able), `policy/`, `scene/`, `xr/` (`handMocap.ts` injects the hand bodies and writes `mocap_pos`/`mocap_quat`), and `engine/` (`runtime.ts` step loop, `resetChain.ts`, `viewer_config.ts`). Each manager is native orchestration around ONNX term bodies: `FusedObservation`/`OnnxObservation`/`NativeObservation`/`HistoryObservation`, `FusedTermination`/`OnnxTermination`/`TimeOutTermination`, `OnnxEvent` + `triggers.ts` + `entityWrite.ts` + `modelFieldDr.ts`, `OnnxCommand`. Action is fully native (`action/applyAction.ts`).

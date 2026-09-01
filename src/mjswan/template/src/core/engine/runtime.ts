@@ -216,7 +216,6 @@ export class mjswanRuntime {
   private eventManager: EventManager | null;
   private terrainData: TerrainData | null;
   private vrButton: HTMLElement | null;
-  /** Null unless the app opted in: the injection changes every model it loads. */
   private handMocap: HandMocap | null;
   private splatMesh: SplatMesh | null;
   private colliderMesh: THREE.Group | null;
@@ -310,8 +309,6 @@ export class mjswanRuntime {
 
     this.handMocap = null;
     if (handTracking) {
-      // Joint poses land in the reference space, so the hands go at the scene root
-      // next to the camera — their world transform is then the swizzled MuJoCo frame.
       const hands = [0, 1].map((i) => this.renderer.xr.getHand(i));
       for (const hand of hands) {
         this.scene.add(hand);
@@ -324,7 +321,6 @@ export class mjswanRuntime {
       if (supported) {
         this.vrButton = VRButton.createButton(
           this.renderer,
-          // `VRButton` does not ask for it, and Quest hands stay untracked without it.
           handTracking ? { optionalFeatures: ['hand-tracking'] } : {},
         );
         document.body.appendChild(this.vrButton);
@@ -557,6 +553,9 @@ export class mjswanRuntime {
       this.syncStaticBodiesFromData();
 
       this.handMocap?.bind(this.mujoco, this.mjModel);
+      // A scene with no policy never reaches `resetSimulationState`, and a keyframe
+      // written before injection zero-pads the appended free joints: without this the
+      // fingertips spawn at the world origin, inside the scene.
       this.handMocap?.park(this.mjData);
       for (const bodyId of this.handMocap?.tipBodyIds() ?? []) {
         if (this.bodies[bodyId]) {
@@ -720,8 +719,6 @@ export class mjswanRuntime {
     if (!this.mujocoRoot) {
       return;
     }
-    // Per child rather than over the root: a parked hand sits 100 m out and would
-    // otherwise be the scene's extent.
     const box = new THREE.Box3();
     for (const child of this.mujocoRoot.children) {
       if (!child.userData.xrHand) {

@@ -18,7 +18,6 @@ function paramFlag(param: string): boolean {
   return new URLSearchParams(window.location.search).get(param) !== '0';
 }
 
-/** Opt-in counterpart of `paramFlag`: absent means off. */
 function paramEnabled(param: string): boolean {
   return new URLSearchParams(window.location.search).get(param) === '1';
 }

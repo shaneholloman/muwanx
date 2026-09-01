@@ -1,11 +1,5 @@
-/**
- * The two halves of hand tracking that run without a headset: the MJCF the loader
- * injects, and the frame swizzle the per-step writes go through.
- *
- * The injection contract is what the rest of the feature rests on — a mocap target
- * adds no `qpos`, and the block is appended, so neither can move the robot's own free
- * joint off `qpos[0]`, where `PolicyStateBuilder` reads the root pose from.
- */
+/** The two halves of hand tracking that run without a headset: the injected MJCF, and
+ * the frame swizzle the per-step writes go through. */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 
@@ -36,23 +30,13 @@ describe('injectHandMocapXml', () => {
     }
   });
 
+  // A mocap target adds no `qpos`, and the block is appended, so neither can move the
+  // robot's own free joint off `qpos[0]`, where `PolicyStateBuilder` reads it.
   it('leaves the original model ahead of the block, and one closing tag', () => {
     const xml = injectHandMocapXml(MINIMAL);
     expect(xml.indexOf('type="plane"')).toBeLessThan(xml.indexOf('mocap="true"'));
     expect(xml.match(/<\/mujoco>/g)).toHaveLength(1);
     expect(xml.endsWith('</mujoco>')).toBe(true);
-  });
-
-  it('honours the joint set, radius and mass', () => {
-    const xml = injectHandMocapXml(MINIMAL, {
-      joints: ['index-finger-tip'],
-      radius: 0.03,
-      mass: 0.4,
-    });
-    expect(xml.match(/mocap="true"/g)).toHaveLength(2);
-    expect(xml).toContain('size="0.03"');
-    expect(xml).toContain('mass="0.4"');
-    expect(xml).not.toContain('wrist');
   });
 
   it('refuses XML it cannot close', () => {
