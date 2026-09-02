@@ -36,10 +36,9 @@ function rigged(): { rig: THREE.Group; camera: THREE.PerspectiveCamera; move: Xr
   return { rig, camera, move: new XrLocomotion(rig, camera) };
 }
 
-/** Two frames: the first only starts the clock, the second is the step being measured. */
+/** One frame's worth of input. The frame time comes from the caller's clock. */
 function drive(move: XrLocomotion, input: XRSession, seconds = FRAME): void {
-  move.update(input, 0);
-  move.update(input, seconds * 1000);
+  move.update(input, seconds);
 }
 
 describe('XrLocomotion sliding', () => {
@@ -77,7 +76,7 @@ describe('XrLocomotion sliding', () => {
     expect(Number.isNaN(rig.position.x)).toBe(false);
   });
 
-  it('ignores a resting stick, and the frame that only starts the clock', () => {
+  it('ignores a resting stick, and a frame with no time in it', () => {
     const { rig, move } = rigged();
     drive(move, left(0.1, -0.1));
     expect(rig.position.length()).toBeCloseTo(0, 6);
@@ -87,11 +86,10 @@ describe('XrLocomotion sliding', () => {
     expect(first.rig.position.length()).toBeCloseTo(0, 6);
   });
 
-  it('clamps a frame the browser slept through', () => {
+  it('does nothing without a session', () => {
     const { rig, move } = rigged();
-    drive(move, left(0, -1), 30);
-    // 0.1 s of the 30 s gap, not the whole tab-away.
-    expect(rig.position.z).toBeCloseTo(-MOVE_SPEED * 0.1, 6);
+    move.update(null, FRAME);
+    expect(rig.position.length()).toBeCloseTo(0, 6);
   });
 });
 
@@ -133,10 +131,9 @@ describe('XrLocomotion turning', () => {
     const { rig, move } = rigged();
     const held = right(1);
 
-    move.update(held, 0);
     const angles: number[] = [];
-    for (let frame = 1; frame <= 4; frame++) {
-      move.update(held, frame * FRAME * 1000);
+    for (let frame = 0; frame < 4; frame++) {
+      move.update(held, FRAME);
       angles.push(rig.quaternion.angleTo(new THREE.Quaternion()));
     }
 
@@ -151,7 +148,7 @@ describe('XrLocomotion turning', () => {
     expect(rig.quaternion.angleTo(new THREE.Quaternion())).toBeCloseTo(SWEEP / 2, 6);
 
     const held = rig.quaternion.clone();
-    move.update(right(0), 2 * FRAME * 1000);
+    move.update(right(0), FRAME);
     expect(rig.quaternion.angleTo(held)).toBeCloseTo(0, 6);
   });
 
@@ -175,12 +172,4 @@ describe('XrLocomotion reset', () => {
     expect(rig.quaternion.angleTo(new THREE.Quaternion())).toBeCloseTo(0, 6);
   });
 
-  it('drops the clock with the session, so the next one starts from a standstill', () => {
-    const { rig, move } = rigged();
-    move.update(left(0, -1), 0);
-    move.update(null);
-    move.update(left(0, -1), 10_000);
-
-    expect(rig.position.length()).toBeCloseTo(0, 6);
-  });
 });

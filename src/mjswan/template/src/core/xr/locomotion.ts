@@ -23,9 +23,6 @@ const DEADZONE = 0.15;
 const MOVE_SPEED = 1.5;
 const TURN_SPEED = 90;
 
-/** A tab away leaves a huge gap between frames; unclamped, the first one back teleports. */
-const MAX_FRAME_SECONDS = 0.1;
-
 /** `xr-standard` puts the thumbstick on axes 2/3, leaving 0/1 to a touchpad if there is one. */
 function thumbstick(gamepad: Gamepad): [number, number] {
   const axes = gamepad.axes;
@@ -40,7 +37,6 @@ function deadzone(value: number): number {
 export class XrLocomotion {
   private readonly rig: THREE.Object3D;
   private readonly camera: THREE.Camera;
-  private lastTime: number | null = null;
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
   private readonly head = new THREE.Vector3();
@@ -52,16 +48,9 @@ export class XrLocomotion {
   }
 
   /** Once per rendered XR frame. A session whose controllers report no gamepad is a no-op. */
-  update(session: XRSession | null, now: number = performance.now()): void {
-    if (!session) {
-      this.lastTime = null;
+  update(session: XRSession | null, seconds: number): void {
+    if (!session || seconds <= 0) {
       return;
-    }
-    const seconds =
-      this.lastTime === null ? 0 : Math.min((now - this.lastTime) / 1000, MAX_FRAME_SECONDS);
-    this.lastTime = now;
-    if (seconds <= 0) {
-      return; // the frame that only starts the clock
     }
 
     let slide: [number, number] | null = null;
@@ -90,7 +79,6 @@ export class XrLocomotion {
   reset(): void {
     this.rig.position.set(0, 0, 0);
     this.rig.quaternion.identity();
-    this.lastTime = null;
   }
 
   private slide(x: number, y: number, seconds: number): void {

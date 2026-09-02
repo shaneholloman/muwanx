@@ -37,7 +37,12 @@ velocity-command shortcuts were removed outright, see Removed.
   too, so a scene that follows a walking robot finally follows it in a headset as well —
   the head pose used to overwrite the camera every frame, leaving the viewer behind. The
   rig returns to the origin when the session ends, and the desktop camera comes back to
-  the offset it had.
+  the offset it had. The rig's height comes from a `mj_ray` cast straight down under the
+  head, placing the eyes 1.7 m above the ground there, so a generated `Rough` terrain no
+  longer buries the view: z = 0 is a terrain generator's base plane, not its surface, and
+  body tracking used to add the robot's own climbing and descending on top. Tracking now
+  moves the rig horizontally only, and ignores the metre-plus jump an episode reset makes
+  when it draws a new spawn patch — a desktop chase camera still follows both.
 - **Passthrough AR.** A device that supports `immersive-ar` gets a **Start AR** button
   beside **Enter VR**, and in a see-through session the skybox and the ground planes stop
   being drawn, so the room shows behind the scene. three.js already clears the framebuffer

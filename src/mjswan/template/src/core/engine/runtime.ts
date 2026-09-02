@@ -18,6 +18,8 @@ import { updateHeadlightFromCamera, updateLightsFromData } from '../scene/lights
 import { mjcToThreeCoordinate, threeToMjcCoordinate } from '../scene/coordinate';
 import { HandMocap, injectHandMocapFile } from '../xr/handMocap';
 import { XrLocomotion } from '../xr/locomotion';
+import { RigGrounding } from '../xr/grounding';
+import { FrameClock } from '../xr/frameClock';
 import { createArButton } from '../xr/arButton';
 import { Passthrough } from '../xr/passthrough';
 import {
@@ -224,9 +226,13 @@ export class mjswanRuntime {
   private disposed = false;
   private readonly passthrough: Passthrough;
   private handMocap: HandMocap | null;
-  /** Parent of the camera and hands: what XR locomotion moves. Identity outside a session. */
+  /** Parent of the camera and hands: what locomotion and grounding move. Identity outside a session. */
   private readonly xrRig: THREE.Group;
   private readonly locomotion: XrLocomotion;
+  private readonly grounding: RigGrounding;
+  private readonly xrClock = new FrameClock();
+  /** Only an opaque session stands the viewer on the terrain; passthrough keeps the room's floor. */
+  private groundsRig = false;
   /** Camera-to-target offset from before a session, which owns the camera pose while it runs. */
   private preXrCameraOffset: THREE.Vector3 | null;
   private splatMesh: SplatMesh | null;
@@ -364,6 +370,7 @@ export class mjswanRuntime {
     this.controls.update();
 
     this.locomotion = new XrLocomotion(this.xrRig, this.camera);
+    this.grounding = new RigGrounding(this.xrRig, this.camera);
     this.passthrough = new Passthrough(this.scene);
     this.preXrCameraOffset = null;
     this.renderer.xr.addEventListener('sessionstart', this.onXrSessionStart);
@@ -1620,13 +1627,24 @@ export class mjswanRuntime {
     this.preXrCameraOffset = this.camera.position.clone().sub(this.controls.target);
     // Blend mode rather than which button was pressed: anything but `opaque` composites
     // the room in behind the scene, so the scene has to stop covering it.
-    if (this.renderer.xr.getEnvironmentBlendMode() !== 'opaque') {
+    const passthrough = this.renderer.xr.getEnvironmentBlendMode() !== 'opaque';
+    if (passthrough) {
       this.passthrough.enter();
+    }
+    this.groundsRig = !passthrough;
+    if (this.groundsRig) {
+      // Stand where the desktop camera was looking from, which the scene's viewer config
+      // placed near the tracked body. The world origin is a terrain generator's base
+      // plane and a spawn is a drawn patch, so neither is anywhere to arrive.
+      this.xrRig.position.set(this.camera.position.x, 0, this.camera.position.z);
     }
   };
 
   private onXrSessionEnd = (): void => {
     this.passthrough.exit();
+    this.groundsRig = false;
+    this.xrClock.reset();
+    this.grounding.reset();
     this.locomotion.reset();
     if (this.preXrCameraOffset) {
       this.camera.position.copy(this.controls.target).add(this.preXrCameraOffset);
@@ -1651,7 +1669,13 @@ export class mjswanRuntime {
       );
     }
     if (presenting) {
-      this.locomotion.update(this.renderer.xr.getSession());
+      // Zero on the session's first frame, which is also the frame before three has
+      // written a head pose for the modules below to read.
+      const seconds = this.xrClock.tick(performance.now());
+      this.locomotion.update(this.renderer.xr.getSession(), seconds);
+      if (this.groundsRig && seconds > 0) {
+        this.grounding.update(this.mujoco, this.mjModel, this.mjData, seconds);
+      }
     } else {
       this.controls.update();
     }

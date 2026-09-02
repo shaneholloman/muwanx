@@ -134,6 +134,13 @@ export function applyViewerConfig(
 }
 
 /**
+ * A frame's horizontal delta beyond this is an episode reset teleporting the body to a new
+ * spawn, not the body walking. A desktop camera should follow it — that is how a chase
+ * view keeps up — but a rig carrying a viewer must not.
+ */
+const MAX_RIG_FOLLOW_STEP = 1.0;
+
+/**
  * Update the Three.js camera each frame for body tracking.
  *
  * Must be called before controls.update().
@@ -154,9 +161,25 @@ export function updateCameraFromData(
     const bodyPos = mjcToThreeCoordinate(mjData.xpos.slice(b * 3, b * 3 + 3));
     if (state.prevBodyPos !== null) {
       const delta = bodyPos.clone().sub(state.prevBodyPos);
-      (rig ?? camera).position.add(delta);
       controls.target.add(delta);
+      if (rig) {
+        followWithRig(rig, delta);
+      } else {
+        camera.position.add(delta);
+      }
     }
     state.prevBodyPos = bodyPos;
   }
+}
+
+/**
+ * Horizontal only: the rig's height belongs to the ground under the viewer, not to the
+ * body's own rise and fall, which on a rough terrain is a different height entirely.
+ */
+function followWithRig(rig: THREE.Object3D, delta: THREE.Vector3): void {
+  if (Math.hypot(delta.x, delta.z) > MAX_RIG_FOLLOW_STEP) {
+    return;
+  }
+  rig.position.x += delta.x;
+  rig.position.z += delta.z;
 }
