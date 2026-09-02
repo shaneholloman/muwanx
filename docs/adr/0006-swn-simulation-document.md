@@ -171,6 +171,15 @@ switching policy switches the event set with everything else.
 Identity of an `MdpConfig` is **by object**, not by content. Content-addressed
 pooling of graphs was considered and rejected (see *Considered options*).
 
+Its id follows from that. `MdpConfig` takes an optional `name`; when given, the id
+is `name2id(name)`. When absent — which includes every `MdpConfig` the sugar path
+constructs — the id is `mdp_<n>`, numbered from zero **per scene** in the order
+the MDPs are first used by a policy. So a scene whose policies all share one
+anonymous MDP writes `mdp/mdp_0/`, and `examples/mjlab/defaults` can name its
+MDPs after the task to get `mdp/velocity_rough/` instead. Numbering per scene,
+not per document, keeps a scene's ids stable when another scene is added before
+it.
+
 ### 4. Identifiers — sanitized names, scoped uniqueness, rename on collision
 
 Every id in the document is `name2id(name)` (`utils.py:358`): lowercased, every
@@ -201,6 +210,28 @@ across builds does not break a shared link.
 The URL parameters `?project=`, `?scene=` and `?policy=` resolve against these
 ids. `pickByName` (`App.tsx:50`) matches the sanitized form only; the raw-name
 fallback is removed.
+
+That last part exposes a divergence that has been latent. The frontend's
+`sanitizeName` is **not** equivalent to Python's `name2id`:
+
+```
+name2id     re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+sanitizeName  name.toLowerCase().replace(/ /g,'_').replace(/-/g,'_')
+```
+
+They agree on spaces and hyphens and disagree on everything else:
+
+| name | `name2id` (the directory) | `sanitizeName` (the URL match) |
+|---|---|---|
+| `Newton's Cradle` | `newton_s_cradle` | `newton's_cradle` |
+| `G1 (with hands)` | `g1_with_hands` | `g1_(with_hands)` |
+| `Café` | `caf` | `café` |
+
+Today `pickByName` falls back to the raw name, so the mismatch is invisible.
+Once the fallback goes, a link to any such scene resolves to the default instead.
+`sanitizeName` is rewritten to mirror `name2id` exactly, and a test pins the pair
+against a shared table of cases — the comment on `sanitizeName` already claims it
+mirrors the Python helper, which is the bug.
 
 ### 5. Observation group keys, and what `in_keys` actually is
 
@@ -419,6 +450,133 @@ rules are untouched; only the reference base moves (§6 above). The
 five-manager restriction and the effect-free / Cloud-safe posture inherited from
 ADRs 0003/0004 are not relitigated.
 
+## Manifest schema
+
+The envelope, not the term internals. Every observation / termination / command /
+event entry keeps the shape ADR 0005 §1 gave it — `{name, onnx, size,
+input_slots, noise, scale, clip, history_length}` for a term, `{fused,
+input_slots, native_inputs, layout, size, sensors?}` for a fused observation
+group (`_onnx_build.py:305-312`), a list of per-term entries where a group could
+not be fused. None of that changes. What this section fixes is what surrounds
+them, because that is what a per-policy JSON used to define implicitly.
+
+### Rules that hold everywhere
+
+1. **Every key is `snake_case`, at every depth.** The current config carries
+   `splatSection`, `terrainData` and `controlDt`; all three are renamed.
+2. **A path resolves against the directory of the level that declares it.** A
+   path under a scene entry — `scene`, every graph ref, every asset — resolves
+   against `<project-id>/<scene-id>/`. Only the top-level `plugins` resolves
+   against the document root, because that is the level it is declared at. This
+   is §6's single resolution base, stated for all paths rather than for graphs
+   alone.
+3. **A default is a `"default": true` flag on the entry**, matching how policies
+   already mark one. At most one sibling may set it — two is a build error, not a
+   silent pick — and when none does, the first in document order is the default.
+   Projects and policies both work this way.
+4. **A key is omitted when it carries the default**, so `in_keys` is absent when
+   it is `["actor"]` and `out_keys` when it is `["action"]`. The reader supplies
+   the default; the writer never emits noise.
+
+### Shape
+
+```json
+{
+  "format": 1,
+  "version": "0.10.0",
+  "uses_custom_js": false,
+  "plugins": "assets/plugins.js",
+  "projects": [
+    {
+      "id": "mjlab_tasks",
+      "name": "mjlab Tasks",
+      "default": true,
+      "scenes": [
+        {
+          "id": "mjlab_velocity_rough_unitree_g1",
+          "name": "Mjlab-Velocity-Rough-Unitree-G1",
+          "scene": "scene.mjz",
+          "control_dt": 0.02,
+          "camera": { "lookat": [0, 0, 0], "distance": 4.0, "…": "ViewerConfig" },
+          "terrain_data": { "…": "TerrainData" },
+          "splat_section": true,
+          "splats": [
+            { "id": "street", "name": "Street", "path": "assets/street.spz",
+              "control": true, "transform": { "…": "SplatTransform" } }
+          ],
+
+          "mdps": [
+            {
+              "id": "mdp_0",
+              "observations": {
+                "actor": {
+                  "fused": "mdp/mdp_0/obs/actor.onnx",
+                  "input_slots": [], "native_inputs": [], "layout": [], "size": 48
+                }
+              },
+              "actions":      { "joint_pos": { "kind": "…", "target_ids": [], "scale": 0.5 } },
+              "terminations": { "fused": "mdp/mdp_0/term/terminations.onnx", "…": "" },
+              "commands":     { "velocity": { "onnx": "mdp/mdp_0/command/velocity.onnx", "…": "" } },
+              "events":       [ { "name": "dr_friction", "mode": "startup",
+                                  "onnx": "mdp/mdp_0/event/startup.onnx", "…": "" } ]
+            }
+          ],
+
+          "policies": [
+            {
+              "id": "model_2000",
+              "name": "model_2000",
+              "default": true,
+              "mdp": "mdp_0",
+              "onnx": "policy/model_2000.onnx",
+              "in_keys": ["command", "actor", "is_init", "adapt_hx"],
+              "out_keys": ["…"],
+              "policy_joint_names": [], "policy_num_actions": 12,
+              "default_joint_pos": {}, "encoder_bias": null,
+              "clip_actions": 100.0, "initial_qpos": [], "initial_qvel": [],
+              "extras": {}, "source": "…",
+              "motions": [
+                { "name": "walk", "default": true, "path": "assets/walk.npz" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### What moved, and why
+
+- **`policies[].config`** — the relative path to a per-policy JSON — is gone.
+  Everything it pointed at is inlined on the policy entry. This is the change
+  that lets four checkpoints share one `mdp` reference instead of four copies of
+  one file.
+- **`scenes[].events`** moves from the scene entry into `mdps[].events`. It is
+  the same list; only its owner changes (§3).
+- **`actions`** lives in the MDP, not on the policy. `examples/demo` shows this
+  holds under strain: the three go2 policies share `go2_actions` while Facet's
+  observations differ, so Facet gets its own MDP that names the same actions.
+  In Python that is one object referenced twice; in the manifest it is one small
+  declarative block written twice, which is the correct trade against making
+  actions a fourth ownership level.
+- **`id` joins `name` on every entry.** `name` is what a person reads; `id` is
+  the directory, the URL parameter, and the reference target. Today the two are
+  conflated and the frontend re-derives one from the other at read time
+  (`sanitizeName`), which is what §4's divergence is about.
+- **`mdp` is always written**, even when a scene has one MDP. A reader that never
+  needs a fallback cannot get the fallback wrong.
+
+### Reading it
+
+`src/mjswan/template/src/manifest/index.ts` holds both halves of the contract —
+the `Config*` interfaces that mirror what Python writes, and the `Catalog` /
+`SceneEntry` / `PolicyEntry` interfaces the app actually holds. Only the first
+half changes shape. `PolicyEntry.build()` stops fetching a policy JSON and reads
+its entry from the manifest already in memory, which removes one round trip per
+policy switch.
+
 ## Considered options
 
 **Keep `config.json` + a per-policy config JSON, scope graph paths per policy.** This is
@@ -501,6 +659,11 @@ Phases are commit boundaries within one release, not separate releases.
    from `config_path` to `add_policy` arguments, the `obs`→`policy` special case
    deleted, the build-time slot-count check added. Every script under
    `examples/` is restructured in this phase.
+8. **Downstream docs and the published skill.** `skills/mjlab-to-mjswan/` is a
+   plugin in the `ttktjmt` marketplace that teaches this API; `SKILL.md:131`
+   lists the four term-set arguments `add_policy` accepts, which is correct today
+   and wrong the moment `MdpConfig` lands. It ships with the same release, along
+   with `docs/`, `CONTEXT.md` and `CHANGELOG.md`.
 
 ## Migrating stored documents
 
@@ -612,6 +775,10 @@ the documents migration cannot reach.
 - [ ] Switching to an MDP after 10 seconds and after 10 minutes of playback
       applies the same model-field randomization, and switching A → B → A
       reproduces A's first draw.
+- [ ] `sanitizeName` and `name2id` agree on a shared table of cases, apostrophes,
+      parentheses and accents included, and a link to `?scene=newton_s_cradle`
+      opens that scene rather than the default.
+- [ ] `skills/mjlab-to-mjswan/SKILL.md` describes the API the release ships.
 - [ ] No `in_keys` or `out_keys` is read from a `config_path` sidecar; the
       multi-input go2 policies declare theirs in `examples/demo/main.py` and
       they appear in `manifest.json`.
@@ -619,5 +786,7 @@ the documents migration cannot reach.
       error naming both values and the document's `version`.
 - [ ] `mjswan publish` accepts either a built directory or a `.swn` and uploads
       the same file set for both.
+- [ ] Two sibling entries both marked `"default": true` fail the build; none
+      marked resolves to the first in document order.
 - [ ] No `config.json` and no per-policy config JSON remains in a build output,
       and no source file outside the migration reads them.
