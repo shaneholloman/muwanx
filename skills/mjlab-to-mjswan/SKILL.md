@@ -114,7 +114,9 @@ def setup_builder() -> mjswan.Builder:
     meta = json.loads((HERE / "policy_meta.json").read_text())
     mdp = mjswan.MdpConfig()  # one MDP, traced once, shared by every checkpoint
     for name in meta.pop("checkpoints"):
-        scene.add_policy(pathlib.Path(name).stem, onnx.load(HERE / name), mdp=mdp, **meta)
+        scene.add_policy(
+            pathlib.Path(name).stem, onnx.load(HERE / name), mdp=mdp, **meta
+        )
     return builder
 
 

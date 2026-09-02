@@ -2,7 +2,6 @@
 
 This is a demo application showcasing the usage of mjswan.
 The demo app is hosted on GitHub Pages: https://ttktjmt.github.io/mjswan/
-Run `uv pip install git+https://github.com/ttktjmt/mjlab_myochallenge.git` before running this script.
 """
 
 import os

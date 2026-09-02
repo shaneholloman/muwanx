@@ -43,7 +43,7 @@ from .utils import assign_id, collect_spec_assets, name2id, to_zip_deflated
 def _build_uses_custom_js() -> bool:
     """Whether the current build embeds author-supplied TypeScript.
 
-    Surfaced at the top of ``config.json`` so a consumer can enforce a
+    Surfaced at the top of ``manifest.json`` so a consumer can enforce a
     declarative-only policy without inspecting the bundled engine (ADR 0003).
     """
     from .command import _custom_registry as _command_registry

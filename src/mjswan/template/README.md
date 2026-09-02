@@ -23,7 +23,7 @@ renders with [three.js](https://github.com/mrdoob/three.js), and executes polici
 npm install mjswan
 ```
 
-Requires Node.js 20+ and a bundler that handles TypeScript sources (Vite recommended.
+Requires Node.js 24+ and a bundler that handles TypeScript sources (Vite recommended.
 See [Custom MDP terms](#custom-mdp-terms) below for why).
 
 ## Embedding a simulation
