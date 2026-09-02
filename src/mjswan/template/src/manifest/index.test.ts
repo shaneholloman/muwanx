@@ -137,13 +137,16 @@ describe('parseManifest', () => {
     expect(input.policy?.graphs).not.toHaveProperty('policy/walk.onnx');
   });
 
-  it("carries the opening policy's events on the scene input until the runtime switches them", async () => {
+  it('hands events to the engine inside the policy config, never on the scene', async () => {
+    // Events belong to the MDP (ADR 0006 §3): switching policy switches them, so the
+    // scene input carries none and the policy config carries its MDP's.
     const catalog = parseManifest(MANIFEST, fakeSource().source);
     const asWalk = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk' });
-    expect(asWalk.events?.map((e) => e.name)).toEqual(['push_robot', 'randomize_terrain']);
-    expect(Object.keys(asWalk.graphs ?? {})).toEqual(['mdp/mdp_0/event/push_robot.onnx']);
+    expect(asWalk).not.toHaveProperty('events');
+    const walk = asWalk.policy?.config as { events?: Array<{ name: string }> };
+    expect(walk.events?.map((e) => e.name)).toEqual(['push_robot', 'randomize_terrain']);
     const asRun = await catalog.projects[0].scenes[0].buildScene({ policy: 'run' });
-    expect(asRun.events).toBeUndefined();
+    expect((asRun.policy?.config as { events?: unknown }).events).toBeUndefined();
   });
 
   it('refuses a policy whose mdp the scene does not declare', async () => {

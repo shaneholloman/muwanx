@@ -3,7 +3,7 @@
  * rather than fetched, and verbs named for their cost: `loadScene` rebuilds, the rest are live.
  */
 import type { CameraView, ViewerConfig } from '../core/engine/viewer_config';
-import type { EventConfig, TerrainData } from '../core/event/EventBase';
+import type { TerrainData } from '../core/event/EventBase';
 import type { Bytes } from '../core/utils/bytes';
 import type { SplatTransform } from '../core/scene/splat';
 import type { EnginePlugins } from '../core/plugins';
@@ -24,18 +24,22 @@ export interface MotionInput {
 }
 
 export interface PolicyInput {
-  /** Parsed policy.json; opaque to the app, interpreted by the engine. */
+  /**
+   * The policy's manifest entry merged with its MDP — observations, actions,
+   * terminations, commands and events; opaque to the app, interpreted by the engine.
+   */
   config: object;
   onnx: Bytes;
   /**
-   * Traced term-body graphs, keyed by the path the config refers to them by
-   * (`"obs/joint_pos.onnx"`). The engine never fetches, so the app delivers the bytes —
-   * `mjswan/manifest` fills this in, `policyGraphRefs(config)` enumerates what to load.
-   * A missing entry warns and skips that term.
+   * Traced term-body graphs of the whole MDP, events included, keyed by the path the
+   * config refers to them by (`"mdp/mdp_0/obs/actor.onnx"`). The engine never fetches,
+   * so the app delivers the bytes — `mjswan/manifest` fills this in,
+   * `policyGraphRefs(config)` enumerates what to load. A missing entry warns and skips
+   * that term.
    */
   graphs?: Record<string, Bytes>;
   motions?: MotionInput[];
-  /** Policy-scoped custom terms (observations / terminations / commands). */
+  /** Policy-scoped custom terms (observations / terminations / commands / events). */
   plugins?: EnginePlugins;
 }
 
@@ -44,13 +48,13 @@ export interface SceneInput {
   policy?: PolicyInput | null;
   splat?: SplatInput | null;
   viewer?: ViewerConfig;
-  /** Declarative reset events (e.g. terrain randomization) + their terrain data. */
-  events?: EventConfig[];
+  /**
+   * Spawn positions (flat patches) the event terms of any policy on this scene may draw
+   * from. Events themselves travel with the policy (ADR 0006 §3).
+   */
   terrainData?: TerrainData;
   /** mjlab's `timestep * decimation`; the model carries only the physics timestep. */
   controlDt?: number;
-  /** Traced event-term graphs (`"event/push_robot.onnx"`), as {@link PolicyInput.graphs}. */
-  graphs?: Record<string, Bytes>;
   /** Scene-scoped custom terms (events). */
   plugins?: EnginePlugins;
 }

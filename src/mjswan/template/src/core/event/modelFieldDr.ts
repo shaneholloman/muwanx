@@ -48,6 +48,10 @@ const GEOM_BOX = 6;
 /**
  * The compiled field values, snapshotted on first touch, so a second `add`/`scale` event
  * on one axis offsets the compiled value rather than the first event's output.
+ *
+ * One per scene, living as long as its model (ADR 0006 §9): an MDP switch re-runs
+ * `mode="startup"` randomization, and it must start from the compiled values, not from
+ * what the previous MDP left behind. `restore()` puts every touched field back first.
  */
 export class ModelFieldDefaults {
   private readonly snapshots = new Map<string, Float64Array>();
@@ -65,6 +69,26 @@ export class ModelFieldDefaults {
     const copy = Float64Array.from(live as ArrayLike<number>);
     this.snapshots.set(field, copy);
     return copy;
+  }
+
+  /** Whether any field has been touched, and so whether `restore()` has work to do. */
+  get dirty(): boolean {
+    return this.snapshots.size > 0;
+  }
+
+  /**
+   * Write every snapshotted field back to its compiled value. The caller owes an
+   * `mj_setConst` afterwards when it returns true, for the same reason a write does.
+   */
+  restore(): boolean {
+    if (this.snapshots.size === 0) return false;
+    const model = this.mjModel as unknown as Record<string, { [index: number]: number } | undefined>;
+    for (const [field, compiled] of this.snapshots) {
+      const live = model[field];
+      if (!live) continue;
+      for (let i = 0; i < compiled.length; i++) live[i] = compiled[i];
+    }
+    return true;
   }
 }
 
@@ -182,7 +206,7 @@ export function applyModelFieldDr(
     }
   }
 
-  if (config.recompute_bounds) recomputeGeomBounds(mjModel, config.name, indices);
+  if (config.recompute_bounds) recomputeGeomBounds(mjModel, config.name, indices, defaults);
 
   if (config.set_const) {
     // Inertial fields feed precomputed constants, so without this it is half-applied.
@@ -197,9 +221,18 @@ export function applyModelFieldDr(
  * compiled bound and stops colliding at its own surface. `geom_aabb` is `(ngeom, 2, 3)`,
  * centre then half-size, and a primitive's centre stays at its origin.
  */
-function recomputeGeomBounds(mjModel: MjModel, name: string, indices: number[]): void {
+function recomputeGeomBounds(
+  mjModel: MjModel,
+  name: string,
+  indices: number[],
+  defaults: ModelFieldDefaults,
+): void {
   const size = mjModel.geom_size as ArrayLike<number> | undefined;
   const types = mjModel.geom_type as ArrayLike<number> | undefined;
+  // Snapshotted before they are written, so `restore()` covers the bounds as well as the
+  // sizes they follow from — otherwise a switch would restore a size to a stale bound.
+  defaults.base('geom_rbound');
+  defaults.base('geom_aabb');
   const rbound = mjModel.geom_rbound as unknown as { [index: number]: number } | undefined;
   const aabb = mjModel.geom_aabb as unknown as { [index: number]: number } | undefined;
   if (!size || !types || !rbound || !aabb) {

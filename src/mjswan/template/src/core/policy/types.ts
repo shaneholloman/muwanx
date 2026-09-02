@@ -3,6 +3,7 @@ import type { Scene } from 'three';
 
 import type { CommandsConfig } from '../command';
 import type { CommandManager } from '../command/CommandManager';
+import type { EventConfig } from '../event/EventBase';
 import type { Bytes } from '../utils/bytes';
 
 export type PolicyRunnerContext = {
@@ -92,5 +93,7 @@ export type PolicyConfig = {
   observations?: Record<string, ObservationGroupConfig>;
   actions?: Record<string, ActionConfigEntry>;
   terminations?: Record<string, TerminationConfigEntry>;
+  /** The MDP's event terms — switched with the policy, not held by the scene (ADR 0006 §3). */
+  events?: EventConfig[];
   [key: string]: unknown;
 };

@@ -358,18 +358,15 @@ function toSceneEntry(project: ManifestProject, scene: ManifestScene, source: By
       const policy = policyId == null ? defaultPolicy() : scene.policies.find((p) => p.id === policyId);
       const splatId = opts?.splat;
       const splat = splatId == null ? undefined : scene.splats?.find((s) => s.id === splatId);
-      // Events belong to the MDP, so until the runtime switches them with the policy
-      // (ADR 0006 phase 4) the scene load carries the opening policy's set.
-      const events = policy ? scene.mdps.find((m) => m.id === policy.mdp)?.events : undefined;
+      // Events travel with the policy, inside its MDP (ADR 0006 §3); the scene carries
+      // only what every MDP on it may draw from.
       return {
         model: source(inScene(dir, scene.scene)),
         policy: policy ? buildPolicy(dir, scene, policy, source) : null,
         splat: splat ? buildSplat(dir, splat, source) : null,
         viewer: toViewerConfig(scene.camera),
-        events,
         terrainData: scene.terrain_data,
         controlDt: scene.control_dt,
-        graphs: events ? graphBytes(policyGraphRefs({ events }), dir, source) : {},
       };
     },
   };

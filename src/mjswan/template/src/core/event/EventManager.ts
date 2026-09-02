@@ -125,16 +125,26 @@ export class EventManager {
   /**
    * Fire every `mode="startup"` term once, in config order and after the model-field
    * randomizations, so `add`/`scale` see the compiled default.
+   *
+   * `defaults` is the scene's snapshot of compiled values (ADR 0006 §9): the runtime keeps
+   * one for the life of the model and restores it before an MDP switch, so the second MDP's
+   * `add`/`scale` compose against what was compiled, not against what the first MDP wrote.
+   * Omitted, a fresh snapshot is taken — correct for the first and only startup pass.
    */
-  async startup(context: EventContext): Promise<void> {
-    this.applyModelFieldTerms(context);
+  async startup(context: EventContext, defaults?: ModelFieldDefaults): Promise<void> {
+    this.applyModelFieldTerms(context, defaults);
     for (const { term, trigger } of this.startupTerms) {
       if (trigger.take()) await term.fire(context);
     }
   }
 
+  /** Whether this manager carries a model-field randomization at all. */
+  get hasModelFieldTerms(): boolean {
+    return this.modelFieldTerms.length > 0;
+  }
+
   /** Once, before the startup terms: `add`/`scale` are relative to the compiled default. */
-  private applyModelFieldTerms(context: EventContext): void {
+  private applyModelFieldTerms(context: EventContext, defaults?: ModelFieldDefaults): void {
     if (this.modelFieldTerms.length === 0) return;
     const { mujoco, mjModel, mjData } = context;
     if (!mujoco || !mjModel || !mjData) {
@@ -145,11 +155,11 @@ export class EventManager {
       console.warn('[EventManager] model-field randomization needs the seeded rng; skipping.');
       return;
     }
-    // One `defaults` per pass, so events on one field share a base.
-    const defaults = new ModelFieldDefaults(mjModel);
+    // One `defaults` per model, so events on one field share a base across passes.
+    const base = defaults ?? new ModelFieldDefaults(mjModel);
     for (const { config, trigger } of this.modelFieldTerms) {
       if (!trigger.take()) continue;
-      applyModelFieldDr(mujoco, mjModel, mjData, config, this.deps.rng, defaults);
+      applyModelFieldDr(mujoco, mjModel, mjData, config, this.deps.rng, base);
     }
   }
 
