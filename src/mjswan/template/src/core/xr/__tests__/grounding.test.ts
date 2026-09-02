@@ -4,7 +4,6 @@ import * as THREE from 'three';
 
 import { RigGrounding } from '../grounding';
 
-const EYE_HEIGHT = 1.7;
 const CLIMB_SPEED = 3;
 const FRAME = 0.05;
 /** The module's own margin: the head is never allowed nearer the ground than this. */
@@ -87,25 +86,27 @@ function settle(
 }
 
 describe('RigGrounding', () => {
-  it('puts the eyes 1.7 m above the ground, whatever height the headset reports', () => {
+  /** The viewer's height in the scene is their own, so only the floor is placed. */
+  it('puts the floor on the ground and leaves the headset its own height', () => {
     for (const headHeight of [1.5, 1.7, 1.9]) {
       const { rig, ground, headY } = rigged(headHeight);
       settle(ground, mujocoWith(() => 0), rig);
-      expect(headY()).toBeCloseTo(EYE_HEIGHT, 6);
+      expect(rig.position.y).toBeCloseTo(0, 6);
+      expect(headY()).toBeCloseTo(headHeight, 6);
     }
   });
 
   it('measures from the ground, not from z = 0', () => {
-    const { rig, ground, headY } = rigged();
+    const { rig, ground, headY } = rigged(1.5);
     settle(ground, mujocoWith(() => 1.2), rig);
-    expect(headY()).toBeCloseTo(1.2 + EYE_HEIGHT, 6);
+    expect(headY()).toBeCloseTo(1.2 + 1.5, 6);
 
-    const pit = rigged();
+    const pit = rigged(1.5);
     settle(pit.ground, mujocoWith(() => -0.6), pit.rig);
-    expect(pit.headY()).toBeCloseTo(-0.6 + EYE_HEIGHT, 6);
+    expect(pit.headY()).toBeCloseTo(-0.6 + 1.5, 6);
   });
 
-  /** Head movement has to stay 1:1, so the offset is sampled once and not corrected. */
+  /** Head movement is 1:1 because the module never corrects the eye height at all. */
   it('lets the viewer crouch instead of cancelling it', () => {
     const { rig, camera, ground, headY } = rigged();
     const mujoco = mujocoWith(() => 0);
@@ -121,8 +122,7 @@ describe('RigGrounding', () => {
 
   /** A rise the head still clears, so the rate limit is what decides — not the clamp below. */
   it('limits how fast the floor may travel', () => {
-    // A 1.7 m head makes the offset zero, so the rig height is the ground height.
-    const { rig, ground } = rigged(EYE_HEIGHT);
+    const { rig, ground } = rigged();
     settle(ground, mujocoWith(() => 0), rig);
     expect(rig.position.y).toBeCloseTo(0, 6);
 
@@ -144,7 +144,6 @@ describe('RigGrounding', () => {
     rig.updateMatrixWorld(true);
 
     expect(headY()).toBeCloseTo(8 + MIN_HEAD_CLEARANCE, 6);
-    expect(headY()).toBeLessThan(8 + EYE_HEIGHT);
   });
 
   it('keeps the height it had when the ray hits nothing', () => {
@@ -173,7 +172,7 @@ describe('RigGrounding', () => {
       rig
     );
 
-    expect(headY()).toBeCloseTo(2 + EYE_HEIGHT, 6);
+    expect(headY()).toBeCloseTo(2 + 1.5, 6);
   });
 
   it('does nothing without a model', () => {
@@ -183,18 +182,17 @@ describe('RigGrounding', () => {
     expect(rig.position.y).toBe(0);
   });
 
-  /** A new session measures a new headset, which may be a different person. */
-  it('re-measures the head height after a reset', () => {
+  /** Nothing is remembered between frames, so a taller viewer needs no re-measuring. */
+  it('follows a head height that changes under it', () => {
     const { rig, camera, ground, headY } = rigged(1.5);
     const mujoco = mujocoWith(() => 0);
     settle(ground, mujoco, rig);
 
-    ground.reset();
-    rig.position.set(0, 0, 0);
     camera.position.y = 1.9;
     rig.updateMatrixWorld(true);
     settle(ground, mujoco, rig);
 
-    expect(headY()).toBeCloseTo(EYE_HEIGHT, 6);
+    expect(rig.position.y).toBeCloseTo(0, 6);
+    expect(headY()).toBeCloseTo(1.9, 6);
   });
 });

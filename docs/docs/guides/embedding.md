@@ -115,9 +115,9 @@ stomach, which is why the rate is a modest 90° a second at full deflection.
 A scene whose viewer config tracks a body carries you along with it, so a robot that walks
 off does not leave you behind. That is the default (`origin_type=OriginType.AUTO` tracks
 the first non-fixed body); pass `ViewerConfig.OriginType.WORLD` to stand still instead.
-Only the horizontal part of that follows you: your height comes from a ray cast straight
-down at your feet, which puts your eyes 1.7 m above whatever the ground is there. On a
-generated terrain that is what keeps you standing on a slope rather than sunk into it, and
+Only the horizontal part of that follows you: your floor comes from a ray cast straight
+down at your feet, so you stand on the ground at your own height rather than the headset's
+idea of z = 0. On a generated terrain that is what keeps you on top of a slope, and
 you arrive beside the robot rather than at the world origin, which is a terrain
 generator's base plane and not a place to stand. An episode reset teleports the robot to a
 new spawn patch; the view stays where it is rather than being flung across the terrain.

@@ -38,8 +38,8 @@ velocity-command shortcuts were removed outright, see Removed.
   the head pose used to overwrite the camera every frame, leaving the viewer behind. The
   rig returns to the origin when the session ends, and the desktop camera comes back to
   the offset it had. The rig's height comes from a `mj_ray` cast straight down under the
-  head, placing the eyes 1.7 m above the ground there, so a generated `Rough` terrain no
-  longer buries the view: z = 0 is a terrain generator's base plane, not its surface, and
+  head, so the viewer stands on the ground at their own height and a generated `Rough`
+  terrain no longer buries the view: z = 0 is a generator's base plane, not its surface, and
   body tracking used to add the robot's own climbing and descending on top. Tracking now
   moves the rig horizontally only, and ignores the metre-plus jump an episode reset makes
   when it draws a new spawn patch — a desktop chase camera still follows both.

@@ -8,8 +8,9 @@
  * the ground does not go black, it disappears and the scene shows through it.
  *
  * So the vertical is taken from a single `mj_ray` cast straight down under the head, and
- * the horizontal is left to locomotion and tracking. `EYE_HEIGHT` then fixes where the
- * eyes sit above that surface, whatever floor the headset thinks it has.
+ * the horizontal is left to locomotion and tracking. How far above that surface the eyes
+ * end up is the headset's to report, exactly as it is in a room: the rig carries the
+ * viewer's floor, not their height.
  */
 import * as THREE from 'three';
 
@@ -19,9 +20,6 @@ import { geomGroupMask } from '../onnx/raycast';
 type MjModel = import('mujoco').MjModel;
 type MjData = import('mujoco').MjData;
 type MainModule = import('mujoco').MainModule;
-
-/** Eyes this far above the ground once settled, in metres. */
-const EYE_HEIGHT = 1.7;
 
 /**
  * Group 0 only, which is where a terrain's geoms live and a robot's do not — the same
@@ -50,12 +48,6 @@ export class RigGrounding {
   private readonly origin: number[] = [0, 0, 0];
   /** `mj_ray` writes the geom it hit here; unused, but the binding wants the slot. */
   private readonly geomId = new Int32Array(1);
-  /**
-   * `EYE_HEIGHT` minus the headset's own head height, sampled once per session. Fixed
-   * rather than re-read, or correcting it every frame would cancel the viewer's own
-   * crouching and every other head movement with it.
-   */
-  private eyeOffset: number | null = null;
 
   constructor(rig: THREE.Object3D, camera: THREE.Camera) {
     this.rig = rig;
@@ -73,30 +65,22 @@ export class RigGrounding {
       return;
     }
     this.camera.getWorldPosition(this.head);
+    // Read before the rig moves below, which would otherwise take this with it.
     const headAboveRig = this.head.y - this.rig.position.y;
-    if (this.eyeOffset === null) {
-      this.eyeOffset = EYE_HEIGHT - headAboveRig;
-    }
 
     const ground = this.sampleGround(mujoco, mjModel, mjData);
     if (ground === null) {
       return; // nothing under the viewer: keep the height it already had
     }
 
-    const target = ground + this.eyeOffset;
     const limit = CLIMB_SPEED * seconds;
-    this.rig.position.y += THREE.MathUtils.clamp(target - this.rig.position.y, -limit, limit);
+    this.rig.position.y += THREE.MathUtils.clamp(ground - this.rig.position.y, -limit, limit);
 
     // Being inside the ground is worse than a jump, so this one ignores the rate limit.
     const floor = ground + MIN_HEAD_CLEARANCE - headAboveRig;
     if (this.rig.position.y < floor) {
       this.rig.position.y = floor;
     }
-  }
-
-  /** The session's head height is the next session's to measure again. */
-  reset(): void {
-    this.eyeOffset = null;
   }
 
   /** World height of the ground under the head, or null where the ray hit nothing. */

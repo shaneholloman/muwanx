@@ -1644,7 +1644,6 @@ export class mjswanRuntime {
     this.passthrough.exit();
     this.groundsRig = false;
     this.xrClock.reset();
-    this.grounding.reset();
     this.locomotion.reset();
     if (this.preXrCameraOffset) {
       this.camera.position.copy(this.controls.target).add(this.preXrCameraOffset);
