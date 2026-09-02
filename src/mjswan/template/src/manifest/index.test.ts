@@ -156,6 +156,26 @@ describe('parseManifest', () => {
   });
 });
 
+describe('document format', () => {
+  it('accepts the current format and a document that predates the field', () => {
+    const { source } = fakeSource(POLICY_JSON);
+    expect(() => parseManifest({ ...CONFIG, format: 1 }, source)).not.toThrow();
+    expect(() => parseManifest(CONFIG, source)).not.toThrow();
+  });
+
+  it('refuses a newer format, naming both numbers and the writing version', () => {
+    const { source } = fakeSource(POLICY_JSON);
+    expect(() => parseManifest({ ...CONFIG, format: 99, version: '9.9.9' }, source)).toThrow(
+      /format 99 .*9\.9\.9.*up to format 1/,
+    );
+  });
+
+  it('does not gate on version: an unknown version with a known format parses', () => {
+    const { source } = fakeSource(POLICY_JSON);
+    expect(() => parseManifest({ ...CONFIG, format: 1, version: '99.0.0' }, source)).not.toThrow();
+  });
+});
+
 describe('sanitizeName', () => {
   it('lowercases and underscores spaces and hyphens', () => {
     expect(sanitizeName('Foo Bar-Baz')).toBe('foo_bar_baz');

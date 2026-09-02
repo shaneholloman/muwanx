@@ -27,6 +27,7 @@ from rich.progress import (
 
 from . import __version__
 from ._build_client import ClientBuilder
+from ._format import DOCUMENT_FORMAT
 from .app import MjswanApp
 from .envs.mdp.actions.actions import (
     MuscleActivationActionCfg,
@@ -427,6 +428,7 @@ class Builder:
         # Create root config with project metadata and structure info
         uses_custom_js = _build_uses_custom_js()
         root_config = {
+            "format": DOCUMENT_FORMAT,
             "version": __version__,
             "uses_custom_js": uses_custom_js,
             # Author custom-MDP terms, loaded by the app in trusted contexts only.

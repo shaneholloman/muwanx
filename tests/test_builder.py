@@ -380,6 +380,20 @@ class TestSaveConfigJson:
         builder._save_config_json(tmp_path)
         assert self._read_config(tmp_path)["version"] == mjswan.__version__
 
+    def test_config_stamps_the_document_format(self, tmp_path, minimal_model):
+        # `format` is the structure, `version` the release: a reader gates on the first
+        # only (ADR 0006 §7), so both travel and neither stands in for the other.
+        from mjswan._format import DOCUMENT_FORMAT
+
+        builder = Builder()
+        builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        builder._save_config_json(tmp_path)
+        config = self._read_config(tmp_path)
+        assert config["format"] == DOCUMENT_FORMAT
+        assert isinstance(config["format"], int)
+
     def test_config_has_projects_list(self, tmp_path, minimal_model):
         builder = Builder()
         builder.add_project(name="P").add_scene(

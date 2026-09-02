@@ -42,6 +42,12 @@ interface ConfigProject {
   scenes: ConfigScene[];
 }
 export interface AppConfig {
+  /**
+   * Document format (ADR 0006 §7): the structure of the build, bumped only for a break an
+   * older reader would misread. Absent on builds that predate it. Distinct from `version`,
+   * which names the mjswan release that wrote the document.
+   */
+  format?: number;
   version: string;
   uses_custom_js?: boolean;
   /** Build-relative path to the runtime custom-MDP plugin ESM (custom-JS builds). */
@@ -249,9 +255,32 @@ function toSceneEntry(project: ConfigProject, scene: ConfigScene, source: ByteSo
   };
 }
 
+/** The newest document format this reader understands (ADR 0006 §7). */
+export const MAX_DOCUMENT_FORMAT = 1;
+
+/**
+ * Refuse a document written in a format newer than this reader. The check reads
+ * `format` only: `version` is provenance, not a gate — a host may pick an engine by it,
+ * but the engine itself must not turn a version mismatch into an error.
+ */
+function checkFormat(parsed: AppConfig): void {
+  const format = parsed.format;
+  if (format === undefined) return;
+  if (!Number.isInteger(format) || format < 0) {
+    throw new Error(`mjswan/manifest: document format ${JSON.stringify(format)} is not a format number.`);
+  }
+  if (format > MAX_DOCUMENT_FORMAT) {
+    throw new Error(
+      `mjswan/manifest: this document is format ${format} (written by mjswan ${parsed.version}), ` +
+        `but this engine reads up to format ${MAX_DOCUMENT_FORMAT}. Update the engine.`,
+    );
+  }
+}
+
 /** Parse a Builder `config.json` (object or JSON string) into a {@link Catalog}. */
 export function parseManifest(config: AppConfig | string, source: ByteSource): Catalog {
   const parsed: AppConfig = typeof config === 'string' ? JSON.parse(config) : config;
+  checkFormat(parsed);
   if (!parsed.projects?.length) {
     throw new Error('mjswan/manifest: config.json has no projects.');
   }
