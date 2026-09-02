@@ -15,7 +15,7 @@ import mujoco
 from .adapters import apply_mjlab_sim_options, ensure_mjlab_extensions
 from .envs.mdp.events import apply_terrain_spawn
 from .scene import SceneConfig, SceneHandle, _env_cfg_control_dt
-from .utils import collect_spec_assets
+from .utils import assign_id, collect_spec_assets, name2id
 from .viewer import ViewerConfig
 
 if TYPE_CHECKING:
@@ -29,11 +29,21 @@ class ProjectConfig:
     name: str
     """Name of the project."""
 
-    id: str | None = None
-    """Optional ID for the project used in URL routing (e.g., 'menagerie' for /#/menagerie/)."""
+    id: str = ""
+    """Sanitized name, unique within the document: the project's directory in the build
+    and its ``?project=`` value (ADR 0006 §4). Assigned by :meth:`Builder.add_project`;
+    defaults to ``name2id(name)``."""
 
     scenes: list[SceneConfig] = field(default_factory=list)
     """List of scenes in the project."""
+
+    default: bool = False
+    """Open the app on this project. At most one project may set it; when none does,
+    the first added is the default."""
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            self.id = name2id(self.name)
 
 
 class ProjectHandle:
@@ -53,8 +63,8 @@ class ProjectHandle:
         return self._config.name
 
     @property
-    def id(self) -> str | None:
-        """Optional ID of the project for URL routing."""
+    def id(self) -> str:
+        """The project's id: its directory in the build and its ``?project=`` value."""
         return self._config.id
 
     def add_scene(
@@ -126,6 +136,9 @@ class ProjectHandle:
 
         scene_config = SceneConfig(
             name=name,
+            id=assign_id(
+                name, {s.id for s in self._config.scenes}, kind="scene", stacklevel=4
+            ),
             model=model,
             spec=spec,
             metadata=metadata,

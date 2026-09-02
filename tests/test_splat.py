@@ -331,7 +331,7 @@ class TestFullBuildSplat:
         expected = (
             tmp_path
             / "out"
-            / "main"
+            / "p"
             / "assets"
             / name2id("My Scene")
             / f"{name2id('My Splat')}.spz"
@@ -348,7 +348,7 @@ class TestFullBuildSplat:
 
         config = json.loads((tmp_path / "out" / "assets" / "config.json").read_text())
         config_path = config["projects"][0]["scenes"][0]["splats"][0]["path"]
-        spz_file = tmp_path / "out" / "main" / "assets" / config_path
+        spz_file = tmp_path / "out" / "p" / "assets" / config_path
         assert spz_file.exists()
 
     def test_missing_source_emits_runtime_warning(self, tmp_path, minimal_model):

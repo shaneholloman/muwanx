@@ -435,7 +435,7 @@ def info_cmd(
 
     total_bytes = 0
     for project in config.get("projects", []):
-        project_dir_name = project.get("id") or "main"
+        project_dir_name = project["id"]
         p_node = tree.add(
             f"[cyan]{project['name']}[/cyan]  [dim][{project_dir_name}][/dim]"
         )

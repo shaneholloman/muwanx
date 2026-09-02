@@ -72,9 +72,7 @@ def test_clip_actions_reaches_the_policy_json(tmp_path, minimal_model, minimal_o
     out = tmp_path / "out"
     builder._save_web(out)
     data = json.loads(
-        (
-            out / "main" / "assets" / name2id("S") / f"{name2id('Policy')}.json"
-        ).read_text()
+        (out / "p" / "assets" / name2id("S") / f"{name2id('Policy')}.json").read_text()
     )
     assert data["clip_actions"] == 100.0
 
@@ -95,9 +93,7 @@ def test_clip_actions_zero_is_not_dropped(tmp_path, minimal_model, minimal_onnx)
     out = tmp_path / "out"
     builder._save_web(out)
     data = json.loads(
-        (
-            out / "main" / "assets" / name2id("S") / f"{name2id('Policy')}.json"
-        ).read_text()
+        (out / "p" / "assets" / name2id("S") / f"{name2id('Policy')}.json").read_text()
     )
     assert data["clip_actions"] == 0.0
 
@@ -119,9 +115,7 @@ def test_clip_actions_absent_when_unset(tmp_path, minimal_model, minimal_onnx):
     out = tmp_path / "out"
     builder._save_web(out)
     data = json.loads(
-        (
-            out / "main" / "assets" / name2id("S") / f"{name2id('Policy')}.json"
-        ).read_text()
+        (out / "p" / "assets" / name2id("S") / f"{name2id('Policy')}.json").read_text()
     )
     assert "clip_actions" not in data
 

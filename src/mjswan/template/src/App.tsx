@@ -47,18 +47,21 @@ async function loadCatalog(base: string): Promise<Catalog> {
   return parseManifest(await res.text(), makeByteSource(base));
 }
 
+/**
+ * Resolve a `?project=` / `?scene=` / `?policy=` value against the entries' sanitized
+ * names — the same form `syncUrl` writes and the build uses for directories. The query
+ * is sanitized too, so a hand-typed display name still lands; nothing matches on the raw
+ * name any more (ADR 0006 §4).
+ */
 function pickByName<T extends { name: string }>(
   items: T[],
   query: string | null,
   fallback: T | undefined,
 ): T | undefined {
   if (!query) return fallback;
-  const normalized = query.trim().toLowerCase();
-  return (
-    items.find((i) => i.name.toLowerCase() === normalized) ??
-    items.find((i) => sanitizeName(i.name) === normalized) ??
-    fallback
-  );
+  const wanted = sanitizeName(query);
+  if (!wanted) return fallback;
+  return items.find((i) => sanitizeName(i.name) === wanted) ?? fallback;
 }
 
 function AppContent() {
@@ -191,8 +194,10 @@ function AppContent() {
   const syncUrl = useCallback(
     (next: { project?: string | null; scene?: string | null; policy?: string | null; panel?: boolean; ref?: boolean }) => {
       const params = new URLSearchParams(window.location.search);
+      // URL values are the sanitized names: what the build names its directories, and
+      // what `pickByName` resolves against.
       const setOrDelete = (key: string, value: string | null | undefined, keep: boolean) =>
-        value != null && keep ? params.set(key, value) : params.delete(key);
+        value != null && keep ? params.set(key, sanitizeName(value)) : params.delete(key);
       // Only pin ?project once more than one exists (single-project builds stay clean).
       const proj = next.project ?? projectName;
       setOrDelete('project', proj, (catalog?.projects.length ?? 0) > 1);

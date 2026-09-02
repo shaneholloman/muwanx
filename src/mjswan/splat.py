@@ -53,6 +53,16 @@ class SplatConfig:
     control: bool = False
     """Show scale and offset controls in the viewer control panel."""
 
+    id: str = ""
+    """Sanitized name, unique within the scene; the ``.spz`` file's stem. Assigned by
+    :meth:`~mjswan.scene.SceneHandle.add_splat`; defaults to ``name2id(name)``."""
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            from .utils import name2id
+
+            self.id = name2id(self.name)
+
     metadata: dict[str, Any] = field(default_factory=dict)
     """Additional metadata for the splat."""
 

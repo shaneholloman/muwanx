@@ -135,7 +135,7 @@ class TestProjectHandle:
         assert scenes[1].name == "Scene B"
 
     def test_project_name_and_id_exposed(self):
-        project = Builder().add_project(name="My Project", id="my_project")
+        project = Builder().add_project(name="My Project")
         assert project.name == "My Project"
         assert project.id == "my_project"
 

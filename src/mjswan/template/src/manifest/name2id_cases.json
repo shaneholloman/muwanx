@@ -1,0 +1,15 @@
+[
+  ["My Project", "my_project"],
+  ["Test-Scene", "test_scene"],
+  ["FooBar", "foobar"],
+  ["Complex Name-With Spaces", "complex_name_with_spaces"],
+  ["Newton's Cradle", "newton_s_cradle"],
+  ["G1 (with hands)", "g1_with_hands"],
+  ["Café", "caf"],
+  ["Über__Robot", "ber_robot"],
+  ["  leading and trailing  ", "leading_and_trailing"],
+  ["a--b__c  d", "a_b_c_d"],
+  ["Mjlab-Velocity-Flat-Unitree-G1", "mjlab_velocity_flat_unitree_g1"],
+  ["model_2000", "model_2000"],
+  ["日本語", ""]
+]

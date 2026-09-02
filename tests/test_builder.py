@@ -34,41 +34,51 @@ from mjswan.utils import name2id
 # L1 — project ID assignment rules
 # ===========================================================================
 class TestProjectIdAssignment:
-    def test_first_project_without_explicit_id_gets_none(self):
-        builder = Builder()
-        project = builder.add_project(name="Main Demo")
-        assert project.id is None
+    """A project's id is `name2id(name)`, unique in the document (ADR 0006 §4)."""
 
-    def test_second_project_without_explicit_id_gets_auto_id(self):
+    def test_first_project_gets_its_sanitized_name(self):
+        project = Builder().add_project(name="Main Demo")
+        assert project.id == "main_demo"
+
+    def test_second_project_gets_its_sanitized_name(self):
         builder = Builder()
         builder.add_project(name="Main Demo")
         second = builder.add_project(name="MuJoCo Menagerie")
         assert second.id == name2id("MuJoCo Menagerie")
 
-    def test_auto_id_uses_name2id_transform(self):
-        builder = Builder()
-        builder.add_project(name="First")
-        second = builder.add_project(name="My Project Name")
-        assert second.id == "my_project_name"
+    def test_explicit_id_is_refused_and_says_why(self):
+        # One object, one identifier: the directory and the ?project= value can never
+        # disagree if neither can be set by hand.
+        with pytest.raises(TypeError, match="name2id"):
+            Builder().add_project(name="Main Demo", id="custom")
 
-    def test_explicit_id_used_as_is_on_first_project(self):
-        project = Builder().add_project(name="Main Demo", id="custom")
-        assert project.id == "custom"
-
-    def test_explicit_id_used_as_is_on_subsequent_project(self):
+    def test_colliding_names_are_renamed_with_a_warning(self):
         builder = Builder()
-        builder.add_project(name="First")
-        second = builder.add_project(name="Second", id="explicit_id")
-        assert second.id == "explicit_id"
+        first = builder.add_project(name="Flat Terrain")
+        with pytest.warns(RuntimeWarning, match="'flat_terrain_1'"):
+            second = builder.add_project(name="flat-terrain")
+        with pytest.warns(RuntimeWarning, match="'flat_terrain_2'"):
+            third = builder.add_project(name="FLAT TERRAIN")
+        assert (first.id, second.id, third.id) == (
+            "flat_terrain",
+            "flat_terrain_1",
+            "flat_terrain_2",
+        )
 
-    def test_mixed_id_sequence(self):
+    def test_a_name_with_no_letter_or_digit_is_refused(self):
+        with pytest.raises(ValueError, match="empty id"):
+            Builder().add_project(name="日本語")
+
+    def test_one_default_project_is_allowed(self):
         builder = Builder()
-        p1 = builder.add_project(name="Project A")
-        p2 = builder.add_project(name="Project B")
-        p3 = builder.add_project(name="Project C", id="custom")
-        assert p1.id is None
-        assert p2.id == name2id("Project B")
-        assert p3.id == "custom"
+        builder.add_project(name="A")
+        assert builder.add_project(name="B", default=True)._config.default is True
+
+    def test_a_second_default_project_is_refused(self):
+        builder = Builder()
+        builder.add_project(name="A", default=True)
+        with pytest.raises(ValueError, match="already"):
+            builder.add_project(name="B", default=True)
 
     def test_get_projects_returns_independent_copy(self):
         builder = Builder()
@@ -76,6 +86,51 @@ class TestProjectIdAssignment:
         copy = builder.get_projects()
         copy.clear()
         assert len(builder.get_projects()) == 1
+
+
+class TestSceneAndPolicyIds:
+    """Scene ids are unique within a project, policy ids within a scene."""
+
+    def test_two_scenes_with_one_name_are_both_kept(self, minimal_model):
+        project = Builder().add_project(name="P")
+        a = project.add_scene(name="Flat Terrain", model=minimal_model)
+        with pytest.warns(RuntimeWarning, match="scene"):
+            b = project.add_scene(name="Flat Terrain", model=minimal_model)
+        assert (a._config.id, b._config.id) == ("flat_terrain", "flat_terrain_1")
+
+    def test_the_same_scene_name_in_another_project_is_not_a_collision(
+        self, minimal_model
+    ):
+        builder = Builder()
+        a = builder.add_project(name="A").add_scene(name="S", model=minimal_model)
+        b = builder.add_project(name="B").add_scene(name="S", model=minimal_model)
+        assert a._config.id == b._config.id == "s"
+
+    def test_two_policies_with_one_name_are_both_kept(
+        self, minimal_model, minimal_onnx
+    ):
+        scene = (
+            Builder()
+            .add_project(name="P")
+            .add_scene(name="S", model=minimal_model, control_dt=0.02)
+        )
+        a = scene.add_policy(name="model_2000", policy=minimal_onnx)
+        with pytest.warns(RuntimeWarning, match="policy"):
+            b = scene.add_policy(name="model_2000", policy=minimal_onnx)
+        assert (a._config.id, b._config.id) == ("model_2000", "model_2000_1")
+
+    def test_two_default_policies_fail_the_build(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        scene = (
+            Builder()
+            .add_project(name="P")
+            .add_scene(name="S", model=minimal_model, control_dt=0.02)
+        )
+        scene.add_policy(name="A", policy=minimal_onnx, default=True)
+        scene.add_policy(name="B", policy=minimal_onnx, default=True)
+        with pytest.raises(ValueError, match="default=True"):
+            scene._project._builder._save_config_json(tmp_path)
 
 
 # ===========================================================================
@@ -412,7 +467,9 @@ class TestSaveConfigJson:
         builder._save_config_json(tmp_path)
         project = self._read_config(tmp_path)["projects"][0]
         assert project["name"] == "Main Demo"
-        assert project["id"] is None
+        assert project["id"] == "main_demo"
+        # Unset means "first in document order"; the key is written only when set.
+        assert "default" not in project
 
     def test_config_omits_plugins_when_declarative(self, tmp_path, minimal_model):
         builder = Builder()
@@ -517,8 +574,21 @@ class TestSaveConfigJson:
         )
         builder._save_config_json(tmp_path)
         projects = self._read_config(tmp_path)["projects"]
-        assert projects[0]["id"] is None
+        assert projects[0]["id"] == "main"
         assert projects[1]["id"] == name2id("MuJoCo Menagerie")
+
+    def test_default_project_flag_reaches_the_config(self, tmp_path, minimal_model):
+        builder = Builder()
+        builder.add_project(name="A").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        builder.add_project(name="B", default=True).add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        builder._save_config_json(tmp_path)
+        projects = self._read_config(tmp_path)["projects"]
+        assert "default" not in projects[0]
+        assert projects[1]["default"] is True
 
 
 # ===========================================================================
@@ -732,7 +802,7 @@ class TestSaveWebPolicyJson:
         out: Path,
         policy_name: str,
         scene_name: str = "S",
-        project_dir: str = "main",
+        project_dir: str = "p",
     ) -> dict:
         scene_id = name2id(scene_name)
         policy_id = name2id(policy_name)
@@ -751,7 +821,7 @@ class TestSaveWebPolicyJson:
             "projects"
         ][0]["scenes"][0]["path"]
         assert scene_path == "s/scene.mjz"
-        assert (out / "main" / "assets" / scene_path).is_file()
+        assert (out / "p" / "assets" / scene_path).is_file()
 
     def test_terms_without_a_trace_env_name_the_missing_call(
         self, tmp_path, minimal_model, minimal_onnx
@@ -859,7 +929,7 @@ class TestSaveWebPolicyJson:
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
         assert fallen["onnx"] == "policy/term/fallen.onnx"
-        assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
+        assert (out / "p" / "assets" / "s" / fallen["onnx"]).exists()
 
     def test_no_config_path_actions_absent_when_not_set(
         self, tmp_path, minimal_model, minimal_onnx
@@ -908,7 +978,7 @@ class TestSaveWebPolicyJson:
         out = self._run(builder, tmp_path)
         policy_id = name2id("Policy")
         scene_id = name2id("S")
-        json_path = out / "main" / "assets" / scene_id / f"{policy_id}.json"
+        json_path = out / "p" / "assets" / scene_id / f"{policy_id}.json"
         assert not json_path.exists()
 
     def test_no_config_path_onnx_path_in_json(
@@ -964,7 +1034,7 @@ class TestSaveWebPolicyJson:
                 "default": True,
             }
         ]
-        motion_out = out / "main" / "assets" / "s" / "spin_kick.npz"
+        motion_out = out / "p" / "assets" / "s" / "spin_kick.npz"
         assert motion_out.read_bytes() == b"motion-bytes"
 
     def test_one_clip_shared_by_several_policies_is_written_once(
@@ -986,7 +1056,7 @@ class TestSaveWebPolicyJson:
             )
 
         out = self._run(builder, tmp_path)
-        scene_dir = out / "main" / "assets" / "s"
+        scene_dir = out / "p" / "assets" / "s"
 
         assert sorted(p.name for p in scene_dir.glob("*.npz")) == ["spin_kick.npz"]
         for name in ("model_0", "model_50"):
@@ -1012,7 +1082,7 @@ class TestSaveWebPolicyJson:
             )
 
         out = self._run(builder, tmp_path)
-        scene_dir = out / "main" / "assets" / "s"
+        scene_dir = out / "p" / "assets" / "s"
 
         assert sorted(p.name for p in scene_dir.glob("*.npz")) == [
             "motion.npz",
@@ -1081,7 +1151,7 @@ class TestSaveWebPolicyJson:
         assert group["layout"] == [{"name": "joint_pos", "size": 2}]
         assert group["size"] == 2
         assert "scale" not in group
-        assert (out / "main" / "assets" / "s" / group["fused"]).exists()
+        assert (out / "p" / "assets" / "s" / group["fused"]).exists()
 
     def test_two_policies_in_one_scene_keep_their_own_graphs(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1122,7 +1192,7 @@ class TestSaveWebPolicyJson:
         assert crawl["fused"] == "crawl/obs/policy.onnx"
         assert (walk["size"], crawl["size"]) == (2, 5)
 
-        scene_dir = out / "main" / "assets" / "s"
+        scene_dir = out / "p" / "assets" / "s"
         walk_bytes = (scene_dir / walk["fused"]).read_bytes()
         crawl_bytes = (scene_dir / crawl["fused"]).read_bytes()
         assert walk_bytes != crawl_bytes
@@ -1293,7 +1363,7 @@ class TestSaveWebPolicyJson:
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
         assert fallen["onnx"] == "policy/term/fallen.onnx"
-        assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
+        assert (out / "p" / "assets" / "s" / fallen["onnx"]).exists()
         assert data["existing_key"] == "kept"
 
     def test_config_path_both_blocks_merged(
@@ -1328,7 +1398,7 @@ class TestSaveWebPolicyJson:
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         height_entry = data["terminations"]["height"]
         assert height_entry["onnx"] == "policy/term/height.onnx"
-        assert (out / "main" / "assets" / "s" / height_entry["onnx"]).exists()
+        assert (out / "p" / "assets" / "s" / height_entry["onnx"]).exists()
 
     def test_config_path_overwrites_existing_actions_block(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1549,7 +1619,7 @@ class TestSaveWebPolicyJson:
         # Traced to ONNX, with `limit_angle` closed over by the function, not serialized.
         fallen = data["terminations"]["fallen"]
         assert fallen["onnx"] == "policy/term/fallen.onnx"
-        assert (out / "main" / "assets" / "s" / fallen["onnx"]).exists()
+        assert (out / "p" / "assets" / "s" / fallen["onnx"]).exists()
         assert "time_out" not in fallen
 
 
@@ -1572,7 +1642,7 @@ class TestFullBuild:
             control_dt=0.02, name="Scene", model=minimal_model
         )
         builder.build(tmp_path / "out")
-        scene_dir = tmp_path / "out" / "main" / "assets" / "scene"
+        scene_dir = tmp_path / "out" / "test" / "assets" / "scene"
         assert (scene_dir / "scene.mjb").exists()
 
     def test_build_with_spec_creates_mjz_file(self, tmp_path, minimal_spec):
@@ -1581,26 +1651,29 @@ class TestFullBuild:
             control_dt=0.02, name="Scene", spec=minimal_spec
         )
         builder.build(tmp_path / "out")
-        scene_dir = tmp_path / "out" / "main" / "assets" / "scene"
+        scene_dir = tmp_path / "out" / "test" / "assets" / "scene"
         assert (scene_dir / "scene.mjz").exists()
 
-    def test_build_project_without_id_uses_main_directory(
-        self, tmp_path, minimal_model
-    ):
+    def test_build_names_the_project_directory_by_its_id(self, tmp_path, minimal_model):
+        builder = Builder()
+        builder.add_project(name="My Demo").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        builder.build(tmp_path / "out")
+        assert (tmp_path / "out" / "my_demo").is_dir()
+        assert not (tmp_path / "out" / "main").exists()
+
+    def test_build_writes_no_per_project_index_or_logo(self, tmp_path, minimal_model):
+        # Sub-directory routing is gone: the SPA selects a project from `?project=`
+        # against the build-time base URL, so `<project-id>/index.html` had no reader.
         builder = Builder()
         builder.add_project(name="Test").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
         builder.build(tmp_path / "out")
-        assert (tmp_path / "out" / "main").is_dir()
-
-    def test_build_project_with_id_uses_id_as_directory(self, tmp_path, minimal_model):
-        builder = Builder()
-        builder.add_project(name="Test", id="demo").add_scene(
-            control_dt=0.02, name="S", model=minimal_model
-        )
-        builder.build(tmp_path / "out")
-        assert (tmp_path / "out" / "demo").is_dir()
+        assert (tmp_path / "out" / "index.html").is_file()
+        assert not (tmp_path / "out" / "test" / "index.html").exists()
+        assert not (tmp_path / "out" / "test" / "logo.svg").exists()
 
     def test_build_returns_mjswan_app_instance(self, tmp_path, minimal_model):
         builder = Builder()
@@ -1835,12 +1908,10 @@ class TestFullBuildGtmId:
             control_dt=0.02, name="Scene", model=minimal_model
         )
         builder.build(tmp_path / "out")
-        out = tmp_path / "out"
-        for html_file in [out / "index.html", out / "main" / "index.html"]:
-            html = html_file.read_text()
-            assert "GTM-SAMPLE123" in html
-            assert "googletagmanager.com/gtm.js" in html  # <head> script
-            assert "googletagmanager.com/ns.html" in html  # <body> noscript
+        html = (tmp_path / "out" / "index.html").read_text()
+        assert "GTM-SAMPLE123" in html
+        assert "googletagmanager.com/gtm.js" in html  # <head> script
+        assert "googletagmanager.com/ns.html" in html  # <body> noscript
 
     def test_no_gtm_without_gtm_id(self, tmp_path, minimal_model):
         builder = Builder()

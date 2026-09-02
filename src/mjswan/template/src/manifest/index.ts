@@ -5,7 +5,8 @@
  * nothing about config.json — the app owns the catalog and calls engine verbs.
  *
  * A build may hold multiple projects; the catalog exposes all of them and the
- * app picks which one is active (the `id: null` "main" project is the default).
+ * app picks which one is active. The one marked `default` comes first, else the
+ * first in document order (ADR 0006 §4).
  */
 import type { Bytes } from '../core/utils/bytes';
 import type { ViewerConfig } from '../core/engine/viewer_config';
@@ -38,7 +39,10 @@ interface ConfigScene {
 }
 interface ConfigProject {
   name: string;
-  id: string | null;
+  /** `name2id(name)`, unique in the document: the project's directory and `?project=` value. */
+  id: string;
+  /** At most one project sets it; none set means the first in document order. */
+  default?: boolean;
   scenes: ConfigScene[];
 }
 export interface AppConfig {
@@ -82,7 +86,9 @@ export interface SceneEntry {
 }
 export interface ProjectCatalog {
   name: string;
-  id: string | null;
+  id: string;
+  /** The project the app opens on. Exactly one entry in a catalog has it set. */
+  default: boolean;
   scenes: SceneEntry[];
 }
 export interface Catalog {
@@ -95,24 +101,29 @@ export interface Catalog {
   pluginsPath?: string;
 }
 
-/** Lowercase-underscore slug, mirroring the Python `name2id` helper. */
+/**
+ * The id a name sanitizes to — the same function as Python's `name2id`, character for
+ * character: lowercase, every run of anything outside `[a-z0-9]` collapsed to one `_`,
+ * leading and trailing `_` stripped. The pair is pinned by `name2id_cases.json`, which
+ * both test suites read, because the two used to disagree on apostrophes, parentheses
+ * and accents and only a raw-name fallback hid it (ADR 0006 §4).
+ */
 export function sanitizeName(name: string): string {
-  return name.toLowerCase().replace(/ /g, '_').replace(/-/g, '_');
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
-function dirName(project: ConfigProject): string {
-  return project.id ? project.id : 'main';
-}
-
-/** `humanoid/scene.mjz` (project-relative) → `main/assets/humanoid/scene.mjz`. */
+/** `humanoid/scene.mjz` (project-relative) → `<project-id>/assets/humanoid/scene.mjz`. */
 function scenePath(project: ConfigProject, scene: ConfigScene): string {
   const rel = scene.path ? scene.path : `scene/${sanitizeName(scene.name)}/scene.mjz`;
-  return `${dirName(project)}/assets/${rel}`.replace(/\/+/g, '/');
+  return `${project.id}/assets/${rel}`.replace(/\/+/g, '/');
 }
 
 /** Resolve a project-relative asset (policy.json, splat) to a build-relative path. */
 function projectAsset(project: ConfigProject, rel: string): string {
-  return `${dirName(project)}/assets/${rel}`.replace(/\/+/g, '/');
+  return `${project.id}/assets/${rel}`.replace(/\/+/g, '/');
 }
 
 /**
@@ -284,12 +295,15 @@ export function parseManifest(config: AppConfig | string, source: ByteSource): C
   if (!parsed.projects?.length) {
     throw new Error('mjswan/manifest: config.json has no projects.');
   }
-  // "main" (id: null) first so it stays the default active project.
-  const ordered = [...parsed.projects.filter((p) => p.id === null), ...parsed.projects.filter((p) => p.id !== null)];
+  // The default project first, so `projects[0]` is always the one to open on. The build
+  // refuses two defaults; with none, document order already puts the right one first.
+  const flagged = parsed.projects.find((p) => p.default) ?? parsed.projects[0];
+  const ordered = [flagged, ...parsed.projects.filter((p) => p !== flagged)];
   return {
     projects: ordered.map((project) => ({
       name: project.name,
       id: project.id,
+      default: project === flagged,
       scenes: project.scenes.map((scene) => toSceneEntry(project, scene, source)),
     })),
     pluginsPath: parsed.plugins,

@@ -10,6 +10,7 @@ Layer breakdown:
 from __future__ import annotations
 
 import io
+import json
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -24,6 +25,22 @@ from mjswan.utils import (
     collect_spec_assets,
     name2id,
     to_zip_deflated,
+    unique_id,
+)
+
+# The frontend's `sanitizeName` reads the same table (src/manifest/index.test.ts): a
+# URL is resolved by that function and a directory named by this one, so any case the
+# two disagree on is a link that opens the wrong scene (ADR 0006 §4).
+NAME2ID_CASES = json.loads(
+    (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "mjswan"
+        / "template"
+        / "src"
+        / "manifest"
+        / "name2id_cases.json"
+    ).read_text()
 )
 
 
@@ -45,6 +62,30 @@ class TestName2Id:
 
     def test_already_clean_unchanged(self):
         assert name2id("simple") == "simple"
+
+    @pytest.mark.parametrize(("name", "expected"), NAME2ID_CASES)
+    def test_agrees_with_the_frontend_on_the_shared_table(self, name, expected):
+        assert name2id(name) == expected
+
+
+# ===========================================================================
+# L1 — unique_id
+# ===========================================================================
+class TestUniqueId:
+    def test_free_base_is_returned_as_is(self):
+        assert unique_id("flat_terrain", set()) == "flat_terrain"
+
+    def test_a_taken_base_gets_the_first_free_suffix(self):
+        assert unique_id("flat_terrain", {"flat_terrain"}) == "flat_terrain_1"
+        assert (
+            unique_id("flat_terrain", {"flat_terrain", "flat_terrain_1"})
+            == "flat_terrain_2"
+        )
+
+    def test_a_gap_in_the_suffixes_is_filled_first(self):
+        assert (
+            unique_id("s", {"s", "s_2"}) == "s_1"
+        )  # `_1` is free, so it is taken before `_3`
 
 
 # ===========================================================================

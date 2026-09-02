@@ -32,6 +32,11 @@ class PolicyConfig:
     model: onnx.ModelProto
     """ONNX model for the policy."""
 
+    id: str = ""
+    """Sanitized name, unique within the scene: the ``.onnx`` file's stem and the
+    ``?policy=`` value (ADR 0006 §4). Assigned by :meth:`~mjswan.scene.SceneHandle.add_policy`;
+    defaults to ``name2id(name)``."""
+
     metadata: dict[str, Any] = field(default_factory=dict)
     """Additional metadata for the policy."""
 
@@ -129,8 +134,15 @@ class PolicyConfig:
     default: bool = False
     """Whether this policy should be the initially selected one in the viewer.
 
-    When multiple policies in a scene have ``default=True``, the first one wins.
+    At most one policy in a scene may set it — two fail the build — and when none does,
+    the first added is the default.
     """
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            from .utils import name2id
+
+            self.id = name2id(self.name)
 
 
 class PolicyHandle:

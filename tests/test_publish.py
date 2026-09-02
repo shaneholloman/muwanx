@@ -104,7 +104,7 @@ def _make_dist(tmp_path: Path, *, uses_custom_js: bool = False) -> Path:
     """A realistic built dist/: data files plus app-shell files to be excluded."""
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
-    (dist / "main" / "assets" / "humanoid").mkdir(parents=True)
+    (dist / "demo" / "assets" / "humanoid").mkdir(parents=True)
 
     config = {
         "version": "0.7.0",
@@ -112,7 +112,7 @@ def _make_dist(tmp_path: Path, *, uses_custom_js: bool = False) -> Path:
         "projects": [
             {
                 "name": "Demo",
-                "id": None,
+                "id": "demo",
                 "scenes": [
                     {
                         "name": "Humanoid",
@@ -126,7 +126,7 @@ def _make_dist(tmp_path: Path, *, uses_custom_js: bool = False) -> Path:
     (dist / "assets" / "config.json").write_text(json.dumps(config))
 
     # Data files (should be uploaded).
-    scene_dir = dist / "main" / "assets" / "humanoid"
+    scene_dir = dist / "demo" / "assets" / "humanoid"
     (scene_dir / "scene.mjz").write_bytes(b"MJZ" * 10)
     (scene_dir / "walk.onnx").write_bytes(b"ONNX" * 10)
     (scene_dir / "walk.json").write_text(json.dumps({"onnx": {"path": "walk.onnx"}}))
@@ -137,7 +137,7 @@ def _make_dist(tmp_path: Path, *, uses_custom_js: bool = False) -> Path:
     (dist / "assets" / "index-abc.js").write_text("console.log(1)")
     (dist / "assets" / "index-abc.css").write_text("body{}")
     (dist / "assets" / "mujoco-x.wasm").write_bytes(b"\0asm")
-    (dist / "main" / "index.html").write_text("<!doctype html>")
+    (dist / "demo" / "index.html").write_text("<!doctype html>")
     return dist
 
 
@@ -184,10 +184,10 @@ class TestPlanPublish:
         paths = {f.upload_path for f in plan.files}
         assert paths == {
             "config.json",
-            "main/assets/humanoid/scene.mjz",
-            "main/assets/humanoid/walk.onnx",
-            "main/assets/humanoid/walk.json",
-            "main/assets/humanoid/walk_run.npz",
+            "demo/assets/humanoid/scene.mjz",
+            "demo/assets/humanoid/walk.onnx",
+            "demo/assets/humanoid/walk.json",
+            "demo/assets/humanoid/walk_run.npz",
         }
 
     def test_config_hoisted_to_upload_root(self, tmp_path: Path):
@@ -207,14 +207,14 @@ class TestPlanPublish:
         manifest = {entry["path"]: entry for entry in plan.manifest()}
         assert manifest["config.json"]["contentType"] == "application/json"
         assert (
-            manifest["main/assets/humanoid/scene.mjz"]["contentType"]
+            manifest["demo/assets/humanoid/scene.mjz"]["contentType"]
             == "application/zip"
         )
         assert (
-            manifest["main/assets/humanoid/walk.onnx"]["contentType"]
+            manifest["demo/assets/humanoid/walk.onnx"]["contentType"]
             == "application/octet-stream"
         )
-        assert manifest["main/assets/humanoid/scene.mjz"]["size"] == 30
+        assert manifest["demo/assets/humanoid/scene.mjz"]["size"] == 30
 
     def test_rejects_custom_js(self, tmp_path: Path):
         with pytest.raises(PublishError) as exc:

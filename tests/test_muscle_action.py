@@ -258,7 +258,7 @@ class TestBuilderMuscleValidation:
 
         policy_json = json.loads(
             (
-                tmp_path / "out" / "main" / "assets" / name2id("S") / "policy.json"
+                tmp_path / "out" / "p" / "assets" / name2id("S") / "policy.json"
             ).read_text()
         )
         assert "actions" in policy_json
@@ -342,7 +342,7 @@ class TestBuilderMuscleRoundTrip:
         builder._save_web(tmp_path / "out")
         data = json.loads(
             (
-                tmp_path / "out" / "main" / "assets" / name2id("S") / "policy.json"
+                tmp_path / "out" / "p" / "assets" / name2id("S") / "policy.json"
             ).read_text()
         )
         assert data["policy_num_actions"] == 2
@@ -370,7 +370,7 @@ class TestBuilderMuscleRoundTrip:
         builder._save_web(tmp_path / "out")
         data = json.loads(
             (
-                tmp_path / "out" / "main" / "assets" / name2id("S") / "policy.json"
+                tmp_path / "out" / "p" / "assets" / name2id("S") / "policy.json"
             ).read_text()
         )
         assert data["actions"]["muscles"]["normalize"] is False

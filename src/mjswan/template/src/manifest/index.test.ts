@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseManifest, sanitizeName, type AppConfig, type ByteSource } from './index';
+import NAME2ID_CASES from './name2id_cases.json';
 
 /** Records every requested path; returns the policy JSON for *.json, tagged bytes otherwise. */
 function fakeSource(policyJson: unknown): { source: ByteSource; requested: string[] } {
@@ -19,7 +20,7 @@ const CONFIG: AppConfig = {
   projects: [
     {
       name: 'Demo',
-      id: null,
+      id: 'demo',
       scenes: [
         {
           name: 'Humanoid',
@@ -56,15 +57,15 @@ describe('parseManifest', () => {
     expect(scene.splats[0]).toMatchObject({ name: 'Room', control: true, transform: { scale: 2 } });
   });
 
-  it('resolves asset paths under main/assets and relative to policy.json', async () => {
+  it('resolves asset paths under <project-id>/assets and relative to policy.json', async () => {
     const { source, requested } = fakeSource(POLICY_JSON);
     const catalog = parseManifest(CONFIG, source);
     const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk', splat: 'Room' });
-    expect(requested).toContain('main/assets/humanoid/scene.mjz'); // model
-    expect(requested).toContain('main/assets/humanoid/walk.json'); // policy.json
-    expect(requested).toContain('main/assets/humanoid/walk.onnx'); // onnx (rel to policy dir)
-    expect(requested).toContain('main/assets/humanoid/walk_clip.npz'); // motion (rel to policy dir)
-    expect(requested).toContain('main/assets/humanoid/room.spz'); // splat
+    expect(requested).toContain('demo/assets/humanoid/scene.mjz'); // model
+    expect(requested).toContain('demo/assets/humanoid/walk.json'); // policy.json
+    expect(requested).toContain('demo/assets/humanoid/walk.onnx'); // onnx (rel to policy dir)
+    expect(requested).toContain('demo/assets/humanoid/walk_clip.npz'); // motion (rel to policy dir)
+    expect(requested).toContain('demo/assets/humanoid/room.spz'); // splat
     expect(input.viewer).toEqual({ distance: 5 });
     expect(input.policy?.motions?.map((m) => m.name)).toEqual(['clip']);
   });
@@ -77,17 +78,33 @@ describe('parseManifest', () => {
     expect(input.splat).toBeNull(); // no splat requested
   });
 
-  it('exposes all projects, ordering id:null first, and throws on an empty catalog', () => {
+  it('exposes all projects, the default first, and throws on an empty catalog', () => {
     const multi: AppConfig = {
       version: '0',
       projects: [
         { name: 'Extra', id: 'extra', scenes: [] },
-        { name: 'Main', id: null, scenes: [] },
+        { name: 'Main', id: 'main', default: true, scenes: [] },
       ],
     };
     const catalog = parseManifest(multi, fakeSource({}).source);
     expect(catalog.projects.map((p) => p.name)).toEqual(['Main', 'Extra']);
+    expect(catalog.projects.map((p) => p.default)).toEqual([true, false]);
     expect(() => parseManifest({ version: '0', projects: [] }, fakeSource({}).source)).toThrow();
+  });
+
+  it('with no default flagged, the first project in document order is the default', () => {
+    const multi: AppConfig = {
+      version: '0',
+      projects: [
+        { name: 'First', id: 'first', scenes: [] },
+        { name: 'Second', id: 'second', scenes: [] },
+      ],
+    };
+    const catalog = parseManifest(multi, fakeSource({}).source);
+    expect(catalog.projects.map((p) => [p.id, p.default])).toEqual([
+      ['first', true],
+      ['second', false],
+    ]);
   });
 
   it('delivers the traced term graphs a policy.json refers to (ADR 0005)', async () => {
@@ -113,9 +130,9 @@ describe('parseManifest', () => {
       'obs/joint_pos.onnx',
       'term/fell_over.onnx',
     ]);
-    expect(requested).toContain('main/assets/humanoid/obs/joint_pos.onnx');
-    expect(requested).toContain('main/assets/humanoid/term/fell_over.onnx');
-    expect(requested).toContain('main/assets/humanoid/command/twist.onnx');
+    expect(requested).toContain('demo/assets/humanoid/obs/joint_pos.onnx');
+    expect(requested).toContain('demo/assets/humanoid/term/fell_over.onnx');
+    expect(requested).toContain('demo/assets/humanoid/command/twist.onnx');
     // The policy network's own `onnx` is an object, not a term reference.
     expect(input.policy?.graphs).not.toHaveProperty('walk.onnx');
   });
@@ -144,7 +161,7 @@ describe('parseManifest', () => {
     const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk' });
 
     expect(Object.keys(input.graphs ?? {})).toEqual(['event/push_robot.onnx']);
-    expect(requested).toContain('main/assets/humanoid/event/push_robot.onnx');
+    expect(requested).toContain('demo/assets/humanoid/event/push_robot.onnx');
   });
 
   it('surfaces the runtime plugin module path when present', () => {
@@ -179,5 +196,12 @@ describe('document format', () => {
 describe('sanitizeName', () => {
   it('lowercases and underscores spaces and hyphens', () => {
     expect(sanitizeName('Foo Bar-Baz')).toBe('foo_bar_baz');
+  });
+
+  // The same table pins Python's `name2id` (tests/test_utils.py). A URL is resolved
+  // against this form and a directory is named by the Python one, so a case that
+  // passes here and fails there is a link that opens the wrong scene.
+  it.each(NAME2ID_CASES as Array<[string, string]>)('mirrors name2id: %j → %j', (name, id) => {
+    expect(sanitizeName(name)).toBe(id);
   });
 });

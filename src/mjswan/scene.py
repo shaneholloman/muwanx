@@ -30,6 +30,7 @@ from .adapters import (
 from .motion import MotionConfig
 from .policy import PolicyConfig, PolicyHandle
 from .splat import SplatConfig, SplatHandle
+from .utils import assign_id, name2id
 from .viewer import ViewerConfig
 
 if TYPE_CHECKING:
@@ -206,6 +207,11 @@ class SceneConfig:
     name: str
     """Name of the scene."""
 
+    id: str = ""
+    """Sanitized name, unique within the project: the scene's directory in the build and
+    its ``?scene=`` value (ADR 0006 §4). Assigned by :meth:`ProjectHandle.add_scene`;
+    defaults to ``name2id(name)``."""
+
     model: mujoco.MjModel | None = None
     """MuJoCo model for the scene (saved as .mjb)."""
 
@@ -294,6 +300,8 @@ class SceneConfig:
     :func:`mjswan.adapters.resolve_runner_defaults`."""
 
     def __post_init__(self) -> None:
+        if not self.id:
+            self.id = name2id(self.name)
         # The scene asset's filename, from whichever of spec/model was given. Fixed now
         # rather than a property: `_save_web` drops both right after writing the asset.
         self.scene_filename = "scene.mjz" if self.spec is not None else "scene.mjb"
@@ -488,6 +496,9 @@ class SceneHandle:
 
         policy_config = PolicyConfig(
             name=name,
+            id=assign_id(
+                name, {p.id for p in self._config.policies}, kind="policy", stacklevel=3
+            ),
             model=policy,
             metadata=metadata,
             source_path=source_path,
@@ -859,6 +870,9 @@ class SceneHandle:
 
         splat_config = SplatConfig(
             name=name,
+            id=assign_id(
+                name, {s.id for s in self._config.splats}, kind="splat", stacklevel=3
+            ),
             source=source,
             url=url,
             scale=scale,

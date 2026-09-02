@@ -36,7 +36,7 @@ from .envs.mdp.actions.actions import (
 from .project import ProjectConfig, ProjectHandle
 from .scene import SceneConfig
 from .splat import SplatConfig
-from .utils import collect_spec_assets, name2id, to_zip_deflated
+from .utils import assign_id, collect_spec_assets, name2id, to_zip_deflated
 
 
 def _build_uses_custom_js() -> bool:
@@ -346,26 +346,45 @@ class Builder:
             scene.add_policy_wandb(run_path, task_id=task_id)
         return project
 
-    def add_project(self, name: str, *, id: str | None = None) -> ProjectHandle:
+    def add_project(
+        self, name: str, *, default: bool = False, **removed: Any
+    ) -> ProjectHandle:
         """Add a new project to the builder.
+
+        The project's id — its directory in the build and its ``?project=`` value — is
+        ``name2id(name)``, made unique within the document: a second project that
+        sanitizes to the same id is stored as ``<id>_1`` with a warning (ADR 0006 §4).
 
         Args:
             name: Name for the project (displayed in the UI).
-            id: Optional ID for URL routing. If not provided, the first project
-                defaults to None (main route), and subsequent projects default to sanitized name.
+            default: Open the app on this project. At most one project may set it;
+                when none does, the first added is the default.
 
         Returns:
             ProjectHandle for adding scenes and further configuration.
         """
-        # Project ID: explicit > None for first project (main route) > sanitized name
-        if id is not None:
-            project_id = id
-        elif not self._projects:
-            project_id = None
-        else:
-            project_id = name2id(name)
-
-        project = ProjectConfig(name=name, id=project_id)
+        if removed:
+            if "id" in removed:
+                raise TypeError(
+                    "add_project(id=...) was removed: a project's id is always "
+                    "name2id(name), so the directory and the ?project= value can never "
+                    "disagree. Rename the project instead."
+                )
+            raise TypeError(
+                f"add_project() got unexpected keyword(s): {sorted(removed)}"
+            )
+        if default:
+            taken = next((p for p in self._projects if p.default), None)
+            if taken is not None:
+                raise ValueError(
+                    f"Project {name!r} cannot be the default: {taken.name!r} already "
+                    "is. Exactly one project may set default=True."
+                )
+        project = ProjectConfig(
+            name=name,
+            id=assign_id(name, {p.id for p in self._projects}, kind="project"),
+            default=default,
+        )
         self._projects.append(project)
         return ProjectHandle(project, self)
 
@@ -425,6 +444,7 @@ class Builder:
         Creates root assets/config.json with project metadata and structure information.
         Individual project assets (scenes/policies) are saved under project-id/assets/.
         """
+        self._check_defaults()
         # Create root config with project metadata and structure info
         uses_custom_js = _build_uses_custom_js()
         root_config = {
@@ -437,10 +457,11 @@ class Builder:
                 {
                     "name": project.name,
                     "id": project.id,
+                    **({"default": True} if project.default else {}),
                     "scenes": [
                         {
                             "name": scene.name,
-                            "path": f"{name2id(scene.name)}/{scene.scene_filename}",
+                            "path": f"{scene.id}/{scene.scene_filename}",
                             **(
                                 {
                                     "splats": [
@@ -477,10 +498,7 @@ class Builder:
                                     {
                                         "name": policy.name,
                                         **(
-                                            {
-                                                "config": f"{name2id(scene.name)}/"
-                                                f"{name2id(policy.name)}.json"
-                                            }
+                                            {"config": f"{scene.id}/{policy.id}.json"}
                                             if getattr(policy, "config_path", None)
                                             or getattr(policy, "commands", None)
                                             or getattr(policy, "observations", None)
@@ -553,8 +571,28 @@ class Builder:
         """
         d = splat.to_dict()
         if splat.source is not None:
-            d["path"] = f"{name2id(scene.name)}/{name2id(splat.name)}.spz"
+            d["path"] = f"{scene.id}/{splat.id}.spz"
         return d
+
+    def _check_defaults(self) -> None:
+        """Refuse two siblings both marked default (ADR 0006, manifest rule 3).
+
+        A flag that two entries may both set is a silent pick; the build says so
+        instead. None set is fine: the first in document order is then the default.
+        """
+        defaults = [p.name for p in self._projects if p.default]
+        if len(defaults) > 1:
+            raise ValueError(
+                f"Projects {defaults!r} are all marked default=True; at most one may be."
+            )
+        for project in self._projects:
+            for scene in project.scenes:
+                names = [p.name for p in scene.policies if p.default]
+                if len(names) > 1:
+                    raise ValueError(
+                        f"Scene {scene.name!r} has policies {names!r} all marked "
+                        "default=True; at most one may be."
+                    )
 
     def _policy_filename(self, name: str) -> str:
         if not name or name.strip() == "":
@@ -737,9 +775,7 @@ class Builder:
             ├── assets/
             │   ├── config.json
             │   └── (compiled js/css files)
-            └── <project-id>/ (or 'main')
-                ├── index.html
-                ├── logo.svg
+            └── <project-id>/
                 └── assets/
                     └── <scene-id>/
                         ├── scene.mjz/.mjb
@@ -813,27 +849,13 @@ class Builder:
         if self._mt:
             self._save_mt_headers(output_path)
 
+        self._check_defaults()
+
         # Save MuJoCo models and ONNX policies per project
         max_name_len = max(len(p.name) for p in self._projects)
         for project in self._projects:
-            # Use 'main' for projects without ID, otherwise use the project ID
-            project_dir_name = project.id if project.id else "main"
-            project_dir = output_path / project_dir_name
-            project_assets_dir = project_dir / "assets"
-
-            # Create directories
+            project_assets_dir = output_path / project.id / "assets"
             project_assets_dir.mkdir(parents=True, exist_ok=True)
-
-            # Copy index.html to each project directory so direct navigation works
-            root_index = output_path / "index.html"
-            if root_index.exists():
-                shutil.copy(str(root_index), str(project_dir / "index.html"))
-
-            # Copy static root assets
-            for static_name in ["logo.svg"]:
-                src_static = output_path / static_name
-                if src_static.exists():
-                    shutil.copy(str(src_static), str(project_dir / static_name))
 
             # Save scenes and policies
             with Progress(
@@ -851,8 +873,7 @@ class Builder:
                 steps = _SceneSteps(progress)
                 for scene in project.scenes:
                     progress.update(task, scene=scene.name)
-                    scene_id = name2id(scene.name)
-                    scene_dir = project_assets_dir / scene_id
+                    scene_dir = project_assets_dir / scene.id
                     scene_dir.mkdir(parents=True, exist_ok=True)
                     scene_path = scene_dir / scene.scene_filename
 
@@ -899,7 +920,7 @@ class Builder:
                             if src.exists():
                                 shutil.copy2(
                                     str(src),
-                                    str(scene_dir / f"{name2id(splat.name)}.spz"),
+                                    str(scene_dir / f"{splat.id}.spz"),
                                 )
                             else:
                                 warnings.warn(
@@ -926,8 +947,7 @@ class Builder:
 
                     for policy in scene.policies:
                         steps.on(f"policy/{policy.name}")
-                        policy_id = name2id(policy.name)
-                        policy_path = scene_dir / f"{policy_id}.onnx"
+                        policy_path = scene_dir / f"{policy.id}.onnx"
                         onnx.save(policy.model, str(policy_path))
 
                         data = self._serialize_policy_config(
