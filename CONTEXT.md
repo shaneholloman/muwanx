@@ -221,7 +221,7 @@ Legacy entry points (kept for backward compatibility): `main`, `simple`, `mjlab`
 | `uv` | Dependency management and script runner — use instead of bare `python`/`pip` |
 | `hatchling` | Build backend |
 | `ruff` | Linting and formatting (pinned exactly, not floored — see pyproject comment) |
-| `pyright` / `ty` | Type checking |
+| `pyright` / `ty` | Type checking (`make type` runs both over `src/mjswan`; `examples/` and `typings/` are out of scope, the latter a search path for ty) |
 | `pytest` | Tests (`make test`) |
 | `pre-commit` | Hooks: trailing-whitespace, end-of-file-fixer, ruff, ruff-format, npmrc secret scan, pytest (not slow), eslint |
 | `zensical` | Docs site builder (MkDocs-based) — `make docs-build` / `make docs-serve` |

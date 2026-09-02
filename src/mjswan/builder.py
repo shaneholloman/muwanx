@@ -240,8 +240,9 @@ def _input_slots(policy, obs_keys: list[str]) -> list[str]:
     tensor the runtime supplies — anything else would surface at playback as a missing
     input, with the policy silently inert.
     """
+    keys: list[str]
     if policy.in_keys is not None:
-        keys = list(policy.in_keys)
+        keys = [str(k) for k in policy.in_keys]
     elif len(obs_keys) == 1:
         keys = list(obs_keys)
     elif not obs_keys or DEFAULT_IN_KEYS[0] in obs_keys:
