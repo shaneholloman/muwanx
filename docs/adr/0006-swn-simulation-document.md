@@ -773,30 +773,52 @@ the documents migration cannot reach.
 
 ## Acceptance criteria
 
-- [ ] `examples/mjlab/defaults` builds with one `mdp/` directory per scene, not
+- [x] `examples/mjlab/defaults` builds with one `mdp/` directory per scene, not
       one per policy.
-- [ ] `examples/demo` builds and plays identically to the current build for all
+- [x] `examples/demo` builds and plays identically to the current build for all
       four projects, including the three multi-input go2 policies.
-- [ ] Two scenes given the same name in one project produce `<id>` and `<id>_1`
+- [x] Two scenes given the same name in one project produce `<id>` and `<id>_1`
       with a warning naming both.
-- [ ] Switching policy between two MDPs with different model-field
+- [x] Switching policy between two MDPs with different model-field
       randomization, and switching back, restores the compiled model values
       exactly — no compounding.
 - [ ] Switching to an MDP after 10 seconds and after 10 minutes of playback
       applies the same model-field randomization, and switching A → B → A
       reproduces A's first draw.
-- [ ] `sanitizeName` and `name2id` agree on a shared table of cases, apostrophes,
+- [x] `sanitizeName` and `name2id` agree on a shared table of cases, apostrophes,
       parentheses and accents included, and a link to `?scene=newton_s_cradle`
       opens that scene rather than the default.
-- [ ] `skills/mjlab-to-mjswan/SKILL.md` describes the API the release ships.
-- [ ] No `in_keys` or `out_keys` is read from a `config_path` sidecar; the
+- [x] `skills/mjlab-to-mjswan/SKILL.md` describes the API the release ships.
+- [x] No `in_keys` or `out_keys` is read from a `config_path` sidecar; the
       multi-input go2 policies declare theirs in `examples/demo/main.py` and
       they appear in `manifest.json`.
-- [ ] A document whose `format` exceeds the engine's maximum is refused with an
+- [x] A document whose `format` exceeds the engine's maximum is refused with an
       error naming both values and the document's `version`.
-- [ ] `mjswan publish` accepts either a built directory or a `.swn` and uploads
+- [x] `mjswan publish` accepts either a built directory or a `.swn` and uploads
       the same file set for both.
-- [ ] Two sibling entries both marked `"default": true` fail the build; none
+- [x] Two sibling entries both marked `"default": true` fail the build; none
       marked resolves to the first in document order.
-- [ ] No `config.json` and no per-policy config JSON remains in a build output,
+- [x] No `config.json` and no per-policy config JSON remains in a build output,
       and no source file outside the migration reads them.
+
+### Verification status
+
+Run on this branch, 2026-09-02. `examples/mjlab/defaults` (7 tasks, 76 W&B checkpoints)
+and the local-asset half of `examples/demo` (`mjswan Demo` + `MyoSuite`, 11 scenes) build,
+and every scene of both loads and plays in headless Chromium: `window.__mjswanReady`, no
+console error, a non-blank frame that moves. The three multi-input go2 policies play as
+the deployed pre-ADR-0006 build does, their collapse included, so the slot tables carried
+over faithfully. `examples/demo/gentle_humanoid` builds and tracks its clip only once its
+checkpoint's `out_keys` moved from the sidecar to `add_policy`: without them the runtime
+drove the actuators from output 0 and the robot fell, which is why a multi-output network
+without `out_keys` now warns at `add_policy`.
+
+`examples/demo`'s four projects then built in full, 120 scenes, and a two-scene app named
+`Simple Pendulum` / `Newton's Cradle` confirmed the URL half of the id rule: no query opens
+the first scene, `?scene=newton_s_cradle` and `?scene=Newton's%20Cradle` both open the
+second. No example ships a scene by that name — it is the docs' worked example of
+`name2id` — so the case needed a build of its own to exercise.
+
+Still open: the timing half of the randomization criterion rests on the reseed at
+`runtime.ts:862` and the `rng` / `modelFieldDr` unit suites, not on a switch driven in a
+browser.
