@@ -57,6 +57,24 @@ def _entry(
 # ===========================================================================
 # L1 — project ID assignment rules
 # ===========================================================================
+def _two_output_onnx() -> onnx.ModelProto:
+    """A network with two outputs, for slot-table tests."""
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 2])
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 2])
+    z = helper.make_tensor_value_info("z", TensorProto.FLOAT, [1, 2])
+    return helper.make_model(
+        helper.make_graph(
+            [
+                helper.make_node("Identity", ["x"], ["y"]),
+                helper.make_node("Identity", ["x"], ["z"]),
+            ],
+            "two_outputs",
+            [x],
+            [y, z],
+        )
+    )
+
+
 def _two_input_onnx() -> onnx.ModelProto:
     """A network with two inputs (concatenated into one output), for slot-table tests."""
     a = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 2])
@@ -1683,6 +1701,19 @@ class TestSaveWebPolicyJson:
         )
         with pytest.raises(ValueError, match="2 ONNX inputs .* no in_keys"):
             scene.add_policy(name="Two", policy=_two_input_onnx())
+
+    def test_a_multi_output_policy_without_out_keys_is_warned_about(
+        self, minimal_model
+    ):
+        # Which output is the action is unknowable from the network, and the runtime
+        # falls back to the first; silence there put the gentle_humanoid demo on the floor.
+        scene = (
+            Builder()
+            .add_project(name="P")
+            .add_scene(control_dt=0.02, name="S", model=minimal_model)
+        )
+        with pytest.warns(RuntimeWarning, match="2 ONNX outputs .* no out_keys"):
+            scene.add_policy(name="Two", policy=_two_output_onnx())
 
     def test_slot_tables_must_match_the_networks_input_and_output_counts(
         self, minimal_model, minimal_onnx

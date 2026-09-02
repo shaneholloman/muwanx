@@ -53,7 +53,7 @@ full list):
 | `terminations` | `dict[str, TerminationTermCfg]` keyed by termination name. |
 | `events` | `dict[str, EventTermCfg]` keyed by event name, in any mode. Defaults to the scene's events — see [Events](#events). |
 | `mdp` | An [`MdpConfig`](../api/core.md#mdpconfig) carrying all five term sets, shared by every policy handed the same object. Exclusive with the five kwargs above — see [Sharing one MDP](#sharing-one-mdp-between-policies). |
-| `in_keys` / `out_keys` | The network's input and output **slot tables**, needed only for a multi-input network — see [Multi-input policies](#multi-input-policies). |
+| `in_keys` / `out_keys` | The network's input and output **slot tables**: `in_keys` for a multi-input network, `out_keys` for a multi-output one whose action is not the first output — see [Multi-input policies](#multi-input-policies). |
 | `policy_num_actions` | Output width for policies whose action count cannot be inferred from `policy_joint_names` — muscle-driven ones, which drive actuators rather than joints. |
 | `encoder_bias` | Optional per-joint bias; the browser writes `processed_action - encoder_bias` to the actuators (mirrors mjlab). |
 | `clip_actions` | Symmetric bound on the raw policy output, applied before any action term, mirroring rsl-rl's `RslRlVecEnvWrapper`. `add_policy_wandb` fills it in from the task's runner config. Not `ActionTermCfg.clip` — see [Actions](#actions). |
@@ -187,8 +187,13 @@ scene.add_policy(
 
 `out_keys` is the same table for the outputs; the runtime reads `action` and, for a
 recurrent policy, `["next", "adapt_hx"]`. Both tables are written to the manifest only
-when they differ from the defaults (`["actor"]`, `["action"]`), which a single-input policy
-never needs to declare. See `examples/demo/main.py` for the three Go2 policies.
+when they differ from the defaults (`["actor"]`, `["action"]`), and a single-input,
+single-output network declares neither. A network with **several outputs** does need
+`out_keys` unless its action is the first one: the default table names only output 0, and
+the actuators would be driven from it. The build warns in that case rather than refusing,
+since output 0 may well be the action. `examples/demo/main.py` has the three multi-input
+Go2 policies; `examples/demo/gentle_humanoid/main.py` has a single-input network with
+eight outputs, whose `action` is the seventh.
 
 ### Coming from mjlab
 

@@ -275,6 +275,20 @@ def setup_builder() -> mjswan.Builder:
         name="Gentle Humanoid Tracking",
         policy=onnx.load(str(policy_path), load_external_data=True),
         config_path=str(policy_json),
+        # The checkpoint's own output table, which the build no longer reads from the
+        # sidecar (ADR 0006 §5). Without it the runtime would drive the robot from
+        # output 0 instead of `action`. The sidecar still carries it, so the build
+        # warns once that it ignored it; that warning is expected here.
+        out_keys=[
+            "policy",
+            "priv_pred",
+            "_actor_inp",
+            "_actor_feature",
+            "loc",
+            "scale",
+            "action",
+            "action_log_prob",
+        ],
         commands={
             # Built-in motion player; clips convert to its body_world format at build time (#79).
             # `time_steps` is the window its `ref_*` fields are sampled at, sliced by the terms.

@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import re
 import tempfile
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -362,7 +363,9 @@ def _check_slot_tables(
     so each table must be exactly as long as what it indexes. A network with several
     inputs must declare ``in_keys``: nothing else records where the runtime-synthesized
     tensors sit relative to the observation groups, and without it the policy would fail
-    at playback with a missing input rather than here (ADR 0006 §5).
+    at playback with a missing input rather than here (ADR 0006 §5). Several *outputs*
+    cannot be refused the same way — one of them may well be the action — but which one
+    is unknowable here, so the default (the first) is announced.
     """
     inputs, outputs = _onnx_io_names(model)
     if in_keys is None:
@@ -382,6 +385,15 @@ def _check_slot_tables(
                 "input, so the two must have the same length."
             )
     if out_keys is None:
+        if len(outputs) > 1:
+            warnings.warn(
+                f"Policy {name!r} has {len(outputs)} ONNX outputs ({outputs}) but "
+                f"declares no out_keys, so the runtime drives the actuators from the "
+                f"first one, {outputs[0]!r}. If the action is a different output, pass "
+                "out_keys naming each output in order (ADR 0006 §5).",
+                category=RuntimeWarning,
+                stacklevel=3,
+            )
         checked_out: list[str | list[str]] | None = None
     else:
         checked_out = [

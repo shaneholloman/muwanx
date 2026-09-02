@@ -42,8 +42,9 @@ velocity-command shortcuts were removed outright, see Removed.
 - `add_policy(in_keys=..., out_keys=...)`: the network's slot tables, declared beside the
   network and checked against its input and output counts. A multi-input network without
   `in_keys` is refused at `add_policy` rather than going inert at playback; a slot naming no
-  observation group fails the build. Written to the manifest only when they differ from the
-  defaults (`["actor"]`, `["action"]`).
+  observation group fails the build. A multi-*output* network without `out_keys` is warned
+  about instead of refused, naming the output the actuators will be driven from. Written to
+  the manifest only when they differ from the defaults (`["actor"]`, `["action"]`).
 - `add_project(default=True)` and `add_policy(default=True)` pick what the app opens on;
   two siblings both marked fail the build, none marked means the first added.
 - `mjswan info` lists each scene's MDPs with their traced-graph counts, and reads a
