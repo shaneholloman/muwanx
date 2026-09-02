@@ -13,10 +13,12 @@ from typing import TYPE_CHECKING, Any
 import onnx
 
 from .command import CommandTermConfig
+from .mdp import MdpConfig
 from .motion import MotionConfig, MotionHandle
 
 if TYPE_CHECKING:
     from .envs.mdp.actions.actions import ActionTermCfg
+    from .managers.event_manager import EventTermCfg
     from .managers.observation_manager import ObservationGroupCfg
     from .managers.termination_manager import TerminationTermCfg
     from .scene import SceneHandle
@@ -46,35 +48,11 @@ class PolicyConfig:
     config_path: str | None = None
     """Optional source path for the policy config JSON file."""
 
-    commands: dict[str, CommandTermConfig] = field(default_factory=dict)
-    """Command terms keyed by their policy-visible names."""
-
-    observations: dict[str, ObservationGroupCfg] | None = None
-    """Observation group configurations (mjlab-compatible).
-
-    Keys are **ONNX input names**, not free-form labels: the runtime feeds each
-    group's vector as the input of that name, and ``in_keys`` defaults to
-    ``["policy"]``. mjlab calls the same group ``"actor"``, so
-    :func:`mjswan.adapters.adapt_observations` renames a single group to
-    ``"policy"`` on the way in. Values are ``ObservationGroupCfg`` instances whose
-    terms are serialized into ``observations`` in the policy JSON at build time.
-    """
-
-    actions: Mapping[str, ActionTermCfg] | None = None
-    """Action term configurations (mjlab-compatible).
-
-    Keys are term names (e.g. ``"joint_pos"``).  Values are
-    ``ActionTermCfg`` subclass instances serialized into ``actions``
-    in the policy JSON at build time.
-    """
-
-    terminations: dict[str, TerminationTermCfg] | None = None
-    """Termination term configurations (mjlab-compatible).
-
-    Keys are term names (e.g. ``"time_out"``, ``"fallen"``).  Values are
-    ``TerminationTermCfg`` instances serialized into ``terminations``
-    in the policy JSON at build time.
-    """
+    mdp: MdpConfig = field(default_factory=MdpConfig)
+    """The MDP this policy runs against — its observations, actions, terminations,
+    commands and events as one unit (ADR 0006 §3). Two policies given the same object
+    share one MDP: one set of traced graphs, one ``mdp/<id>/`` directory. The five
+    read-only properties below are views onto it."""
 
     policy_joint_names: list[str] | None = None
     """Ordered list of joint names controlled by the policy.
@@ -143,6 +121,33 @@ class PolicyConfig:
             from .utils import name2id
 
             self.id = name2id(self.name)
+
+    # Views onto `mdp`, so a reader that wants one term set need not know where it lives.
+
+    @property
+    def observations(self) -> dict[str, ObservationGroupCfg] | None:
+        """The MDP's observation groups, keyed by the name the policy's slot table uses."""
+        return self.mdp.observations
+
+    @property
+    def actions(self) -> Mapping[str, ActionTermCfg] | None:
+        """The MDP's action terms, keyed by term name."""
+        return self.mdp.actions
+
+    @property
+    def terminations(self) -> dict[str, TerminationTermCfg] | None:
+        """The MDP's termination terms, keyed by term name."""
+        return self.mdp.terminations
+
+    @property
+    def commands(self) -> dict[str, CommandTermConfig]:
+        """The MDP's command terms, keyed by their policy-visible names (``{}`` if none)."""
+        return self.mdp.commands or {}
+
+    @property
+    def events(self) -> dict[str, EventTermCfg] | None:
+        """The MDP's event terms, keyed by name."""
+        return self.mdp.events
 
 
 class PolicyHandle:
