@@ -26,7 +26,7 @@ from rich.progress import (
 )
 
 from . import __version__
-from ._build_client import ClientBuilder
+from ._build_client import ClientBuilder, install_spa
 from ._format import DOCUMENT_FORMAT
 from .app import MjswanApp
 from .envs.mdp.actions.actions import (
@@ -884,26 +884,9 @@ class Builder:
                     build_frontend=build_frontend,
                 )
 
-            # Only the built SPA, so dev scaffolding stays out by construction.
-            built_dist = template_dir / "dist"
-            if built_dist.is_dir():
-                # Dev-only artifacts vite emits: the E2E fixture, the build-cache key.
-                spa_excludes = {"fixtures", ".mjswan-build-meta.json"}
-                for item in built_dist.iterdir():
-                    if item.name in spa_excludes:
-                        continue
-                    dest = output_path / item.name
-                    if item.is_dir():
-                        shutil.copytree(item, dest, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(item, dest)
-                # Ship the license alongside the app.
-                license_file = template_dir / "LICENSE"
-                if license_file.exists():
-                    shutil.copy2(license_file, output_path / license_file.name)
-            else:
+            if not install_spa(output_path, template_dir):
                 warnings.warn(
-                    f"No built SPA found at {built_dist}; the output will be "
+                    f"No built SPA found at {template_dir / 'dist'}; the output will be "
                     "missing the web application.",
                     category=RuntimeWarning,
                 )

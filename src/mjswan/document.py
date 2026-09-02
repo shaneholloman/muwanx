@@ -32,6 +32,10 @@ class DocumentError(ValueError):
     """A ``.swn`` that cannot be read as a simulation document."""
 
 
+def _not_a_document(source: Path, why: str) -> DocumentError:
+    return DocumentError(f"{source} is not a simulation document: {why}.")
+
+
 def is_document(path: str | Path) -> bool:
     """Whether ``path`` is a ``.swn`` file (as opposed to a built directory)."""
     p = Path(path)
@@ -42,8 +46,15 @@ def read_manifest(source: str | Path) -> dict:
     """The manifest of a built directory or a ``.swn`` document."""
     source = Path(source)
     if is_document(source):
-        with zipfile.ZipFile(source) as zf:
-            return json.loads(zf.read(MANIFEST_NAME))
+        # Same refusals as unpacking one: a caller that only wants the manifest still
+        # learns that the file is not a document, rather than a zipfile error.
+        try:
+            with zipfile.ZipFile(source) as zf:
+                return json.loads(zf.read(MANIFEST_NAME))
+        except zipfile.BadZipFile as exc:
+            raise _not_a_document(source, "not a ZIP archive") from exc
+        except KeyError as exc:
+            raise _not_a_document(source, f"no {MANIFEST_NAME}") from exc
     return json.loads((source / MANIFEST_NAME).read_text())
 
 
@@ -112,15 +123,11 @@ def unpack_document(document: str | Path, target_dir: str | Path) -> Path:
     try:
         zf = zipfile.ZipFile(document)
     except zipfile.BadZipFile as exc:
-        raise DocumentError(
-            f"{document} is not a simulation document: not a ZIP archive."
-        ) from exc
+        raise _not_a_document(document, "not a ZIP archive") from exc
     with zf:
         names = zf.namelist()
         if MANIFEST_NAME not in names:
-            raise DocumentError(
-                f"{document} is not a simulation document: no {MANIFEST_NAME}."
-            )
+            raise _not_a_document(document, f"no {MANIFEST_NAME}")
         for info in zf.infolist():
             rel = PurePosixPath(info.filename)
             if rel.is_absolute() or ".." in rel.parts:

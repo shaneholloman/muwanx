@@ -25,8 +25,11 @@ velocity-command shortcuts were removed outright, see Removed.
   values); `version` is the release that wrote it, and never a gate.
 - **`.swn`**: the document as one file. `MjswanApp.save_document()` writes the manifest
   and the project directories — nothing of the engine — as a ZIP of the same tree;
-  `mjswan info`, `mjswan publish` and `publish_dist` accept a `.swn` wherever they take a
-  directory, and a `.swn` publishes exactly the file set its directory would.
+  `mjswan info`, `mjswan serve`, `mjswan publish` and `publish_dist` accept a `.swn`
+  wherever they take a directory, and a `.swn` publishes exactly the file set its directory
+  would. Serving one expands it beside the packaged engine (`MjswanApp.from_document`) into
+  a temporary app; a custom-JS document is refused, since its plugin module ships with the
+  engine rather than in the document.
 - **`MdpConfig`**: the five term sets a policy runs against — observations, actions,
   terminations, commands and now **events** — as one object. Policies handed the same
   `MdpConfig` share one MDP, traced and written once under `mdp/<mdp-id>/`; the term-set

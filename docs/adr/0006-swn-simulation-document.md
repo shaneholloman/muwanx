@@ -394,7 +394,10 @@ Two output modes:
 - **Document** — `<name>.swn`. The deliverable.
 - **App** — a directory containing the engine plus the **expanded tree**, not
   the zip. This is what runs from a local `mjswan serve` and what uploads to
-  GitHub Pages unchanged. Embedding the zip would force the page to unpack it in
+  GitHub Pages unchanged. Handed a document, `mjswan serve` builds this mode
+  transiently: it expands the tree into a temporary directory, lays the packaged
+  engine over it, and drops it at exit. A custom-JS build is refused there, its
+  plugin module being part of the engine rather than of the document. Embedding the zip would force the page to unpack it in
   the browser before the first byte of the scene could load, for no benefit
   where the files can simply be served.
 

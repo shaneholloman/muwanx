@@ -104,7 +104,7 @@ The package's `__init__.py` is the canonical public API. Re-exports cover: `Buil
 Main entry point. Accumulates `ProjectConfig` objects, calls `ClientBuilder` to invoke the Vite frontend build, then per scene: builds or reuses the trace env, traces each `MdpConfig` once via `_onnx_build` into `<project-id>/<scene-id>/mdp/<mdp-id>/`, writes the scene's DEFLATE-compressed ZIP (via `utils.to_zip_deflated`, since `mujoco.to_zip` stores entries uncompressed), `policy/<policy-id>.onnx` and `assets/` (motions, splats), and finally the one `manifest.json` at the output root — `{format, version, uses_custom_js, plugins?, projects}` (ADR 0006). A `config_path` sidecar contributes a checkpoint's own defaults to its policy entry; its slot tables are ignored with a warning, since `in_keys`/`out_keys` are declared on `add_policy` and checked against the network there and against the MDP's observation groups at build time.
 
 ### `app.py` — `MjswanApp`
-Wraps a built `dist/` directory: the engine plus the expanded simulation document. `launch()` starts a stdlib HTTP server (COOP/COEP headers required for SharedArrayBuffer / MuJoCo WASM threading); detects Google Colab and displays an inline iframe instead. `save_document()` writes the document as one `.swn` via `document.py`; `publish()` delegates to `publish.py`.
+Wraps a built `dist/` directory: the engine plus the expanded simulation document. `from_document()` takes either form — a directory is served where it sits, a `.swn` is unpacked to a temporary directory with the packaged engine (`_build_client.install_spa`) laid over it, refusing a custom-JS document whose plugin module ships with the engine. `launch()` starts a stdlib HTTP server (COOP/COEP headers required for SharedArrayBuffer / MuJoCo WASM threading); detects Google Colab and displays an inline iframe instead. `save_document()` writes the document as one `.swn` via `document.py`; `publish()` delegates to `publish.py`.
 
 ### `document.py` — the `.swn` simulation document
 The built tree — `manifest.json` over `<project-id>/<scene-id>/` — *is* the document; `.swn` is that tree as a ZIP (manifest first, `.mjz`/`.npz`/`.spz` stored, the rest deflated). `document_files()` lists it off the manifest, never off what else is on disk, so the SPA's `assets/` is never mistaken for data; `unpack_document()` confines entries to the target; `as_directory()` gives `publish` and `mjswan info` one code path for either form (ADR 0006 §8).
@@ -204,10 +204,10 @@ The primary CLI is `mjswan` (Typer-based, defined in `_cli.py:app`). Subcommands
 | Subcommand | Description |
 |------------|-------------|
 | `mjswan view <model.xml>` | Build and launch a viewer for a MuJoCo XML/MJCF file |
-| `mjswan serve <dist-dir>` | Serve a pre-built `dist/` directory |
+| `mjswan serve <dist-dir \| document.swn>` | Serve a pre-built `dist/` directory, or a `.swn` document |
 | `mjswan new <name> [--template hello-world\|policy\|mjlab]` | Scaffold a new project from a template |
 | `mjswan demo [name]` / `--list` | Run a built-in demo (`simple`, `main`, `mjlab`) |
-| `mjswan info <dist-dir>` | Show a tree of projects/scenes/policies and asset sizes |
+| `mjswan info <dist-dir \| document.swn>` | Show a tree of projects/scenes/policies and asset sizes |
 | `mjswan publish <dist-dir>` | Upload a built dist's data files to mjswan Cloud (rejects custom-JS builds) |
 | `mjswan login` / `whoami` / `logout` | mjswan Cloud session (loopback GitHub OAuth) |
 

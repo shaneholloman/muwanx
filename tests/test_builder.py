@@ -39,7 +39,7 @@ def _build(builder: Builder, out: Path, monkeypatch) -> dict:
     that produces `manifest.json`, not a test-only one.
     """
     monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
-    monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
+    monkeypatch.setattr("mjswan.builder.install_spa", MagicMock(return_value=True))
     builder._save_web(out)
     return json.loads((out / "manifest.json").read_text())
 
@@ -866,7 +866,7 @@ class TestSaveWebPolicyJson:
     def _no_frontend(self, monkeypatch):
         """Skip the Node.js frontend build and the large template copytree."""
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
-        monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
+        monkeypatch.setattr("mjswan.builder.install_spa", MagicMock(return_value=True))
 
     def _run(self, builder: Builder, tmp_path: Path) -> Path:
         """Call _save_web and return the output directory."""
@@ -2001,7 +2001,7 @@ class TestMtHeaders:
     ):
         """_save_web with mt=False must not create _headers."""
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
-        monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
+        monkeypatch.setattr("mjswan.builder.install_spa", MagicMock(return_value=True))
         builder = Builder(mt=False)
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
@@ -2013,7 +2013,7 @@ class TestMtHeaders:
     def test_mt_true_writes_headers(self, tmp_path, minimal_model, monkeypatch):
         """_save_web with mt=True must create _headers with COOP/COEP content."""
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
-        monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
+        monkeypatch.setattr("mjswan.builder.install_spa", MagicMock(return_value=True))
         builder = Builder(mt=True)
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
@@ -2035,7 +2035,7 @@ class TestMtHeaders:
         so template-root scaffolding like _mt is excluded by construction.
         """
         monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
-        monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
+        monkeypatch.setattr("mjswan.builder.install_spa", MagicMock(return_value=True))
 
         builder = Builder(mt=False)
         builder.add_project(name="P").add_scene(

@@ -32,6 +32,51 @@ class MjswanApp:
     def __init__(self, app_dir: Path) -> None:
         self._app_dir = app_dir
 
+    @classmethod
+    def from_document(cls, source: str | Path) -> "MjswanApp":
+        """The app for a built directory, or for a ``.swn`` document.
+
+        A directory is already an app — the engine beside the expanded tree — and is
+        served where it sits. A document is only the tree (ADR 0006 §8), so the app is
+        assembled: it is unpacked into a temporary directory, the packaged engine is laid
+        over it, and that directory is removed when the process exits. The engine is
+        built once if no matching SPA is cached, exactly as a build would.
+        """
+        import atexit
+        import shutil
+        import tempfile
+
+        from ._build_client import TEMPLATE_DIR, ClientBuilder, install_spa
+        from .document import DocumentError, is_document, read_manifest, unpack_document
+
+        source = Path(source).expanduser()
+        if not source.exists():
+            raise FileNotFoundError(f"No such app or document: {source}")
+        if not is_document(source):
+            return cls(source.resolve())
+
+        # Custom-JS terms compile to a `plugins.js` that lives with the engine, not in
+        # the document, so it cannot be served from one — the manifest would point at a
+        # module that is not there and the scene would fail to load.
+        if read_manifest(source).get("uses_custom_js") is True:
+            raise DocumentError(
+                f"{source.name} was built with custom-JS MDP terms, whose runtime module "
+                "ships with the engine rather than in the document (ADR 0006 §8). Serve "
+                "the built directory instead."
+            )
+
+        app_dir = Path(tempfile.mkdtemp(prefix="mjswan-swn-"))
+        atexit.register(shutil.rmtree, app_dir, ignore_errors=True)
+        unpack_document(source, app_dir)
+        if (TEMPLATE_DIR / "package.json").exists():
+            ClientBuilder(TEMPLATE_DIR).build(base_path="/")
+        if not install_spa(app_dir):
+            raise RuntimeError(
+                f"No built engine at {TEMPLATE_DIR / 'dist'}, so {source.name} cannot be "
+                "served. Build an app once with `builder.build()` to produce one."
+            )
+        return cls(app_dir)
+
     @property
     def app_dir(self) -> Path:
         """The built directory: the engine plus the expanded simulation document."""

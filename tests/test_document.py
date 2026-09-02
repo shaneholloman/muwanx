@@ -32,7 +32,7 @@ from mjswan.publish import HttpResponse, plan_publish, publish_dist
 def built(tmp_path, minimal_model, minimal_onnx, monkeypatch) -> Path:
     """A real `_save_web` tree with the engine files a build would also carry."""
     monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
-    monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
+    monkeypatch.setattr("mjswan.builder.install_spa", MagicMock(return_value=True))
     builder = Builder()
     scene = builder.add_project(name="Demo").add_scene(
         control_dt=0.02, name="Humanoid", model=minimal_model
@@ -165,6 +165,69 @@ class TestPublishingADocument:
         not_a_zip.write_bytes(b"definitely not a zip")
         with pytest.raises(PublishError, match="not a ZIP archive"):
             publish_dist(not_a_zip, transport=_Transport(), api_base="https://api.test")
+
+
+class TestServingADocument:
+    """`serve` takes either form; a document has the engine laid over it first."""
+
+    def _engine(self, monkeypatch, tmp_path) -> Path:
+        """Stand in for the packaged SPA, so no frontend build runs in a test."""
+        engine = tmp_path / "template"
+        (engine / "dist" / "assets").mkdir(parents=True)
+        (engine / "dist" / "index.html").write_text("<!doctype html>")
+        (engine / "dist" / "assets" / "index-abc.js").write_text("console.log(1)")
+        (engine / "dist" / "fixtures").mkdir()
+        (engine / "dist" / ".mjswan-build-meta.json").write_text("{}")
+        monkeypatch.setattr("mjswan._build_client.TEMPLATE_DIR", engine)
+        return engine
+
+    def test_a_directory_is_served_where_it_sits(self, built, monkeypatch, tmp_path):
+        self._engine(monkeypatch, tmp_path)
+        assert MjswanApp.from_document(built).app_dir == built.resolve()
+
+    def test_a_document_becomes_an_app_beside_a_copy_of_the_engine(
+        self, built, monkeypatch, tmp_path
+    ):
+        self._engine(monkeypatch, tmp_path)
+        app_dir = MjswanApp.from_document(write_document(built)).app_dir
+        assert app_dir != built
+        # The document's own tree, whole.
+        assert (app_dir / "manifest.json").is_file()
+        assert (app_dir / "demo" / "humanoid" / "policy" / "walk.onnx").is_file()
+        # The engine, minus what only the dev loop uses.
+        assert (app_dir / "index.html").is_file()
+        assert (app_dir / "assets" / "index-abc.js").is_file()
+        assert not (app_dir / "fixtures").exists()
+        assert not (app_dir / ".mjswan-build-meta.json").exists()
+
+    def test_a_custom_js_document_is_refused_with_the_reason(
+        self, built, monkeypatch, tmp_path
+    ):
+        from mjswan.document import DocumentError
+
+        self._engine(monkeypatch, tmp_path)
+        manifest = built / "manifest.json"
+        manifest.write_text(
+            json.dumps({**json.loads(manifest.read_text()), "uses_custom_js": True})
+        )
+        with pytest.raises(DocumentError, match="custom-JS"):
+            MjswanApp.from_document(write_document(built))
+
+    def test_a_missing_path_says_so(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="No such app or document"):
+            MjswanApp.from_document(tmp_path / "nope.swn")
+
+    def test_serve_cli_refuses_a_document_without_a_manifest(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from mjswan._cli import app
+
+        other = tmp_path / "other.swn"
+        with zipfile.ZipFile(other, "w") as zf:
+            zf.writestr("readme.txt", "hi")
+        result = CliRunner().invoke(app, ["serve", str(other)])
+        assert result.exit_code == 1
+        assert "not a simulation document" in result.output
 
 
 class TestInfoCli:

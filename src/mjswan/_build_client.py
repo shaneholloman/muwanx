@@ -17,7 +17,44 @@ import subprocess
 import sys
 from pathlib import Path
 
-__all__ = ["ClientBuilder", "ensure_node_env", "build_client"]
+__all__ = [
+    "ClientBuilder",
+    "TEMPLATE_DIR",
+    "ensure_node_env",
+    "build_client",
+    "install_spa",
+]
+
+#: The packaged frontend: its sources, and `dist/` once it has been built once.
+TEMPLATE_DIR = Path(__file__).parent / "template"
+
+#: What vite leaves in `dist/` for the dev loop alone: the E2E fixture, the cache key.
+_SPA_EXCLUDES = frozenset({"fixtures", ".mjswan-build-meta.json"})
+
+
+def install_spa(dest: Path, template_dir: Path | None = None) -> bool:
+    """Copy the built SPA — the engine — into ``dest``; False when none is built yet.
+
+    An app is the engine plus an expanded document (ADR 0006 §8) and this is the engine
+    half, so both the builder and ``MjswanApp.from_document`` lay it down the same way.
+    """
+    root = template_dir or TEMPLATE_DIR
+    built = root / "dist"
+    if not built.is_dir():
+        return False
+    for item in built.iterdir():
+        if item.name in _SPA_EXCLUDES:
+            continue
+        target = dest / item.name
+        if item.is_dir():
+            shutil.copytree(item, target, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, target)
+    # Ship the license alongside the app.
+    license_file = root / "LICENSE"
+    if license_file.exists():
+        shutil.copy2(license_file, dest / license_file.name)
+    return True
 
 
 class ClientBuilder:

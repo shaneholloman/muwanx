@@ -77,8 +77,9 @@ def view_cmd(
 
 @app.command("serve")
 def serve_cmd(
-    dist_dir: Annotated[
-        Path, typer.Argument(help="Path to a built mjswan dist directory.")
+    source: Annotated[
+        Path,
+        typer.Argument(help="A built mjswan dist directory, or a .swn document."),
     ],
     port: Annotated[int, typer.Option(help="HTTP server port.")] = 8080,
     host: Annotated[str, typer.Option(help="HTTP server host.")] = "localhost",
@@ -87,17 +88,23 @@ def serve_cmd(
     ] = False,
     height: Annotated[int, typer.Option(help="Colab iframe height in pixels.")] = 600,
 ) -> None:
-    """Serve a pre-built mjswan app from a dist directory."""
+    """Serve a pre-built mjswan app, from a dist directory or a .swn document."""
     from mjswan.app import MjswanApp
+    from mjswan.document import DocumentError, is_document
 
-    resolved = dist_dir.resolve()
-    if not resolved.exists():
-        console.print(f"[red]Error:[/red] Directory not found: {dist_dir}")
+    if not source.exists():
+        console.print(f"[red]Error:[/red] Not found: {source}")
         raise typer.Exit(1)
+    if is_document(source):
+        # Unpacking a large document takes a few seconds; say what the pause is.
+        console.print(f"Expanding {source.name} with the packaged engine...")
+    try:
+        app_to_serve = MjswanApp.from_document(source)
+    except DocumentError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
-    MjswanApp(resolved).launch(
-        host=host, port=port, open_browser=not no_open, height=height
-    )
+    app_to_serve.launch(host=host, port=port, open_browser=not no_open, height=height)
 
 
 # ── publish ───────────────────────────────────────────────────
@@ -508,15 +515,14 @@ def mjlab() -> None:
 
 
 def serve() -> None:
-    """Launch a pre-built mjswan app from a dist directory.
+    """Launch a pre-built mjswan app from a dist directory or a ``.swn`` document.
 
-    Usage: serve <dist-dir>
+    Usage: serve <dist-dir | document.swn>
     """
     if len(sys.argv) < 2:
-        print("Usage: serve <dist-dir>", file=sys.stderr)
+        print("Usage: serve <dist-dir | document.swn>", file=sys.stderr)
         sys.exit(1)
 
     from mjswan.app import MjswanApp
 
-    mjswan_app = MjswanApp(Path(sys.argv[1]).resolve())
-    mjswan_app.launch()
+    MjswanApp.from_document(Path(sys.argv[1])).launch()
