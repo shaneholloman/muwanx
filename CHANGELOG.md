@@ -32,7 +32,8 @@ velocity-command shortcuts were removed outright, see Removed.
   and pick them up. Opt-in: roughly a third more per physics step, in every scene.
 - **Thumbstick locomotion in VR.** The camera and the tracked hands now hang off an XR
   rig, which is what a session moves: the left stick slides the viewer along its heading,
-  the right stick snap-turns it 30° at a time about the head. Body tracking drives the rig
+  and the right stick turns it about the head for as long as it is held, at a rate the
+  deflection scales. Body tracking drives the rig
   too, so a scene that follows a walking robot finally follows it in a headset as well —
   the head pose used to overwrite the camera every frame, leaving the viewer behind. The
   rig returns to the origin when the session ends, and the desktop camera comes back to

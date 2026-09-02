@@ -106,9 +106,11 @@ bar into your `src`.
 ### Moving around in VR
 
 **Enter VR** stands you at the scene's origin, and the controller sticks take you from
-there: the left stick slides you along the way you are looking, the right stick turns you
-in 30° steps. Turns snap rather than sweep, and pivot on your head rather than on the
-play area's centre — both of those are what keep a viewer from feeling ill.
+there: the left stick slides you along the way you are looking, and the right stick turns
+you for as long as you hold it, as fast as you push it. Turns pivot on your head rather
+than on the play area's centre, so turning does not swing you sideways through the scene.
+Smooth turning is easier to aim with than snapping to fixed steps and harder on the
+stomach, which is why the rate is a modest 90° a second at full deflection.
 
 A scene whose viewer config tracks a body carries you along with it, so a robot that walks
 off does not leave you behind. That is the default (`origin_type=OriginType.AUTO` tracks

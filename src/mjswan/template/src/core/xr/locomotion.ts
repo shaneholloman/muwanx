@@ -5,8 +5,11 @@
  * so a Group between the scene and the camera is the one place an app can add movement of
  * its own. That rig carries the tracked hands too, or moving would leave them behind.
  *
- * Turns are snapped rather than smooth, and pivot on the head rather than the rig origin:
- * continuous yaw is the classic nausea trigger, and turning about the origin would swing
+ * A held stick keeps turning, at a rate its deflection scales, so a viewer can face any
+ * direction rather than the multiples of one step. Smooth yaw is harder on the stomach than
+ * snapping to steps, which is what keeps `TURN_SPEED` modest.
+ *
+ * Turns pivot on the head rather than the rig origin: turning about the origin would swing
  * a viewer standing off-centre sideways through the scene.
  */
 import * as THREE from 'three';
@@ -16,12 +19,9 @@ const UP = new THREE.Vector3(0, 1, 0);
 /** A resting stick still reports a little; below this it means nothing. */
 const DEADZONE = 0.15;
 
-/** Metres per second, and degrees per snap: comfort over speed. */
+/** Metres a second, and degrees a second at full deflection: comfort over speed. */
 const MOVE_SPEED = 1.5;
-const SNAP_DEGREES = 30;
-
-/** Past this a turn fires, and it re-arms below it, so one push is one turn. */
-const SNAP_THRESHOLD = 0.7;
+const TURN_SPEED = 90;
 
 /** A tab away leaves a huge gap between frames; unclamped, the first one back teleports. */
 const MAX_FRAME_SECONDS = 0.1;
@@ -41,11 +41,10 @@ export class XrLocomotion {
   private readonly rig: THREE.Object3D;
   private readonly camera: THREE.Camera;
   private lastTime: number | null = null;
-  private snapArmed = true;
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
   private readonly head = new THREE.Vector3();
-  private readonly turn = new THREE.Quaternion();
+  private readonly rotation = new THREE.Quaternion();
 
   constructor(rig: THREE.Object3D, camera: THREE.Camera) {
     this.rig = rig;
@@ -61,6 +60,9 @@ export class XrLocomotion {
     const seconds =
       this.lastTime === null ? 0 : Math.min((now - this.lastTime) / 1000, MAX_FRAME_SECONDS);
     this.lastTime = now;
+    if (seconds <= 0) {
+      return; // the frame that only starts the clock
+    }
 
     let slide: [number, number] | null = null;
     let yaw = 0;
@@ -76,10 +78,12 @@ export class XrLocomotion {
       }
     }
 
-    if (slide && seconds > 0) {
+    if (slide) {
       this.slide(slide[0], slide[1], seconds);
     }
-    this.snapTurn(yaw);
+    if (yaw !== 0) {
+      this.turn(yaw, seconds);
+    }
   }
 
   /** Back to the world origin, so leaving XR hands the desktop camera back where it was. */
@@ -87,7 +91,6 @@ export class XrLocomotion {
     this.rig.position.set(0, 0, 0);
     this.rig.quaternion.identity();
     this.lastTime = null;
-    this.snapArmed = true;
   }
 
   private slide(x: number, y: number, seconds: number): void {
@@ -106,20 +109,13 @@ export class XrLocomotion {
     this.rig.position.addScaledVector(this.right, x * MOVE_SPEED * seconds);
   }
 
-  private snapTurn(yaw: number): void {
-    if (Math.abs(yaw) < SNAP_THRESHOLD) {
-      this.snapArmed = true;
-      return;
-    }
-    if (!this.snapArmed) {
-      return;
-    }
-    this.snapArmed = false;
-
+  private turn(yaw: number, seconds: number): void {
     // Negative about +Y turns the view to the viewer's right, matching a stick pushed right.
-    this.turn.setFromAxisAngle(UP, (-Math.sign(yaw) * SNAP_DEGREES * Math.PI) / 180);
+    const radians = (-yaw * TURN_SPEED * seconds * Math.PI) / 180;
+    this.rotation.setFromAxisAngle(UP, radians);
     this.camera.getWorldPosition(this.head);
-    this.rig.position.sub(this.head).applyQuaternion(this.turn).add(this.head);
-    this.rig.quaternion.premultiply(this.turn);
+    this.rig.position.sub(this.head).applyQuaternion(this.rotation).add(this.head);
+    // Normalized, or thousands of small products drift off unit length over a session.
+    this.rig.quaternion.premultiply(this.rotation).normalize();
   }
 }
