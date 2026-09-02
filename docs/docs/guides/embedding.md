@@ -114,8 +114,9 @@ and that weld is what makes grasping work rather than only batting.
 
 It is opt-in because both halves cost something: every scene the build loads gains the
 hand bodies, which is roughly a third more work per physics step, and the headset must
-grant the `hand-tracking` feature. Ordinary desktop and mobile viewing is unaffected:
-untracked hands sit parked far below the scene.
+grant the `hand-tracking` feature — **Meta Quest** is the recommended one, since its
+browser ships WebXR hand tracking with nothing to install. Ordinary desktop and mobile
+viewing is unaffected: untracked hands sit parked far below the scene.
 
 ## Google Colab
 
