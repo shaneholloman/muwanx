@@ -251,5 +251,5 @@ export async function createEngine(
 ): Promise<MjswanEngine> {
   const mujocoModule = options.multithreaded ? await import('mujoco/mt') : await import('mujoco');
   const mujoco = await mujocoModule.default();
-  return new Engine(new mjswanRuntime(mujoco, element, options.termSeed));
+  return new Engine(new mjswanRuntime(mujoco, element, options.termSeed, options.handTracking));
 }

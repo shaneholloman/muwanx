@@ -16,6 +16,7 @@ import { DragStateManager } from '../utils/dragStateManager';
 import { createTendonState, updateTendonGeometry, updateTendonRendering } from '../scene/tendons';
 import { updateHeadlightFromCamera, updateLightsFromData } from '../scene/lights';
 import { mjcToThreeCoordinate, threeToMjcCoordinate } from '../scene/coordinate';
+import { HandMocap, injectHandMocapFile } from '../xr/handMocap';
 import {
   type CameraView,
   type ViewerConfig,
@@ -215,6 +216,7 @@ export class mjswanRuntime {
   private eventManager: EventManager | null;
   private terrainData: TerrainData | null;
   private vrButton: HTMLElement | null;
+  private handMocap: HandMocap | null;
   private splatMesh: SplatMesh | null;
   private colliderMesh: THREE.Group | null;
   private currentSplatTransform: SplatTransform;
@@ -238,7 +240,12 @@ export class mjswanRuntime {
   /** Owned here, not by the slot reader: the history advances per substep. */
   private contactSensors = new ContactSensorSet();
 
-  constructor(mujoco: MainModule, container: HTMLElement, termSeed = DEFAULT_TERM_SEED) {
+  constructor(
+    mujoco: MainModule,
+    container: HTMLElement,
+    termSeed = DEFAULT_TERM_SEED,
+    handTracking = false,
+  ) {
     this.mujoco = mujoco;
     this.container = container;
     this.termSeed = termSeed;
@@ -296,14 +303,25 @@ export class mjswanRuntime {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMapping = THREE.NoToneMapping;
     this.container.appendChild(this.renderer.domElement);
+
+    this.handMocap = null;
+    if (handTracking) {
+      const hands = [0, 1].map((i) => this.renderer.xr.getHand(i));
+      for (const hand of hands) {
+        this.scene.add(hand);
+      }
+      this.handMocap = new HandMocap(hands);
+    }
 
     this.vrButton = null;
     navigator.xr?.isSessionSupported('immersive-vr').then((supported) => {
       if (supported) {
-        this.vrButton = VRButton.createButton(this.renderer);
+        this.vrButton = VRButton.createButton(
+          this.renderer,
+          handTracking ? { optionalFeatures: ['hand-tracking'] } : {},
+        );
         document.body.appendChild(this.vrButton);
       }
     });
@@ -533,6 +551,17 @@ export class mjswanRuntime {
       this.dynamicBodyIds = this.computeDynamicBodyIds(this.mjModel);
       this.syncStaticBodiesFromData();
 
+      this.handMocap?.bind(this.mujoco, this.mjModel);
+      // A scene with no policy never reaches `resetSimulationState`, and a keyframe
+      // written before injection zero-pads the appended free joints: without this the
+      // fingertips spawn at the world origin, inside the scene.
+      this.handMocap?.park(this.mjData);
+      for (const bodyId of this.handMocap?.tipBodyIds() ?? []) {
+        if (this.bodies[bodyId]) {
+          this.bodies[bodyId].userData.xrHand = true;
+        }
+      }
+
       this.timestep = this.mjModel.opt.timestep || 0.001;
       // Never inferred: a wrong control rate runs the policy off-speed silently.
       this.decimation = Math.max(
@@ -567,6 +596,9 @@ export class mjswanRuntime {
   private async buildSceneFromMjz(model: ArrayBuffer): Promise<void> {
     try {
       const xmlPath = await loadMjzFile(this.mujoco, model);
+      if (this.handMocap) {
+        injectHandMocapFile(this.mujoco, `/working/${xmlPath}`);
+      }
       await this.buildScene(xmlPath);
     } catch (error) {
       this.loadingScene = null;
@@ -712,7 +744,12 @@ export class mjswanRuntime {
     if (!this.mujocoRoot) {
       return;
     }
-    const box = new THREE.Box3().setFromObject(this.mujocoRoot);
+    const box = new THREE.Box3();
+    for (const child of this.mujocoRoot.children) {
+      if (!child.userData.xrHand) {
+        box.expandByObject(child);
+      }
+    }
     if (box.isEmpty()) {
       return;
     }
@@ -1257,6 +1294,8 @@ export class mjswanRuntime {
         qvel[i] = this.initialQvel[i];
       }
     }
+    // After the qpos writes above, which do not cover the injected hand bodies.
+    this.handMocap?.park(this.mjData);
     // With the sim state, as mjlab does: a force from before the reset would otherwise
     // keep an `illegal_contact` term firing.
     this.contactSensors.reset();
@@ -1287,8 +1326,9 @@ export class mjswanRuntime {
     if (!this.mjModel || !this.mjData) {
       return;
     }
-    // Viewer-only: mouse-drag forces, not part of the MDP.
+    // Viewer-only: mouse-drag forces and tracked hands, not part of the MDP.
     this.applyDragForces();
+    this.handMocap?.update(this.mjData);
 
     this.refreshActionReferences();
     stepPhysics(

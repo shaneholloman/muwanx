@@ -49,6 +49,7 @@ examples/            Runnable examples
   tutorial/            hello_world, minimum_policy, mujoco_models
 
 tests/               pytest suite + dump_*_fixture.py generators for the TS parity fixtures
+skills/              Agent skills this repo publishes (mjlab-to-mjswan: port an mjlab task)
 docs/                zensical (MkDocs-based) site → Read the Docs; adr/ design records
 typings/             MuJoCo stub generator script
 scripts/             Maintenance scripts (sync_contributors.py)
@@ -166,10 +167,10 @@ TypeScript + React + Vite + three.js. Built by `Builder.build()` via `_build_cli
 - Loads the MuJoCo WASM module and runs physics in a Web Worker.
 - Runs the policy **and every traced MDP term body** via onnxruntime-web.
 - Renders via three.js (reflections, shadows, Gaussian Splat background).
-- Supports WebXR (VR).
+- Supports WebXR (VR), including tracked hands as bodies inside the sim (opt-in).
 - Reads `config.json` to discover projects/scenes/policies at runtime.
 
-`src/core/` mirrors mjlab's layout — `observation/`, `termination/`, `action/`, `event/`, `command/` — plus `onnx/` (`session.ts` caches split by lifetime, `runQueue.ts`, `slotReader.ts` serving graph inputs from `mjModel`/`mjData`, `raycast.ts` casting height-scan rays with `mj_ray`, `contact.ts`, `graphRefs.ts`), `rng.ts` (xoshiro128\*\*, snapshot-able), `policy/`, `scene/`, and `engine/` (`runtime.ts` step loop, `resetChain.ts`, `viewer_config.ts`). Each manager is native orchestration around ONNX term bodies: `FusedObservation`/`OnnxObservation`/`NativeObservation`/`HistoryObservation`, `FusedTermination`/`OnnxTermination`/`TimeOutTermination`, `OnnxEvent` + `triggers.ts` + `entityWrite.ts` + `modelFieldDr.ts`, `OnnxCommand`. Action is fully native (`action/applyAction.ts`).
+`src/core/` mirrors mjlab's layout — `observation/`, `termination/`, `action/`, `event/`, `command/` — plus `onnx/` (`session.ts` caches split by lifetime, `runQueue.ts`, `slotReader.ts` serving graph inputs from `mjModel`/`mjData`, `raycast.ts` casting height-scan rays with `mj_ray`, `contact.ts`, `graphRefs.ts`), `rng.ts` (xoshiro128\*\*, snapshot-able), `policy/`, `scene/`, `xr/` (`handMocap.ts` injects the hand bodies and writes `mocap_pos`/`mocap_quat`), and `engine/` (`runtime.ts` step loop, `resetChain.ts`, `viewer_config.ts`). Each manager is native orchestration around ONNX term bodies: `FusedObservation`/`OnnxObservation`/`NativeObservation`/`HistoryObservation`, `FusedTermination`/`OnnxTermination`/`TimeOutTermination`, `OnnxEvent` + `triggers.ts` + `entityWrite.ts` + `modelFieldDr.ts`, `OnnxCommand`. Action is fully native (`action/applyAction.ts`).
 
 The step loop follows mjlab's `ManagerBasedRlEnv.step` ordering exactly — forward → command → event → obs → action → physics → term → reset → forward — with **one** `mj_forward` per iteration. The reset chain mirrors `_reset_idx`: `event(mode="reset")` → observation/action reset → command resample, all awaited in config order (writes are last-writer-wins by config order, so concurrency would make that machine-dependent).
 

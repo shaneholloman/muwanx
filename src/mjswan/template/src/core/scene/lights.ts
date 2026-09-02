@@ -9,6 +9,51 @@ interface CreateLightsParams {
   bodies: Record<number, THREE.Group>;
 }
 
+interface HeadlightSpec {
+  active?: boolean;
+  ambient?: number[];
+  diffuse?: number[];
+  specular?: number[];
+}
+
+/** The wasm build exposes `mjModel.vis`; older builds spell it `visual`. */
+function headlightSpec(mjModel: MjModel): HeadlightSpec | undefined {
+  const model = mjModel as unknown as {
+    vis?: { headlight?: HeadlightSpec };
+    visual?: { headlight?: HeadlightSpec };
+  };
+  return (model.vis ?? model.visual)?.headlight;
+}
+
+/**
+ * A three.js light shares one colour between diffuse and specular, so it cannot
+ * carry MuJoCo's separate `light_specular`. Intensity follows `light_diffuse`
+ * and the ratio goes into the material's `specularIntensity` instead.
+ */
+export function lightSpecularRatio(mjModel: MjModel): number {
+  const peak = (channels: ArrayLike<number> | undefined, l: number): number =>
+    channels ? Math.max(channels[l * 3], channels[l * 3 + 1], channels[l * 3 + 2]) : 0;
+
+  let diffuse = 0;
+  let specular = 0;
+
+  for (let l = 0; l < (mjModel.nlight ?? 0); l++) {
+    if (!mjModel.light_active?.[l]) {
+      continue;
+    }
+    diffuse += peak(mjModel.light_diffuse, l);
+    specular += peak(mjModel.light_specular, l);
+  }
+
+  const headlight = headlightSpec(mjModel);
+  if (headlight?.active) {
+    diffuse += Math.max(...(headlight.diffuse ?? [0, 0, 0]));
+    specular += Math.max(...(headlight.specular ?? [0, 0, 0]));
+  }
+
+  return diffuse > 0 ? specular / diffuse : 1;
+}
+
 export function createLights({
   mujoco,
   mjModel,
@@ -52,22 +97,18 @@ export function createLights({
       const diffuseColor = new THREE.Color().fromArray(
         mjModel.light_diffuse.slice(l * 3, l * 3 + 3)
       );
-      const specularColor = new THREE.Color().fromArray(
-        mjModel.light_specular.slice(l * 3, l * 3 + 3)
-      );
-      const combinedColor = diffuseColor.clone().add(specularColor);
-      const luminance = Math.max(combinedColor.r, combinedColor.g, combinedColor.b);
+      const luminance = Math.max(diffuseColor.r, diffuseColor.g, diffuseColor.b);
 
       if (luminance > 0) {
-        light.color = combinedColor.multiplyScalar(1 / luminance);
+        light.color = diffuseColor.clone().multiplyScalar(1 / luminance);
       } else {
         light.color = new THREE.Color(0, 0, 0);
       }
 
-      const intensityMultiplier = mjModel.light_intensity[l] || 0.5;
+      // three.js divides irradiance by pi, so the pi cancels back to MuJoCo's diffuse.
       if ('intensity' in light && typeof (light as { intensity?: number }).intensity === 'number') {
         (light as THREE.PointLight | THREE.DirectionalLight | THREE.SpotLight).intensity =
-          luminance * intensityMultiplier * Math.PI;
+          luminance * Math.PI;
       }
 
       const ambientColor = new THREE.Color().fromArray(
@@ -136,27 +177,19 @@ export function createLights({
     }
   }
 
-  const vis =
-    'vis' in mjModel
-      ? (mjModel as unknown as { vis?: { headlight?: { active?: boolean; ambient?: number[]; diffuse?: number[]; specular?: number[] } } }).vis
-      : 'visual' in mjModel
-        ? (mjModel as unknown as { visual?: { headlight?: { active?: boolean; ambient?: number[]; diffuse?: number[]; specular?: number[] } } }).visual
-        : undefined;
-  if (vis?.headlight?.active) {
-    const headAmbient = new THREE.Color().fromArray(vis.headlight.ambient as number[]);
-    ambientSum.add(headAmbient);
+  const headlight = headlightSpec(mjModel);
+  if (headlight?.active) {
+    ambientSum.add(new THREE.Color().fromArray(headlight.ambient as number[]));
 
-    const headDiffuse = new THREE.Color().fromArray(vis.headlight.diffuse as number[]);
-    const headSpecular = new THREE.Color().fromArray(vis.headlight.specular as number[]);
-    const headCombined = headDiffuse.clone().add(headSpecular);
-    const headLuminance = Math.max(headCombined.r, headCombined.g, headCombined.b);
+    const headDiffuse = new THREE.Color().fromArray(headlight.diffuse as number[]);
+    const headLuminance = Math.max(headDiffuse.r, headDiffuse.g, headDiffuse.b);
 
     const headLight = new THREE.DirectionalLight();
     headLight.color =
       headLuminance > 0
-        ? headCombined.multiplyScalar(1 / headLuminance)
+        ? headDiffuse.clone().multiplyScalar(1 / headLuminance)
         : new THREE.Color(0, 0, 0);
-    headLight.intensity = headLuminance * Math.PI * 0.7;
+    headLight.intensity = headLuminance * Math.PI;
     headLight.castShadow = false;
 
     mujocoRoot.add(headLight.target);
@@ -168,7 +201,8 @@ export function createLights({
   }
 
   if (!ambientSum.equals(new THREE.Color(0, 0, 0))) {
-    const ambientLight = new THREE.AmbientLight(ambientSum, 1.0);
+    // Same pi as above: intensity 1 would land pi times too dark.
+    const ambientLight = new THREE.AmbientLight(ambientSum, Math.PI);
     mujocoRoot.add(ambientLight);
     lights.push(ambientLight);
   }
