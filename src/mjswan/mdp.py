@@ -63,7 +63,9 @@ class MdpConfig:
 
     name: str | None = None
     """Optional name. Its ``name2id`` is the MDP's id — its ``mdp/<id>/`` directory in the
-    build; an unnamed config is ``mdp_<n>``, numbered per scene in first-use order."""
+    build. Unnamed, a config the ``add_policy`` term-set kwargs built takes the id of the
+    policy it was built for; one handed to several policies is ``mdp_<n>``, numbered per
+    scene in first-use order."""
 
     _adapted: bool = field(default=False, init=False, repr=False, compare=False)
     """Set once the first policy has filled and adapted this config on a scene."""

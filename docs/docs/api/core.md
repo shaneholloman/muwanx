@@ -930,9 +930,11 @@ policy alone. Unset fields are filled from the scene's mjlab env config (events 
 scene's own events) and mjlab types adapted, in place, by the first policy to use it.
 `add_policy_wandb` builds one `MdpConfig` per call, so every checkpoint of a run shares it.
 
-`name` fixes the MDP's id (`name2id(name)`); anonymous MDPs are numbered `mdp_0`, `mdp_1`,
-… per scene in first-use order. Switching policy to a different MDP restores the compiled
-model, reseeds the term PRNG, and runs the new MDP's startup events — see
+`name` fixes the MDP's id (`name2id(name)`). Unnamed, an MDP the `add_policy` term-set
+kwargs built takes the id of the policy it was built for; one shared by several policies —
+what `add_policy_wandb` does — is numbered `mdp_0`, `mdp_1`, … per scene in first-use
+order. Switching policy to a different MDP restores the compiled model, reseeds the term
+PRNG, and runs the new MDP's startup events — see
 [Core Concepts → Events](../getting-started/core-concepts.md#events).
 
 ## Action term configs
@@ -1029,7 +1031,7 @@ dist/
 └── <project-id>/            ← name2id(project name), e.g. my_robots/
     └── <scene-id>/          ← name2id(scene name)
         ├── scene.mjz              ← or scene.mjb (depending on add_scene argument)
-        ├── mdp/<mdp-id>/          ← one per MdpConfig: mdp_0, mdp_1, … or its name
+        ├── mdp/<mdp-id>/          ← one per MdpConfig: its name, its policy's id, or mdp_0, mdp_1, …
         │   ├── obs/<group>.onnx       ← traced observation group, usually one fused graph (actor.onnx)
         │   ├── term/<name>.onnx       ← traced termination bodies
         │   ├── command/<name>.onnx
@@ -1044,7 +1046,7 @@ Copy `dist/` to any static host (GitHub Pages, Netlify, S3, …) and it works wi
 
 Every key in `manifest.json` is `snake_case`, and every path under a scene entry resolves
 against that scene's directory, so a policy entry reads `"onnx": "policy/walk.onnx"` and
-its MDP's fused group `"mdp/mdp_0/obs/actor.onnx"`. A key carrying its default is omitted
+its MDP's fused group `"mdp/walk/obs/actor.onnx"`. A key carrying its default is omitted
 — `in_keys` when it is `["actor"]`, `out_keys` when it is `["action"]`. The manifest also
 stamps `format` (the layout's version, currently 1; an engine refuses a document newer than
 it knows) and `version` (the mjswan release that wrote it), independently.

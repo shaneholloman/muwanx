@@ -31,8 +31,10 @@ velocity-command shortcuts were removed outright, see Removed.
   terminations, commands and now **events** — as one object. Policies handed the same
   `MdpConfig` share one MDP, traced and written once under `mdp/<mdp-id>/`; the term-set
   kwargs on `add_policy` build an anonymous one, and `add_policy_wandb` builds one per
-  call so a run's checkpoints share it. Ids are `mdp_0`, `mdp_1`, … per scene in first-use
-  order, or `name2id(name)`.
+  call so a run's checkpoints share it. An MDP built for a single policy takes that
+  policy's id, so `mdp/locomotion/` sits beside `policy/locomotion.onnx`; a shared one is
+  `mdp_0`, `mdp_1`, … per scene in first-use order, and a `name` (`name2id(name)`) wins
+  over both.
 - `add_policy(events=...)`: events belong to the policy's MDP. A scene's `events` /
   `set_events` are the default for policies that declare none, so an mjlab task's
   `env_cfg.events` lands where it did before. Switching to a policy with a different MDP

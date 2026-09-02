@@ -2,7 +2,8 @@
 
 Layer: L1. What is pinned is ownership and identity: the five term sets travel as one
 object, two policies handed the same object share one MDP, and the id an MDP gets is a
-function of its name or of first-use order on its scene — never of its content.
+function of its name, of the policy the sugar built it for, or of first-use order on its
+scene — never of its content.
 """
 
 from __future__ import annotations
@@ -57,7 +58,8 @@ class TestSugarBuildsAnAnonymousMdp:
         a = scene.add_policy(name="A", policy=minimal_onnx, commands={})._config
         b = scene.add_policy(name="B", policy=minimal_onnx, commands={})._config
         assert a.mdp is not b.mdp
-        assert scene._config.mdp_ids == ["mdp_0", "mdp_1"]
+        # Each belongs to one policy, so each is named after it rather than numbered.
+        assert scene._config.mdp_ids == ["a", "b"]
 
     def test_mdp_and_term_sets_together_are_refused(self, minimal_model, minimal_onnx):
         scene = _plain_scene(minimal_model)
@@ -99,7 +101,29 @@ class TestASharedMdpIsOneMdp:
 
 
 class TestMdpIds:
-    def test_anonymous_mdps_number_in_first_use_order(
+    def test_a_sugar_built_mdp_takes_its_policys_id(self, minimal_model, minimal_onnx):
+        # `mdp/locomotion/` beside `policy/locomotion.onnx`, rather than `mdp/mdp_0/`.
+        scene = _plain_scene(minimal_model)
+        policy = scene.add_policy(
+            name="Locomotion", policy=minimal_onnx, commands={}
+        )._config
+        assert policy.id == "locomotion"
+        assert scene._config.mdp_id(policy.mdp) == "locomotion"
+
+    def test_a_sugar_built_mdp_follows_a_renamed_policy(
+        self, minimal_model, minimal_onnx
+    ):
+        # The policy's id is the unique one, so the MDP derived from it is unique too.
+        scene = _plain_scene(minimal_model)
+        scene.add_policy(name="model_2000", policy=minimal_onnx, commands={})
+        with pytest.warns(RuntimeWarning, match="policy"):
+            second = scene.add_policy(
+                name="model_2000", policy=minimal_onnx, commands={}
+            )._config
+        assert second.id == "model_2000_1"
+        assert scene._config.mdp_ids == ["model_2000", "model_2000_1"]
+
+    def test_unnamed_shared_mdps_number_in_first_use_order(
         self, minimal_model, minimal_onnx
     ):
         scene = _plain_scene(minimal_model)
@@ -121,8 +145,8 @@ class TestMdpIds:
         project = Builder().add_project(name="P")
         s1 = project.add_scene(name="S1", model=minimal_model, control_dt=0.02)
         s2 = project.add_scene(name="S2", model=minimal_model, control_dt=0.02)
-        s1.add_policy(name="A", policy=minimal_onnx, commands={})
-        s2.add_policy(name="B", policy=minimal_onnx, commands={})
+        s1.add_policy(name="A", policy=minimal_onnx, mdp=mjswan.MdpConfig(commands={}))
+        s2.add_policy(name="B", policy=minimal_onnx, mdp=mjswan.MdpConfig(commands={}))
         assert s1._config.mdp_ids == ["mdp_0"]
         assert s2._config.mdp_ids == ["mdp_0"]
 
@@ -130,7 +154,10 @@ class TestMdpIds:
         self, minimal_model, minimal_onnx
     ):
         scene = _plain_scene(minimal_model)
-        scene.add_policy(name="A", policy=minimal_onnx, commands={})  # takes mdp_0
+        # Shared by hand, so numbered: it takes `mdp_0`.
+        scene.add_policy(
+            name="A", policy=minimal_onnx, mdp=mjswan.MdpConfig(commands={})
+        )
         with pytest.warns(RuntimeWarning, match="mdp"):
             scene.add_policy(
                 name="B",

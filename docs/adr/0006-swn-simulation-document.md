@@ -172,13 +172,20 @@ Identity of an `MdpConfig` is **by object**, not by content. Content-addressed
 pooling of graphs was considered and rejected (see *Considered options*).
 
 Its id follows from that. `MdpConfig` takes an optional `name`; when given, the id
-is `name2id(name)`. When absent — which includes every `MdpConfig` the sugar path
-constructs — the id is `mdp_<n>`, numbered from zero **per scene** in the order
-the MDPs are first used by a policy. So a scene whose policies all share one
-anonymous MDP writes `mdp/mdp_0/`, and `examples/mjlab/defaults` can name its
-MDPs after the task to get `mdp/velocity_rough/` instead. Numbering per scene,
-not per document, keeps a scene's ids stable when another scene is added before
-it.
+is `name2id(name)`. When absent, the id says whose the MDP is. One the sugar path
+constructs exists for the single policy it was built for and takes **that policy's
+id**, so `mdp/locomotion/` sits beside `policy/locomotion.onnx` and a scene's MDP
+directories read as its policies do. One handed to several policies by hand — what
+`add_policy_wandb` does for a run's checkpoints — belongs to no single policy and is
+`mdp_<n>`, numbered from zero **per scene** in the order the MDPs are first used. So
+a scene whose policies all share one config writes `mdp/mdp_0/`, and
+`examples/mjlab/defaults` can name its MDPs after the task to get
+`mdp/velocity_rough/` instead. Numbering per scene, not per document, keeps a
+scene's ids stable when another scene is added before it.
+
+> **Amended 2026-09-02.** The fallback was `mdp_<n>` for every unnamed config, the
+> sugar path's included. A scene with several single-policy MDPs then wrote `mdp_0`,
+> `mdp_1`, `mdp_2` with the policy names sitting right beside them in `policy/`.
 
 ### 4. Identifiers — sanitized names, scoped uniqueness, rename on collision
 

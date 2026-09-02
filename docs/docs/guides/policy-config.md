@@ -87,19 +87,24 @@ policy:
 mdp = mjswan.MdpConfig(
     observations=ObservationGroupCfg(terms={...}),
     actions={"joint_pos": JointPositionActionCfg(...)},
-    terminations={"time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True)},
+    terminations={
+        "time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True)
+    },
     commands={"velocity": mjswan.velocity_command()},
 )
 for step in (1000, 2000, 3000):
-    scene.add_policy(name=f"model_{step}", policy=onnx.load(f"model_{step}.onnx"), mdp=mdp)
+    scene.add_policy(
+        name=f"model_{step}", policy=onnx.load(f"model_{step}.onnx"), mdp=mdp
+    )
 ```
 
 Identity is by object: two `MdpConfig`s with equal contents are two MDPs. The build writes
-each one once, under `mdp/<mdp-id>/` in the scene directory — `mdp_0`, `mdp_1`, … in
-first-use order, or `name2id(name)` when the config is named — and every policy entry
-points at its MDP by id. Passing the five term sets straight to `add_policy` builds an
-anonymous `MdpConfig` for that policy alone; `add_policy_wandb` builds one per call, so a
-run's checkpoints share it without any of this being spelled out.
+each one once, under `mdp/<mdp-id>/` in the scene directory, and every policy entry points
+at its MDP by id. Passing the five term sets straight to `add_policy` builds an anonymous
+`MdpConfig` for that policy alone, and the MDP takes **that policy's id** — `mdp/walk/`
+beside `policy/walk.onnx`. `add_policy_wandb` builds one per call, so a run's checkpoints
+share it; a config shared like that belongs to no single policy and is numbered `mdp_0`,
+`mdp_1`, … in first-use order unless it carries a `name` (`name2id(name)` wins over both).
 
 The first policy to use an `MdpConfig` fills its unset fields from the scene's env config
 and adapts mjlab types in place; policies sharing one must agree on `policy_joint_names`

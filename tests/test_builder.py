@@ -592,10 +592,10 @@ class TestSaveConfigJson:
         policy = scene["policies"][0]
         assert policy["name"] == "Policy"
         assert policy["id"] == "policy"
-        assert policy["mdp"] == "mdp_0"
+        assert policy["mdp"] == "policy"
         assert policy["onnx"] == "policy/policy.onnx"
         assert (tmp_path / "out" / "p" / "s" / policy["onnx"]).is_file()
-        assert [m["id"] for m in scene["mdps"]] == ["mdp_0"]
+        assert [m["id"] for m in scene["mdps"]] == ["policy"]
         # No per-policy JSON anywhere: the manifest is the one descriptor.
         assert not list((tmp_path / "out" / "p").rglob("*.json"))
 
@@ -997,7 +997,7 @@ class TestSaveWebPolicyJson:
         assert data["actions"]["effort"]["type"] == "torque"
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["onnx"] == "mdp/mdp_0/term/fallen.onnx"
+        assert fallen["onnx"] == "mdp/policy/term/fallen.onnx"
         assert (out / "p" / "s" / fallen["onnx"]).exists()
 
     def test_no_config_path_actions_absent_when_not_set(
@@ -1047,12 +1047,12 @@ class TestSaveWebPolicyJson:
         out = self._run(builder, tmp_path)
         manifest = json.loads((out / "manifest.json").read_text())
         scene_entry = manifest["projects"][0]["scenes"][0]
-        assert scene_entry["mdps"] == [{"id": "mdp_0"}]
+        assert scene_entry["mdps"] == [{"id": "policy"}]
         assert scene_entry["policies"] == [
             {
                 "id": "policy",
                 "name": "Policy",
-                "mdp": "mdp_0",
+                "mdp": "policy",
                 "onnx": "policy/policy.onnx",
             }
         ]
@@ -1227,7 +1227,7 @@ class TestSaveWebPolicyJson:
         # The group fuses: one graph named for it, under the owning policy's directory,
         # with `scale` folded in rather than shipped.
         group = data["observations"]["policy"]
-        assert group["fused"] == "mdp/mdp_0/obs/policy.onnx"
+        assert group["fused"] == "mdp/policy/obs/policy.onnx"
         assert group["layout"] == [{"name": "joint_pos", "size": 2}]
         assert group["size"] == 2
         assert "scale" not in group
@@ -1268,8 +1268,8 @@ class TestSaveWebPolicyJson:
         walk = self._policy_json(out, "Walk")["observations"]["policy"]
         crawl = self._policy_json(out, "Crawl")["observations"]["policy"]
 
-        assert walk["fused"] == "mdp/mdp_0/obs/policy.onnx"
-        assert crawl["fused"] == "mdp/mdp_1/obs/policy.onnx"
+        assert walk["fused"] == "mdp/walk/obs/policy.onnx"
+        assert crawl["fused"] == "mdp/crawl/obs/policy.onnx"
         assert (walk["size"], crawl["size"]) == (2, 5)
 
         scene_dir = out / "p" / "s"
@@ -1429,7 +1429,7 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(out, "Policy")
         terms = data["observations"]["policy"]
         assert isinstance(terms, list)
-        assert terms[0]["onnx"] == "mdp/mdp_0/obs/joint_pos.onnx"
+        assert terms[0]["onnx"] == "mdp/policy/obs/joint_pos.onnx"
         assert terms[0]["scale"] == 0.5
         assert terms[0]["history_length"] == 3
 
@@ -1492,7 +1492,7 @@ class TestSaveWebPolicyJson:
         assert "terminations" in data
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["onnx"] == "mdp/mdp_0/term/fallen.onnx"
+        assert fallen["onnx"] == "mdp/policy/term/fallen.onnx"
         assert (out / "p" / "s" / fallen["onnx"]).exists()
         assert data["existing_key"] == "kept"
 
@@ -1527,7 +1527,7 @@ class TestSaveWebPolicyJson:
         assert data["actions"]["effort"]["scale"] == 1.5
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         height_entry = data["terminations"]["height"]
-        assert height_entry["onnx"] == "mdp/mdp_0/term/height.onnx"
+        assert height_entry["onnx"] == "mdp/policy/term/height.onnx"
         assert (out / "p" / "s" / height_entry["onnx"]).exists()
 
     def test_config_path_overwrites_existing_actions_block(
@@ -1669,7 +1669,7 @@ class TestSaveWebPolicyJson:
         assert "out_keys" not in two  # `["action"]` is the default
         one = self._policy_json(out, "One")
         assert "in_keys" not in one  # a lone group under `actor` needs no table
-        assert one["observations"]["actor"]["fused"] == "mdp/mdp_1/obs/actor.onnx"
+        assert one["observations"]["actor"]["fused"] == "mdp/one/obs/actor.onnx"
 
     def test_a_single_input_policy_takes_its_one_group_whatever_it_is_called(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1874,7 +1874,7 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(out, "Policy")
         # Traced to ONNX, with `limit_angle` closed over by the function, not serialized.
         fallen = data["terminations"]["fallen"]
-        assert fallen["onnx"] == "mdp/mdp_0/term/fallen.onnx"
+        assert fallen["onnx"] == "mdp/policy/term/fallen.onnx"
         assert (out / "p" / "s" / fallen["onnx"]).exists()
         assert "time_out" not in fallen
 

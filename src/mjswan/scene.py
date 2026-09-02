@@ -322,19 +322,24 @@ class SceneConfig:
         # rather than a property: `_save_web` drops both right after writing the asset.
         self.scene_filename = "scene.mjz" if self.spec is not None else "scene.mjb"
 
-    def mdp_id(self, mdp: MdpConfig) -> str:
+    def mdp_id(self, mdp: MdpConfig, *, policy_id: str | None = None) -> str:
         """The id of ``mdp`` on this scene, registering it on first use.
 
         By object identity, not equality (ADR 0006 §3): the same config on two policies
-        is one MDP, two equal configs are two. A named config takes ``name2id(name)``;
-        an unnamed one ``mdp_<n>`` with *n* its first-use index on this scene — per scene,
-        so adding a scene in front of this one moves none of its ids.
+        is one MDP, two equal configs are two. A named config takes ``name2id(name)``.
+        An MDP the term-set sugar built for one policy takes that policy's id
+        (``policy_id``), so ``mdp/locomotion/`` sits beside ``policy/locomotion.onnx``
+        and a scene's MDP directories read as its policies do. Only a config handed to
+        several policies by hand — what ``add_policy_wandb`` does for a run's
+        checkpoints — falls back to ``mdp_<n>``, with *n* its first-use index on this
+        scene: per scene, so adding a scene in front of this one moves none of its ids.
         """
         for known, ident in zip(self.mdps, self.mdp_ids):
             if known is mdp:
                 return ident
-        if mdp.name is not None:
-            ident = assign_id(mdp.name, set(self.mdp_ids), kind="mdp", stacklevel=4)
+        source = mdp.name if mdp.name is not None else policy_id
+        if source is not None:
+            ident = assign_id(source, set(self.mdp_ids), kind="mdp", stacklevel=4)
         else:
             ident = f"mdp_{len(self.mdps)}"
             if ident in self.mdp_ids:  # a named one already took this spelling
@@ -672,15 +677,27 @@ class SceneHandle:
                 f"Policy {name!r} was given mdp= and also {sorted(given)}. An MdpConfig "
                 "carries all five term sets; pass either it or the term sets, not both."
             )
+        # An MDP the sugar builds belongs to this policy alone, so it is named after it;
+        # one passed in may be shared, and is numbered unless it carries a name.
+        sugar_built = mdp is None
         if mdp is None:
-            mdp = MdpConfig(**given)
+            mdp = MdpConfig(
+                observations=observations,
+                commands=commands,
+                actions=actions,
+                terminations=terminations,
+                events=events,
+            )
         self._resolve_mdp(
             mdp,
             env_cfg=env_cfg,
             task_id=task_id,
             policy_joint_names=policy_joint_names,
         )
-        self._config.mdp_id(mdp)
+        policy_id = assign_id(
+            name, {p.id for p in self._config.policies}, kind="policy", stacklevel=3
+        )
+        self._config.mdp_id(mdp, policy_id=policy_id if sugar_built else None)
 
         runner = resolve_runner_defaults(
             task_id if task_id is not None else self._config.mjlab_task_id
@@ -691,9 +708,7 @@ class SceneHandle:
 
         policy_config = PolicyConfig(
             name=name,
-            id=assign_id(
-                name, {p.id for p in self._config.policies}, kind="policy", stacklevel=3
-            ),
+            id=policy_id,
             model=policy,
             metadata=metadata,
             source_path=source_path,

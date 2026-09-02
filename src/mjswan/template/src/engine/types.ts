@@ -32,7 +32,7 @@ export interface PolicyInput {
   onnx: Bytes;
   /**
    * Traced term-body graphs of the whole MDP, events included, keyed by the path the
-   * config refers to them by (`"mdp/mdp_0/obs/actor.onnx"`). The engine never fetches,
+   * config refers to them by (`"mdp/locomotion/obs/actor.onnx"`). The engine never fetches,
    * so the app delivers the bytes — `mjswan/manifest` fills this in,
    * `policyGraphRefs(config)` enumerates what to load. A missing entry warns and skips
    * that term.
