@@ -1,24 +1,24 @@
 """Publish a built mjswan ``dist/`` to mjswan Cloud (v2).
 
-This module extracts the **data files** from a local build (config.json plus
-scene/policy/motion/splat assets — never HTML/JS/WASM) and uploads them to
+This module extracts the **data files** from a local build (manifest.json plus
+scene/policy/motion/splat assets and traced MDP graphs — never HTML/JS/WASM) and uploads them to
 mjswan Cloud using the three-step presigned-upload protocol described in
 mjswan-cloud ADR 0001 §6:
 
 1. ``POST {base}/api/simulations/upload-session`` with a file manifest and the
-   parsed ``config.json`` → presigned ``PUT`` URLs.
+   parsed ``manifest.json`` → presigned ``PUT`` URLs.
 2. ``PUT`` each file's bytes to its presigned URL.
 3. ``POST {base}/api/simulations/commit`` with the ``upload_id`` → the sim id.
 
 The platform renders only **declarative** builds (no author-supplied code), so
-``publish`` refuses any build whose ``config.json`` reports
+``publish`` refuses any build whose ``manifest.json`` reports
 ``uses_custom_js: true`` — a fast, local UX gate that prevents a guaranteed
 server-side rejection and the broken render it would otherwise produce. See
 mjswan ADR 0003 for the declarative/custom-JS split and the ``uses_custom_js``
 marker.
 
 The upload root layout mirrors the build's ``dist/`` tree minus everything but
-data files, with the manifest ``config.json`` hoisted to the upload root so the
+data files, with ``manifest.json`` at the upload root, where the
 engine's ``mount(element, configUrl)`` can resolve every other asset relative to
 ``configUrl``'s directory.
 """
@@ -217,19 +217,14 @@ class PublishPlan:
 
 
 def _find_config(dist_dir: Path) -> Path:
-    """Locate the build's manifest ``config.json``.
-
-    The builder writes it to ``<dist>/assets/config.json``; fall back to a
-    top-level ``config.json`` so a flattened upload tree also works.
-    """
-    candidates = [dist_dir / "assets" / "config.json", dist_dir / "config.json"]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
+    """Locate the build's ``manifest.json``, the one descriptor at the document root."""
+    candidate = dist_dir / "manifest.json"
+    if candidate.is_file():
+        return candidate
     raise PublishError(
-        f"No config.json found in {dist_dir} "
-        "(looked in assets/config.json and config.json). "
-        "Pass the directory produced by builder.build()."
+        f"No manifest.json found in {dist_dir}. Pass the directory produced by "
+        "builder.build(). A build with assets/config.json predates document format 1; "
+        "rebuild it with this mjswan."
     )
 
 
@@ -248,7 +243,7 @@ def plan_publish(dist_dir: Path) -> PublishPlan:
     try:
         config = json.loads(config_path.read_text())
     except json.JSONDecodeError as exc:
-        raise PublishError(f"Invalid config.json: {exc}")
+        raise PublishError(f"Invalid manifest.json: {exc}")
 
     if config.get("uses_custom_js") is True:
         raise PublishError(
@@ -256,29 +251,20 @@ def plan_publish(dist_dir: Path) -> PublishPlan:
             "cannot be published to mjswan Cloud, which renders only declarative "
             "builds. Re-author the custom terms declaratively, or request the "
             "missing capability as an engine built-in. See mjswan ADR 0003.",
-            file="config.json",
+            file="manifest.json",
         )
 
     plan = PublishPlan(dist_dir=dist_dir, config=config)
 
-    # The manifest config.json is hoisted to the upload root as "config.json"
-    # so mount(configUrl) resolves every other asset relative to configUrl's
-    # directory.
-    plan.files.append(
-        _DistFile(
-            upload_path="config.json",
-            source=config_path,
-            size=config_path.stat().st_size,
-        )
-    )
-
+    # `manifest.json` already sits at the root, where every path under a scene entry
+    # resolves against `<project-id>/<scene-id>/` — nothing to hoist (ADR 0006 §8).
     for path in sorted(dist_dir.rglob("*")):
         if not path.is_file():
             continue
-        if path == config_path:
-            continue  # already added at the upload root
         if path.suffix.lower() not in DATA_EXTENSIONS:
             continue
+        if path.parent == dist_dir / "assets":
+            continue  # the SPA's own directory: bundle metadata, not the document
         rel = path.relative_to(dist_dir).as_posix()
         _check_safe_path(rel)
         size = path.stat().st_size

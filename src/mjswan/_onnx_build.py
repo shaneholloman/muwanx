@@ -871,7 +871,12 @@ def _event_writes_nothing_reason(
 
 
 def serialize_event(
-    name: str, term_cfg: EventTermCfg, env: Any, out_dir: Path
+    name: str,
+    term_cfg: EventTermCfg,
+    env: Any,
+    out_dir: Path,
+    *,
+    scope: str | None = None,
 ) -> dict[str, Any] | None:
     """Serialize one event term, or ``None`` if there is genuinely nothing to emit."""
     # Before the torch import below: a config mistake should not need a tracer to report.
@@ -921,7 +926,7 @@ def serialize_event(
             "EventBinding's `ts_src` at it."
         ) from exc
 
-    ref = _onnx_ref("event", name)
+    ref = _onnx_ref("event", name, scope)
     _write_onnx(out_dir, ref, export.onnx_bytes)
     entry: dict[str, Any] = {
         "name": name,
@@ -971,10 +976,13 @@ def serialize_events(
     env: Any,
     out_dir: Path,
     on_term: Callable[[str], None] | None = None,
+    *,
+    scope: str | None = None,
 ) -> list[dict[str, Any]] | None:
-    """Serialize a scene's events dict to the JSON list ``config.json`` carries.
+    """Serialize an MDP's events dict to the JSON list the manifest carries.
 
     ``on_term`` names each term before it is traced, for the build's progress line.
+    *scope* is the owning MDP's directory; see :func:`mjswan._graph_io.onnx_ref`.
     """
     if not events:
         return None
@@ -983,7 +991,7 @@ def serialize_events(
     for name, term_cfg in events.items():
         if on_term is not None:
             on_term(name)
-        entry = serialize_event(name, term_cfg, env, out_dir)
+        entry = serialize_event(name, term_cfg, env, out_dir, scope=scope)
         if entry is not None:
             result.append(entry)
     return result or None

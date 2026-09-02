@@ -246,6 +246,10 @@ class SceneConfig:
     for an :meth:`ProjectHandle.add_scene_mjlab` scene (ADR 0006 §3). Serialized lazily
     at build time so ONNX tracing has the scene's live env and output directory."""
 
+    events_explicit: bool = field(default=False, repr=False, compare=False)
+    """Whether :attr:`events` were set by the author rather than inherited from a task's
+    env config — decides whether dropping them on a policy-less scene is worth a warning."""
+
     mdps: list[MdpConfig] = field(default_factory=list, repr=False, compare=False)
     """Every distinct :class:`MdpConfig` a policy on this scene uses, in first-use order.
     Build-time bookkeeping: index *n* here is what makes an unnamed config ``mdp_<n>``."""
@@ -1042,11 +1046,15 @@ class SceneHandle:
         self._config.viewer = config
         return self
 
-    def set_events(self, events: Mapping[str, Any]) -> SceneHandle:
-        """Set scene-level events.
+    def set_events(
+        self, events: Mapping[str, Any], *, _explicit: bool = True
+    ) -> SceneHandle:
+        """Set the scene's events — the default for every policy's MDP on it.
 
-        Accepts mjswan or mjlab ``EventTermCfg`` instances in any of the three modes.
-        ONNX tracing happens at build time, as for observations and terminations.
+        Accepts mjswan or mjlab ``EventTermCfg`` instances in any of the four modes.
+        ONNX tracing happens at build time, as for observations and terminations. Events
+        belong to an MDP (ADR 0006 §3): a policy that passes none takes these, so a scene
+        with events and no policy has nowhere to put them and says so at build time.
 
         Args:
             events: Dict mapping event names to ``EventTermCfg`` instances.
@@ -1057,6 +1065,7 @@ class SceneHandle:
         from .adapters.mjlab_adapter import adapt_events
 
         self._config.events = adapt_events(events)
+        self._config.events_explicit = _explicit
         return self
 
     def set_trace_env(self, env: Any) -> SceneHandle:

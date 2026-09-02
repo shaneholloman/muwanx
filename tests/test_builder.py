@@ -30,6 +30,28 @@ from mjswan.managers.termination_manager import TerminationTermCfg
 from mjswan.utils import name2id
 
 
+def _build(builder: Builder, out: Path, monkeypatch) -> dict:
+    """Run `_save_web` with the Node build and template copy mocked; return the manifest.
+
+    Every structural assertion goes through the real writer, so there is one code path
+    that produces `manifest.json`, not a test-only one.
+    """
+    monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
+    monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
+    builder._save_web(out)
+    return json.loads((out / "manifest.json").read_text())
+
+
+def _entry(
+    manifest: dict, policy_name: str, *, project: int = 0, scene: int = 0
+) -> dict:
+    """A policy's manifest entry merged with its MDP's — what the engine is handed."""
+    scene_entry = manifest["projects"][project]["scenes"][scene]
+    policy = next(p for p in scene_entry["policies"] if p["name"] == policy_name)
+    mdp = next(m for m in scene_entry["mdps"] if m["id"] == policy["mdp"])
+    return {**policy, **{k: v for k, v in mdp.items() if k != "id"}}
+
+
 # ===========================================================================
 # L1 — project ID assignment rules
 # ===========================================================================
@@ -120,7 +142,7 @@ class TestSceneAndPolicyIds:
         assert (a._config.id, b._config.id) == ("model_2000", "model_2000_1")
 
     def test_two_default_policies_fail_the_build(
-        self, tmp_path, minimal_model, minimal_onnx
+        self, tmp_path, minimal_model, minimal_onnx, monkeypatch
     ):
         scene = (
             Builder()
@@ -130,7 +152,7 @@ class TestSceneAndPolicyIds:
         scene.add_policy(name="A", policy=minimal_onnx, default=True)
         scene.add_policy(name="B", policy=minimal_onnx, default=True)
         with pytest.raises(ValueError, match="default=True"):
-            scene._project._builder._save_config_json(tmp_path)
+            _build(scene._project._builder, tmp_path / "out", monkeypatch)
 
 
 # ===========================================================================
@@ -295,7 +317,7 @@ class TestBuilderValidation:
             Builder().build(tmp_path / "out")
 
     def test_scene_with_a_policy_needs_a_control_dt(
-        self, tmp_path, minimal_model, minimal_onnx
+        self, tmp_path, minimal_model, minimal_onnx, monkeypatch
     ):
         # Nothing about a wrong control rate raises at playback — it just plays at the
         # wrong speed — so the build refuses to guess.
@@ -303,16 +325,18 @@ class TestBuilderValidation:
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.add_policy(name="Policy", policy=minimal_onnx)
         with pytest.raises(ValueError, match="has policies but no control_dt"):
-            builder._save_config_json(tmp_path)
+            _build(builder, tmp_path / "out", monkeypatch)
 
-    def test_scene_without_a_policy_needs_no_control_dt(self, tmp_path, minimal_model):
+    def test_scene_without_a_policy_needs_no_control_dt(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
         # A viewer-only scene has no trained rate to match, so this must not raise.
         builder = Builder()
         builder.add_project(name="P").add_scene(name="S", model=minimal_model)
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
 
     def test_non_positive_control_dt_is_rejected(
-        self, tmp_path, minimal_model, minimal_onnx
+        self, tmp_path, minimal_model, minimal_onnx, monkeypatch
     ):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(
@@ -320,19 +344,18 @@ class TestBuilderValidation:
         )
         scene.add_policy(name="Policy", policy=minimal_onnx)
         with pytest.raises(ValueError, match="must be a positive number of seconds"):
-            builder._save_config_json(tmp_path)
+            _build(builder, tmp_path / "out", monkeypatch)
 
     def test_control_dt_reaches_the_scene_entry(
-        self, tmp_path, minimal_model, minimal_onnx
+        self, tmp_path, minimal_model, minimal_onnx, monkeypatch
     ):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(
             name="S", model=minimal_model, control_dt=0.05
         )
         scene.add_policy(name="Policy", policy=minimal_onnx)
-        builder._save_config_json(tmp_path)
-        config = json.loads((tmp_path / "assets" / "config.json").read_text())
-        assert config["projects"][0]["scenes"][0]["controlDt"] == 0.05
+        manifest = _build(builder, tmp_path / "out", monkeypatch)
+        assert manifest["projects"][0]["scenes"][0]["control_dt"] == 0.05
 
     def test_policy_filename_rejects_empty_string(self):
         with pytest.raises(ValueError):
@@ -421,21 +444,23 @@ class TestFromMjlab:
 
 
 # ===========================================================================
-# L1 — _save_config_json output structure (no frontend build)
+# L1 — manifest.json structure (frontend build mocked)
 # ===========================================================================
 class TestSaveConfigJson:
     def _read_config(self, tmp_path: Path) -> dict:
-        return json.loads((tmp_path / "assets" / "config.json").read_text())
+        return json.loads((tmp_path / "out" / "manifest.json").read_text())
 
-    def test_config_contains_version(self, tmp_path, minimal_model):
+    def test_config_contains_version(self, tmp_path, minimal_model, monkeypatch):
         builder = Builder()
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         assert self._read_config(tmp_path)["version"] == mjswan.__version__
 
-    def test_config_stamps_the_document_format(self, tmp_path, minimal_model):
+    def test_config_stamps_the_document_format(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
         # `format` is the structure, `version` the release: a reader gates on the first
         # only (ADR 0006 §7), so both travel and neither stands in for the other.
         from mjswan._format import DOCUMENT_FORMAT
@@ -444,39 +469,41 @@ class TestSaveConfigJson:
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         config = self._read_config(tmp_path)
         assert config["format"] == DOCUMENT_FORMAT
         assert isinstance(config["format"], int)
 
-    def test_config_has_projects_list(self, tmp_path, minimal_model):
+    def test_config_has_projects_list(self, tmp_path, minimal_model, monkeypatch):
         builder = Builder()
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         config = self._read_config(tmp_path)
         assert isinstance(config["projects"], list)
         assert len(config["projects"]) == 1
 
-    def test_project_name_and_id_in_config(self, tmp_path, minimal_model):
+    def test_project_name_and_id_in_config(self, tmp_path, minimal_model, monkeypatch):
         builder = Builder()
         builder.add_project(name="Main Demo").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         project = self._read_config(tmp_path)["projects"][0]
         assert project["name"] == "Main Demo"
         assert project["id"] == "main_demo"
         # Unset means "first in document order"; the key is written only when set.
         assert "default" not in project
 
-    def test_config_omits_plugins_when_declarative(self, tmp_path, minimal_model):
+    def test_config_omits_plugins_when_declarative(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
         builder = Builder()
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         config = self._read_config(tmp_path)
         assert config["uses_custom_js"] is False
         assert "plugins" not in config
@@ -494,45 +521,57 @@ class TestSaveConfigJson:
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         config = self._read_config(tmp_path)
         assert config["uses_custom_js"] is True
         assert config["plugins"] == "assets/plugins.js"
 
-    def test_scene_path_uses_name2id_with_mjb_for_model(self, tmp_path, minimal_model):
+    def test_scene_path_uses_name2id_with_mjb_for_model(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
         builder = Builder()
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="My Scene", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         scene = self._read_config(tmp_path)["projects"][0]["scenes"][0]
         assert scene["name"] == "My Scene"
-        assert scene["path"] == "my_scene/scene.mjb"
+        assert scene["id"] == "my_scene"
+        assert scene["scene"] == "scene.mjb"
+        assert (tmp_path / "out" / "p" / "my_scene" / "scene.mjb").is_file()
 
-    def test_scene_path_uses_mjz_for_spec(self, tmp_path, minimal_spec):
+    def test_scene_path_uses_mjz_for_spec(self, tmp_path, minimal_spec, monkeypatch):
         builder = Builder()
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="My Scene", spec=minimal_spec
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         scene = self._read_config(tmp_path)["projects"][0]["scenes"][0]
-        assert scene["path"] == "my_scene/scene.mjz"
+        assert scene["scene"] == "scene.mjz"
+        assert (tmp_path / "out" / "p" / "my_scene" / "scene.mjz").is_file()
 
-    def test_policy_without_config_path_has_no_config_key(
-        self, tmp_path, minimal_model, minimal_onnx
+    def test_policy_entry_carries_its_id_mdp_and_onnx_path(
+        self, tmp_path, minimal_model, minimal_onnx, monkeypatch
     ):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
         scene.add_policy(name="Policy", policy=minimal_onnx)
-        builder._save_config_json(tmp_path)
-        policy = self._read_config(tmp_path)["projects"][0]["scenes"][0]["policies"][0]
+        _build(builder, tmp_path / "out", monkeypatch)
+        scene = self._read_config(tmp_path)["projects"][0]["scenes"][0]
+        policy = scene["policies"][0]
         assert policy["name"] == "Policy"
-        assert "config" not in policy
+        assert policy["id"] == "policy"
+        assert policy["mdp"] == "mdp_0"
+        assert policy["onnx"] == "policy/policy.onnx"
+        assert (tmp_path / "out" / "p" / "s" / policy["onnx"]).is_file()
+        assert [m["id"] for m in scene["mdps"]] == ["mdp_0"]
+        # No per-policy JSON anywhere: the manifest is the one descriptor.
+        assert not list((tmp_path / "out" / "p").rglob("*.json"))
 
-    def test_policy_motion_summary_is_included_in_root_config(
-        self, tmp_path, minimal_model, minimal_onnx
+    def test_policy_motions_are_inlined_on_the_entry(
+        self, tmp_path, minimal_model, minimal_onnx, monkeypatch
     ):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(
@@ -546,11 +585,16 @@ class TestSaveConfigJson:
             default=True,
         )
 
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         policy = self._read_config(tmp_path)["projects"][0]["scenes"][0]["policies"][0]
-        assert policy["motions"] == [{"name": "Spin Kick", "default": True}]
+        assert [(m["name"], m["default"]) for m in policy["motions"]] == [
+            ("Spin Kick", True)
+        ]
+        assert policy["motions"][0]["path"] == "assets/spin_kick.npz"
 
-    def test_multiple_projects_all_present_in_config(self, tmp_path, minimal_model):
+    def test_multiple_projects_all_present_in_config(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
         builder = Builder()
         builder.add_project(name="Project A").add_scene(
             control_dt=0.02, name="S", model=minimal_model
@@ -558,13 +602,15 @@ class TestSaveConfigJson:
         builder.add_project(name="Project B").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         projects = self._read_config(tmp_path)["projects"]
         assert len(projects) == 2
         assert projects[0]["name"] == "Project A"
         assert projects[1]["name"] == "Project B"
 
-    def test_second_project_auto_id_reflected_in_config(self, tmp_path, minimal_model):
+    def test_second_project_auto_id_reflected_in_config(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
         builder = Builder()
         builder.add_project(name="Main").add_scene(
             control_dt=0.02, name="S", model=minimal_model
@@ -572,12 +618,14 @@ class TestSaveConfigJson:
         builder.add_project(name="MuJoCo Menagerie").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         projects = self._read_config(tmp_path)["projects"]
         assert projects[0]["id"] == "main"
         assert projects[1]["id"] == name2id("MuJoCo Menagerie")
 
-    def test_default_project_flag_reaches_the_config(self, tmp_path, minimal_model):
+    def test_default_project_flag_reaches_the_config(
+        self, tmp_path, minimal_model, monkeypatch
+    ):
         builder = Builder()
         builder.add_project(name="A").add_scene(
             control_dt=0.02, name="S", model=minimal_model
@@ -585,7 +633,7 @@ class TestSaveConfigJson:
         builder.add_project(name="B", default=True).add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         projects = self._read_config(tmp_path)["projects"]
         assert "default" not in projects[0]
         assert projects[1]["default"] is True
@@ -601,7 +649,7 @@ class TestUsesCustomJsFlag:
     """
 
     def _read_config(self, tmp_path: Path) -> dict:
-        return json.loads((tmp_path / "assets" / "config.json").read_text())
+        return json.loads((tmp_path / "out" / "manifest.json").read_text())
 
     def _isolate_registries(self, monkeypatch):
         """Swap each MDP custom-registry for an empty dict so the test does
@@ -622,7 +670,7 @@ class TestUsesCustomJsFlag:
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         assert self._read_config(tmp_path)["uses_custom_js"] is False
 
     def test_custom_obs_ts_src_flips_flag_true(
@@ -638,7 +686,7 @@ class TestUsesCustomJsFlag:
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         assert self._read_config(tmp_path)["uses_custom_js"] is True
 
     def test_custom_term_ts_src_flips_flag_true(
@@ -654,7 +702,7 @@ class TestUsesCustomJsFlag:
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         assert self._read_config(tmp_path)["uses_custom_js"] is True
 
     def test_declarative_override_does_not_flip_flag(
@@ -675,7 +723,7 @@ class TestUsesCustomJsFlag:
         builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
         )
-        builder._save_config_json(tmp_path)
+        _build(builder, tmp_path / "out", monkeypatch)
         assert self._read_config(tmp_path)["uses_custom_js"] is False
 
 
@@ -797,17 +845,9 @@ class TestSaveWebPolicyJson:
         builder._save_web(out)
         return out
 
-    def _policy_json(
-        self,
-        out: Path,
-        policy_name: str,
-        scene_name: str = "S",
-        project_dir: str = "p",
-    ) -> dict:
-        scene_id = name2id(scene_name)
-        policy_id = name2id(policy_name)
-        path = out / project_dir / "assets" / scene_id / f"{policy_id}.json"
-        return json.loads(path.read_text())
+    def _policy_json(self, out: Path, policy_name: str) -> dict:
+        """The policy's manifest entry merged with its MDP's: what the engine is handed."""
+        return _entry(json.loads((out / "manifest.json").read_text()), policy_name)
 
     def test_spec_scene_config_path_matches_written_file(self, tmp_path, minimal_spec):
         """`_save_web` frees `scene.spec` right after writing `scene.mjz`, and writes
@@ -817,11 +857,11 @@ class TestSaveWebPolicyJson:
         builder.add_project(name="P").add_scene(name="S", spec=minimal_spec)
         out = self._run(builder, tmp_path)
 
-        scene_path = json.loads((out / "assets" / "config.json").read_text())[
-            "projects"
-        ][0]["scenes"][0]["path"]
-        assert scene_path == "s/scene.mjz"
-        assert (out / "p" / "assets" / scene_path).is_file()
+        scene = json.loads((out / "manifest.json").read_text())["projects"][0][
+            "scenes"
+        ][0]
+        assert scene["scene"] == "scene.mjz"
+        assert (out / "p" / scene["id"] / scene["scene"]).is_file()
 
     def test_terms_without_a_trace_env_name_the_missing_call(
         self, tmp_path, minimal_model, minimal_onnx
@@ -928,8 +968,8 @@ class TestSaveWebPolicyJson:
         assert data["actions"]["effort"]["type"] == "torque"
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["onnx"] == "policy/term/fallen.onnx"
-        assert (out / "p" / "assets" / "s" / fallen["onnx"]).exists()
+        assert fallen["onnx"] == "mdp/mdp_0/term/fallen.onnx"
+        assert (out / "p" / "s" / fallen["onnx"]).exists()
 
     def test_no_config_path_actions_absent_when_not_set(
         self, tmp_path, minimal_model, minimal_onnx
@@ -967,7 +1007,7 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
         assert "terminations" not in data
 
-    def test_no_config_path_no_json_without_mdp_components(
+    def test_a_bare_policy_still_gets_an_entry_and_an_empty_mdp(
         self, tmp_path, minimal_model, minimal_onnx
     ):
         builder = Builder()
@@ -976,10 +1016,18 @@ class TestSaveWebPolicyJson:
         )
         scene.add_policy(name="Policy", policy=minimal_onnx)
         out = self._run(builder, tmp_path)
-        policy_id = name2id("Policy")
-        scene_id = name2id("S")
-        json_path = out / "p" / "assets" / scene_id / f"{policy_id}.json"
-        assert not json_path.exists()
+        manifest = json.loads((out / "manifest.json").read_text())
+        scene_entry = manifest["projects"][0]["scenes"][0]
+        assert scene_entry["mdps"] == [{"id": "mdp_0"}]
+        assert scene_entry["policies"] == [
+            {
+                "id": "policy",
+                "name": "Policy",
+                "mdp": "mdp_0",
+                "onnx": "policy/policy.onnx",
+            }
+        ]
+        assert not (out / "p" / "s" / "mdp").exists()
 
     def test_no_config_path_onnx_path_in_json(
         self, tmp_path, minimal_model, minimal_onnx
@@ -994,7 +1042,7 @@ class TestSaveWebPolicyJson:
             actions={"effort": JointEffortActionCfg(actuator_names=(".*",))},
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
-        assert data["onnx"]["path"] == "policy.onnx"
+        assert data["onnx"] == "policy/policy.onnx"
 
     def test_no_config_path_motions_emitted_and_copied(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1025,8 +1073,8 @@ class TestSaveWebPolicyJson:
             {
                 "name": "Spin Kick",
                 # Scene-scoped and name-derived: no policy prefix, so the checkpoints of
-                # one run reference a single bundled copy.
-                "path": "spin_kick.npz",
+                # one run reference a single bundled copy under the scene's assets/.
+                "path": "assets/spin_kick.npz",
                 "fps": 50.0,
                 "anchor_body_name": "torso_link",
                 "body_names": ["pelvis", "torso_link"],
@@ -1034,7 +1082,7 @@ class TestSaveWebPolicyJson:
                 "default": True,
             }
         ]
-        motion_out = out / "p" / "assets" / "s" / "spin_kick.npz"
+        motion_out = out / "p" / "s" / "assets" / "spin_kick.npz"
         assert motion_out.read_bytes() == b"motion-bytes"
 
     def test_one_clip_shared_by_several_policies_is_written_once(
@@ -1056,11 +1104,14 @@ class TestSaveWebPolicyJson:
             )
 
         out = self._run(builder, tmp_path)
-        scene_dir = out / "p" / "assets" / "s"
+        assets_dir = out / "p" / "s" / "assets"
 
-        assert sorted(p.name for p in scene_dir.glob("*.npz")) == ["spin_kick.npz"]
+        assert sorted(p.name for p in assets_dir.glob("*.npz")) == ["spin_kick.npz"]
         for name in ("model_0", "model_50"):
-            assert self._policy_json(out, name)["motions"][0]["path"] == "spin_kick.npz"
+            assert (
+                self._policy_json(out, name)["motions"][0]["path"]
+                == "assets/spin_kick.npz"
+            )
 
     def test_same_name_different_content_gets_a_numbered_suffix(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1082,21 +1133,21 @@ class TestSaveWebPolicyJson:
             )
 
         out = self._run(builder, tmp_path)
-        scene_dir = out / "p" / "assets" / "s"
+        assets_dir = out / "p" / "s" / "assets"
 
-        assert sorted(p.name for p in scene_dir.glob("*.npz")) == [
+        assert sorted(p.name for p in assets_dir.glob("*.npz")) == [
             "motion.npz",
             "motion_1.npz",
         ]
-        assert (scene_dir / "motion.npz").read_bytes() == b"clip-one"
-        assert (scene_dir / "motion_1.npz").read_bytes() == b"clip-two"
+        assert (assets_dir / "motion.npz").read_bytes() == b"clip-one"
+        assert (assets_dir / "motion_1.npz").read_bytes() == b"clip-two"
         paths = {
             name: self._policy_json(out, name)["motions"][0]["path"]
             for name in ("policy_clip-one", "policy_clip-two")
         }
         assert paths == {
-            "policy_clip-one": "motion.npz",
-            "policy_clip-two": "motion_1.npz",
+            "policy_clip-one": "assets/motion.npz",
+            "policy_clip-two": "assets/motion_1.npz",
         }
 
     def test_no_config_path_commands_emitted_as_command_terms(
@@ -1147,11 +1198,11 @@ class TestSaveWebPolicyJson:
         # The group fuses: one graph named for it, under the owning policy's directory,
         # with `scale` folded in rather than shipped.
         group = data["observations"]["policy"]
-        assert group["fused"] == "policy/obs/policy.onnx"
+        assert group["fused"] == "mdp/mdp_0/obs/policy.onnx"
         assert group["layout"] == [{"name": "joint_pos", "size": 2}]
         assert group["size"] == 2
         assert "scale" not in group
-        assert (out / "p" / "assets" / "s" / group["fused"]).exists()
+        assert (out / "p" / "s" / group["fused"]).exists()
 
     def test_two_policies_in_one_scene_keep_their_own_graphs(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1188,14 +1239,64 @@ class TestSaveWebPolicyJson:
         walk = self._policy_json(out, "Walk")["observations"]["policy"]
         crawl = self._policy_json(out, "Crawl")["observations"]["policy"]
 
-        assert walk["fused"] == "walk/obs/policy.onnx"
-        assert crawl["fused"] == "crawl/obs/policy.onnx"
+        assert walk["fused"] == "mdp/mdp_0/obs/policy.onnx"
+        assert crawl["fused"] == "mdp/mdp_1/obs/policy.onnx"
         assert (walk["size"], crawl["size"]) == (2, 5)
 
-        scene_dir = out / "p" / "assets" / "s"
+        scene_dir = out / "p" / "s"
         walk_bytes = (scene_dir / walk["fused"]).read_bytes()
         crawl_bytes = (scene_dir / crawl["fused"]).read_bytes()
         assert walk_bytes != crawl_bytes
+
+    def test_two_policies_sharing_one_mdp_trace_it_once(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        """The checkpoints of one run share an MDP: one directory, one set of graphs."""
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
+        mdp = mjswan.MdpConfig(
+            observations={
+                "policy": ObservationGroupCfg(
+                    terms={"joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel)}
+                )
+            },
+            commands={},
+        )
+        scene.add_policy(name="model_1000", policy=minimal_onnx, mdp=mdp)
+        scene.add_policy(name="model_2000", policy=minimal_onnx, mdp=mdp)
+
+        out = self._run(builder, tmp_path)
+        manifest = json.loads((out / "manifest.json").read_text())
+        scene_entry = manifest["projects"][0]["scenes"][0]
+        assert [m["id"] for m in scene_entry["mdps"]] == ["mdp_0"]
+        assert [p["mdp"] for p in scene_entry["policies"]] == ["mdp_0", "mdp_0"]
+        assert sorted(d.name for d in (out / "p" / "s" / "mdp").iterdir()) == ["mdp_0"]
+        assert (out / "p" / "s" / "mdp" / "mdp_0" / "obs" / "policy.onnx").is_file()
+        assert sorted(f.name for f in (out / "p" / "s" / "policy").iterdir()) == [
+            "model_1000.onnx",
+            "model_2000.onnx",
+        ]
+
+    def test_policies_sharing_an_mdp_must_agree_on_their_joint_names(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        mdp = mjswan.MdpConfig(commands={})
+        scene.add_policy(
+            name="A", policy=minimal_onnx, mdp=mdp, policy_joint_names=["j1"]
+        )
+        scene.add_policy(
+            name="B", policy=minimal_onnx, mdp=mdp, policy_joint_names=["j2"]
+        )
+        with pytest.raises(ValueError, match="share one MdpConfig but disagree"):
+            self._run(builder, tmp_path)
 
     def test_last_action_with_a_term_name_emits_its_slice_offset(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1299,7 +1400,7 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(out, "Policy")
         terms = data["observations"]["policy"]
         assert isinstance(terms, list)
-        assert terms[0]["onnx"] == "policy/obs/joint_pos.onnx"
+        assert terms[0]["onnx"] == "mdp/mdp_0/obs/joint_pos.onnx"
         assert terms[0]["scale"] == 0.5
         assert terms[0]["history_length"] == 3
 
@@ -1362,8 +1463,8 @@ class TestSaveWebPolicyJson:
         assert "terminations" in data
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         fallen = data["terminations"]["fallen"]
-        assert fallen["onnx"] == "policy/term/fallen.onnx"
-        assert (out / "p" / "assets" / "s" / fallen["onnx"]).exists()
+        assert fallen["onnx"] == "mdp/mdp_0/term/fallen.onnx"
+        assert (out / "p" / "s" / fallen["onnx"]).exists()
         assert data["existing_key"] == "kept"
 
     def test_config_path_both_blocks_merged(
@@ -1397,8 +1498,8 @@ class TestSaveWebPolicyJson:
         assert data["actions"]["effort"]["scale"] == 1.5
         # A term reading dynamic entity state is traced to ONNX (ADR 0005).
         height_entry = data["terminations"]["height"]
-        assert height_entry["onnx"] == "policy/term/height.onnx"
-        assert (out / "p" / "assets" / "s" / height_entry["onnx"]).exists()
+        assert height_entry["onnx"] == "mdp/mdp_0/term/height.onnx"
+        assert (out / "p" / "s" / height_entry["onnx"]).exists()
 
     def test_config_path_overwrites_existing_actions_block(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1476,9 +1577,15 @@ class TestSaveWebPolicyJson:
         assert entry["damping"] == {"j": 2.5}
         assert entry["scale"] == {"j": 0.5}
 
-    def test_config_path_onnx_path_updated(self, tmp_path, minimal_model, minimal_onnx):
+    def test_config_path_onnx_block_does_not_leak_and_its_slot_tables_move_up(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
         config_file = tmp_path / "policy_cfg.json"
-        config_file.write_text(json.dumps({"onnx": {"path": "stale.onnx"}}))
+        config_file.write_text(
+            json.dumps(
+                {"onnx": {"path": "stale.onnx", "meta": {"in_keys": ["obs_history"]}}}
+            )
+        )
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(
             control_dt=0.02, name="S", model=minimal_model
@@ -1490,7 +1597,11 @@ class TestSaveWebPolicyJson:
             actions={"joint_pos": JointPositionActionCfg(actuator_names=(".*",))},
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
-        assert data["onnx"]["path"] == "policy.onnx"
+        # The network's path is the build's, never the sidecar's stale one.
+        assert data["onnx"] == "policy/policy.onnx"
+        # And the slot table is a top-level key of the entry (ADR 0006 §5).
+        assert data["in_keys"] == ["obs_history"]
+        assert "out_keys" not in data
 
     def test_config_path_onnx_path_updated_when_extras_present(
         self, tmp_path, minimal_model, minimal_onnx
@@ -1508,7 +1619,7 @@ class TestSaveWebPolicyJson:
             extras={"model_overrides": {"geom_friction": [1.0, 0.5, 0.25]}},
         )
         data = self._policy_json(self._run(builder, tmp_path), "Policy")
-        assert data["onnx"]["path"] == "policy.onnx"
+        assert data["onnx"] == "policy/policy.onnx"
         assert data["extras"] == {
             "model_overrides": {"geom_friction": [1.0, 0.5, 0.25]}
         }
@@ -1618,8 +1729,8 @@ class TestSaveWebPolicyJson:
         data = self._policy_json(out, "Policy")
         # Traced to ONNX, with `limit_angle` closed over by the function, not serialized.
         fallen = data["terminations"]["fallen"]
-        assert fallen["onnx"] == "policy/term/fallen.onnx"
-        assert (out / "p" / "assets" / "s" / fallen["onnx"]).exists()
+        assert fallen["onnx"] == "mdp/mdp_0/term/fallen.onnx"
+        assert (out / "p" / "s" / fallen["onnx"]).exists()
         assert "time_out" not in fallen
 
 
@@ -1628,13 +1739,14 @@ class TestSaveWebPolicyJson:
 # ===========================================================================
 @pytest.mark.slow
 class TestFullBuild:
-    def test_build_creates_assets_config_json(self, tmp_path, minimal_model):
+    def test_build_creates_the_root_manifest(self, tmp_path, minimal_model):
         builder = Builder()
         builder.add_project(name="Test").add_scene(
             control_dt=0.02, name="Scene", model=minimal_model
         )
         builder.build(tmp_path / "out")
-        assert (tmp_path / "out" / "assets" / "config.json").exists()
+        assert (tmp_path / "out" / "manifest.json").exists()
+        assert not (tmp_path / "out" / "assets" / "config.json").exists()
 
     def test_build_with_model_creates_mjb_file(self, tmp_path, minimal_model):
         builder = Builder()
@@ -1642,7 +1754,7 @@ class TestFullBuild:
             control_dt=0.02, name="Scene", model=minimal_model
         )
         builder.build(tmp_path / "out")
-        scene_dir = tmp_path / "out" / "test" / "assets" / "scene"
+        scene_dir = tmp_path / "out" / "test" / "scene"
         assert (scene_dir / "scene.mjb").exists()
 
     def test_build_with_spec_creates_mjz_file(self, tmp_path, minimal_spec):
@@ -1651,7 +1763,7 @@ class TestFullBuild:
             control_dt=0.02, name="Scene", spec=minimal_spec
         )
         builder.build(tmp_path / "out")
-        scene_dir = tmp_path / "out" / "test" / "assets" / "scene"
+        scene_dir = tmp_path / "out" / "test" / "scene"
         assert (scene_dir / "scene.mjz").exists()
 
     def test_build_names_the_project_directory_by_its_id(self, tmp_path, minimal_model):
@@ -1707,9 +1819,7 @@ class TestFullBuild:
             "package.json",
         ):
             assert not (out / leaked).exists(), f"dev file leaked into build: {leaked}"
-        assert (out / "index.html").exists() and (
-            out / "assets" / "config.json"
-        ).exists()
+        assert (out / "index.html").exists() and (out / "manifest.json").exists()
 
 
 # ===========================================================================
@@ -1810,7 +1920,7 @@ class TestFullBuildPhase4:
         )
         builder2.build(tmp_path / "out2")  # identical inputs → no frontend rebuild
         assert "Reusing cached frontend build" in capsys.readouterr().out
-        assert (tmp_path / "out2" / "assets" / "config.json").exists()
+        assert (tmp_path / "out2" / "manifest.json").exists()
 
     def test_custom_js_build_emits_plugins_module(
         self, tmp_path, minimal_model, monkeypatch
@@ -1840,7 +1950,7 @@ class TestFullBuildPhase4:
         )
         builder.build(out)
 
-        config = json.loads((out / "assets" / "config.json").read_text())
+        config = json.loads((out / "manifest.json").read_text())
         assert config["uses_custom_js"] is True
         assert config["plugins"] == "assets/plugins.js"
         plugins = (out / "assets" / "plugins.js").read_text()

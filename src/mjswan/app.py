@@ -43,9 +43,9 @@ class MjswanApp:
     ) -> "PublishResult":
         """Publish this built app's data files to mjswan Cloud.
 
-        Extracts only data files (config.json, scene/policy/motion/splat assets)
-        from the built ``dist/`` and uploads them via the presigned-upload
-        protocol. Refuses builds that use custom-JS MDP terms
+        Extracts only data files (manifest.json, scene/policy/motion/splat assets,
+        traced MDP graphs) from the built ``dist/`` and uploads them via the
+        presigned-upload protocol. Refuses builds that use custom-JS MDP terms
         (``uses_custom_js: true``), which mjswan Cloud cannot render.
 
         Args:

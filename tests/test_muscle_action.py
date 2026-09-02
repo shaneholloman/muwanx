@@ -22,7 +22,6 @@ import pytest
 from mjswan.builder import Builder
 from mjswan.envs.mdp.actions import MuscleActivationActionCfg
 from mjswan.envs.mdp.actions.actions import validate_muscle_actuators
-from mjswan.utils import name2id
 
 # ---------------------------------------------------------------------------
 # Fixtures: minimal muscle / mixed-actuator MuJoCo models
@@ -256,13 +255,10 @@ class TestBuilderMuscleValidation:
         )
         builder._save_web(tmp_path / "out")
 
-        policy_json = json.loads(
-            (
-                tmp_path / "out" / "p" / "assets" / name2id("S") / "policy.json"
-            ).read_text()
-        )
-        assert "actions" in policy_json
-        assert policy_json["actions"]["muscles"]["type"] == "muscle_activation"
+        manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
+        mdp = manifest["projects"][0]["scenes"][0]["mdps"][0]
+        assert "actions" in mdp
+        assert mdp["actions"]["muscles"]["type"] == "muscle_activation"
 
     def test_build_raises_on_mixed_actuators(self, tmp_path, mixed_model, minimal_onnx):
         builder = self._make_builder(
@@ -340,16 +336,15 @@ class TestBuilderMuscleRoundTrip:
         )
 
         builder._save_web(tmp_path / "out")
-        data = json.loads(
-            (
-                tmp_path / "out" / "p" / "assets" / name2id("S") / "policy.json"
-            ).read_text()
-        )
+        manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
+        scene = manifest["projects"][0]["scenes"][0]
+        data = scene["policies"][0]
         assert data["policy_num_actions"] == 2
         assert data["initial_qpos"] == [0.1, 0.2]
         assert data["initial_qvel"] == [0.0, 0.0]
-        assert data["actions"]["muscles"]["type"] == "muscle_activation"
-        assert data["actions"]["muscles"]["actuator_names"] == ["m1", "m2"]
+        actions = scene["mdps"][0]["actions"]
+        assert actions["muscles"]["type"] == "muscle_activation"
+        assert actions["muscles"]["actuator_names"] == ["m1", "m2"]
 
     def test_normalize_false_serialized_in_policy_json(
         self, tmp_path, muscle_model, minimal_onnx
@@ -368,9 +363,6 @@ class TestBuilderMuscleRoundTrip:
             },
         )
         builder._save_web(tmp_path / "out")
-        data = json.loads(
-            (
-                tmp_path / "out" / "p" / "assets" / name2id("S") / "policy.json"
-            ).read_text()
-        )
-        assert data["actions"]["muscles"]["normalize"] is False
+        manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
+        actions = manifest["projects"][0]["scenes"][0]["mdps"][0]["actions"]
+        assert actions["muscles"]["normalize"] is False

@@ -139,9 +139,10 @@ def test_the_fixture_really_built_traced_terms(built_output):
     it was given a trace env. Pin that the artifacts contain the traced entries and
     their graphs, so the scans stay meaningful.
     """
-    policy = json.loads((built_output / "p/assets/s/policy.json").read_text())
-    assert "observations" in policy, policy.keys()
-    assert "terminations" in policy, policy.keys()
+    manifest = json.loads((built_output / "manifest.json").read_text())
+    mdp = manifest["projects"][0]["scenes"][0]["mdps"][0]
+    assert "observations" in mdp, mdp.keys()
+    assert "terminations" in mdp, mdp.keys()
     graphs = sorted(p.name for p in built_output.rglob("*.onnx"))
     # The policy network plus a graph for each traced term.
     assert len(graphs) >= 3, graphs

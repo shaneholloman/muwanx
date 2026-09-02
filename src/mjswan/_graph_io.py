@@ -1,8 +1,8 @@
 """Where a traced MDP graph lands in the bundle, and the one write that puts it there.
 
-The path *is* how a config refers to the graph: the browser resolves it relative to the
-file that names it (``manifest/index.ts``'s ``siblingOf``), so the ref string and the
-location on disk are one thing said once.
+The path *is* how the manifest refers to the graph: the browser resolves it against the
+scene directory (``manifest/index.ts``), so the ref string and the location on disk are
+one thing said once.
 
 Kept free of the tracer, and so of torch, since both ends of a build reach for it.
 """
@@ -13,13 +13,13 @@ from pathlib import Path
 
 
 def onnx_ref(kind: str, name: str, scope: str | None = None) -> str:
-    """Bundle-relative path for a traced term's ``.onnx`` file.
+    """Scene-relative path for a traced term's ``.onnx`` file.
 
-    *scope* is the owning policy's id. A term or group name is unique within a policy
-    but not within a scene, and every policy names its observation group ``"policy"`` —
-    the ONNX input name its network reads (``mjlab_adapter.DEFAULT_OBS_GROUP_KEY``), not
-    a label a policy is free to change — so unscoped, two policies in one scene write to
-    the same file. Scene-scoped graphs (events) pass no scope.
+    *scope* is the owning MDP's directory, ``mdp/<mdp-id>`` (ADR 0006 §2, §6): a term or
+    group name is unique within an MDP but not within a scene — every MDP names its
+    observation group the same way — so unscoped, two MDPs in one scene would write to
+    the same file. The path is what the manifest refers to the graph by, resolved against
+    the scene directory, so the ref string and the location on disk are one thing.
     """
     ref = f"{kind}/{name}.onnx"
     return ref if scope is None else f"{scope}/{ref}"

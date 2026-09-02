@@ -1,36 +1,65 @@
 import { describe, it, expect } from 'vitest';
-import { parseManifest, sanitizeName, type AppConfig, type ByteSource } from './index';
+import { parseManifest, sanitizeName, type Manifest, type ByteSource } from './index';
 import NAME2ID_CASES from './name2id_cases.json';
 
-/** Records every requested path; returns the policy JSON for *.json, tagged bytes otherwise. */
-function fakeSource(policyJson: unknown): { source: ByteSource; requested: string[] } {
+/** Records every requested path; returns tagged bytes for each. */
+function fakeSource(): { source: ByteSource; requested: string[] } {
   const requested: string[] = [];
   const source: ByteSource = (relPath) => {
     requested.push(relPath);
-    return async () => {
-      const body = relPath.endsWith('.json') ? JSON.stringify(policyJson) : `bytes:${relPath}`;
-      return new TextEncoder().encode(body).buffer as ArrayBuffer;
-    };
+    return async () => new TextEncoder().encode(`bytes:${relPath}`).buffer as ArrayBuffer;
   };
   return { source, requested };
 }
 
-const CONFIG: AppConfig = {
+const MANIFEST: Manifest = {
+  format: 1,
   version: '0.0.0',
   projects: [
     {
-      name: 'Demo',
       id: 'demo',
+      name: 'Demo',
       scenes: [
         {
+          id: 'humanoid',
           name: 'Humanoid',
-          path: 'humanoid/scene.mjz',
-          camera: { distance: 5 },
-          splatSection: true,
-          splats: [{ name: 'Room', path: 'humanoid/room.spz', control: true, scale: 2 }],
+          scene: 'scene.mjz',
+          control_dt: 0.02,
+          camera: { distance: 5, origin_type: 'ASSET_BODY', body_name: 'torso' },
+          splat_section: true,
+          splats: [
+            { id: 'room', name: 'Room', path: 'assets/room.spz', control: true, scale: 2, x_offset: 0.5 },
+          ],
+          mdps: [
+            {
+              id: 'mdp_0',
+              observations: {
+                actor: [
+                  { name: 'joint_pos', onnx: 'mdp/mdp_0/obs/joint_pos.onnx' },
+                  { name: 'actions', native: 'prev_action' },
+                ],
+              },
+              actions: { joint_pos: { type: 'joint_position' } },
+              terminations: { fell_over: { name: 'fell_over', onnx: 'mdp/mdp_0/term/fell_over.onnx' } },
+              commands: { twist: { name: 'OnnxCommand', onnx: 'mdp/mdp_0/command/twist.onnx' } },
+              events: [
+                { name: 'push_robot', onnx: 'mdp/mdp_0/event/push_robot.onnx' },
+                { name: 'randomize_terrain' },
+              ] as never,
+            },
+            { id: 'mdp_1', actions: { joint_pos: { type: 'joint_position' } } },
+          ],
           policies: [
-            { name: 'walk', config: 'humanoid/walk.json', default: true, motions: [{ name: 'clip', default: true }] },
-            { name: 'run', config: 'humanoid/run.json' },
+            {
+              id: 'walk',
+              name: 'walk',
+              default: true,
+              mdp: 'mdp_0',
+              onnx: 'policy/walk.onnx',
+              policy_joint_names: ['a', 'b'],
+              motions: [{ name: 'clip', path: 'assets/walk_clip.npz', fps: 50, default: true }],
+            },
+            { id: 'run', name: 'run', mdp: 'mdp_1', onnx: 'policy/run.onnx', in_keys: ['obs'], out_keys: ['action'] },
           ],
         },
       ],
@@ -38,158 +67,151 @@ const CONFIG: AppConfig = {
   ],
 };
 
-const POLICY_JSON = {
-  onnx: { path: 'walk.onnx' },
-  motions: [{ name: 'clip', path: 'walk_clip.npz', fps: 50 }],
-};
-
 describe('parseManifest', () => {
-  it('builds a single-project catalog with scene/policy/splat entries', () => {
-    const { source } = fakeSource(POLICY_JSON);
-    const catalog = parseManifest(CONFIG, source);
-    expect(catalog.projects.map((p) => p.name)).toEqual(['Demo']);
-    expect(catalog.projects[0].scenes.map((s) => s.name)).toEqual(['Humanoid']);
+  it('builds a single-project catalog with scene/policy/splat entries carrying ids', () => {
+    const catalog = parseManifest(MANIFEST, fakeSource().source);
+    expect(catalog.projects.map((p) => [p.id, p.name, p.default])).toEqual([['demo', 'Demo', true]]);
     const scene = catalog.projects[0].scenes[0];
+    expect([scene.id, scene.name]).toEqual(['humanoid', 'Humanoid']);
     expect(scene.splatSection).toBe(true);
-    expect(scene.policies.map((p) => p.name)).toEqual(['walk', 'run']);
+    expect(scene.policies.map((p) => p.id)).toEqual(['walk', 'run']);
     expect(scene.policies[0].default).toBe(true);
     expect(scene.policies[0].motions).toEqual([{ name: 'clip', default: true }]);
-    expect(scene.splats[0]).toMatchObject({ name: 'Room', control: true, transform: { scale: 2 } });
+    expect(scene.splats[0]).toMatchObject({ id: 'room', name: 'Room', control: true, transform: { scale: 2, xOffset: 0.5 } });
   });
 
-  it('resolves asset paths under <project-id>/assets and relative to policy.json', async () => {
-    const { source, requested } = fakeSource(POLICY_JSON);
-    const catalog = parseManifest(CONFIG, source);
-    const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk', splat: 'Room' });
-    expect(requested).toContain('demo/assets/humanoid/scene.mjz'); // model
-    expect(requested).toContain('demo/assets/humanoid/walk.json'); // policy.json
-    expect(requested).toContain('demo/assets/humanoid/walk.onnx'); // onnx (rel to policy dir)
-    expect(requested).toContain('demo/assets/humanoid/walk_clip.npz'); // motion (rel to policy dir)
-    expect(requested).toContain('demo/assets/humanoid/room.spz'); // splat
-    expect(input.viewer).toEqual({ distance: 5 });
+  it('resolves every path under a scene against <project-id>/<scene-id>/', async () => {
+    const { source, requested } = fakeSource();
+    const catalog = parseManifest(MANIFEST, source);
+    const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk', splat: 'room' });
+    expect(requested).toContain('demo/humanoid/scene.mjz');
+    expect(requested).toContain('demo/humanoid/policy/walk.onnx');
+    expect(requested).toContain('demo/humanoid/assets/walk_clip.npz');
+    expect(requested).toContain('demo/humanoid/assets/room.spz');
+    expect(input.controlDt).toBe(0.02);
     expect(input.policy?.motions?.map((m) => m.name)).toEqual(['clip']);
   });
 
+  it('maps the snake_case camera onto the engine ViewerConfig', async () => {
+    const catalog = parseManifest(MANIFEST, fakeSource().source);
+    const input = await catalog.projects[0].scenes[0].buildScene();
+    expect(input.viewer).toEqual({ distance: 5, originType: 'ASSET_BODY', bodyName: 'torso' });
+  });
+
   it('defaults the policy and omits the splat, and accepts a JSON string', async () => {
-    const { source } = fakeSource(POLICY_JSON);
-    const catalog = parseManifest(JSON.stringify(CONFIG), source);
+    const catalog = parseManifest(JSON.stringify(MANIFEST), fakeSource().source);
     const input = await catalog.projects[0].scenes[0].buildScene();
     expect(input.policy).not.toBeNull(); // default policy 'walk'
     expect(input.splat).toBeNull(); // no splat requested
   });
 
+  it('gives the engine the policy entry merged with its MDP, slot tables under onnx.meta', async () => {
+    const catalog = parseManifest(MANIFEST, fakeSource().source);
+    const run = await catalog.projects[0].scenes[0].policies[1].build();
+    const config = run.config as Record<string, unknown>;
+    expect(config.actions).toEqual({ joint_pos: { type: 'joint_position' } });
+    expect(config).not.toHaveProperty('observations');
+    expect(config.onnx).toEqual({ meta: { in_keys: ['obs'], out_keys: ['action'] } });
+    // Bookkeeping keys stay out of what the engine interprets.
+    expect(config).not.toHaveProperty('mdp');
+    expect(config).not.toHaveProperty('id');
+    const walk = await catalog.projects[0].scenes[0].policies[0].build();
+    expect((walk.config as Record<string, unknown>).policy_joint_names).toEqual(['a', 'b']);
+    expect((walk.config as Record<string, unknown>).onnx).toBeUndefined();
+  });
+
+  it('delivers the traced graphs of the whole MDP, keyed by their scene-relative refs', async () => {
+    const { source, requested } = fakeSource();
+    const catalog = parseManifest(MANIFEST, source);
+    const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk' });
+
+    expect(Object.keys(input.policy?.graphs ?? {}).sort()).toEqual([
+      'mdp/mdp_0/command/twist.onnx',
+      'mdp/mdp_0/event/push_robot.onnx',
+      'mdp/mdp_0/obs/joint_pos.onnx',
+      'mdp/mdp_0/term/fell_over.onnx',
+    ]);
+    expect(requested).toContain('demo/humanoid/mdp/mdp_0/obs/joint_pos.onnx');
+    expect(requested).toContain('demo/humanoid/mdp/mdp_0/event/push_robot.onnx');
+    // The network's own `onnx` is a path on the policy entry, not a term reference.
+    expect(input.policy?.graphs).not.toHaveProperty('policy/walk.onnx');
+  });
+
+  it("carries the opening policy's events on the scene input until the runtime switches them", async () => {
+    const catalog = parseManifest(MANIFEST, fakeSource().source);
+    const asWalk = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk' });
+    expect(asWalk.events?.map((e) => e.name)).toEqual(['push_robot', 'randomize_terrain']);
+    expect(Object.keys(asWalk.graphs ?? {})).toEqual(['mdp/mdp_0/event/push_robot.onnx']);
+    const asRun = await catalog.projects[0].scenes[0].buildScene({ policy: 'run' });
+    expect(asRun.events).toBeUndefined();
+  });
+
+  it('refuses a policy whose mdp the scene does not declare', async () => {
+    const broken: Manifest = JSON.parse(JSON.stringify(MANIFEST));
+    broken.projects[0].scenes[0].policies[1].mdp = 'ghost';
+    const catalog = parseManifest(broken, fakeSource().source);
+    await expect(catalog.projects[0].scenes[0].policies[1].build()).rejects.toThrow(/ghost/);
+  });
+
   it('exposes all projects, the default first, and throws on an empty catalog', () => {
-    const multi: AppConfig = {
+    const multi: Manifest = {
+      format: 1,
       version: '0',
       projects: [
-        { name: 'Extra', id: 'extra', scenes: [] },
-        { name: 'Main', id: 'main', default: true, scenes: [] },
+        { id: 'extra', name: 'Extra', scenes: [] },
+        { id: 'main', name: 'Main', default: true, scenes: [] },
       ],
     };
-    const catalog = parseManifest(multi, fakeSource({}).source);
+    const catalog = parseManifest(multi, fakeSource().source);
     expect(catalog.projects.map((p) => p.name)).toEqual(['Main', 'Extra']);
     expect(catalog.projects.map((p) => p.default)).toEqual([true, false]);
-    expect(() => parseManifest({ version: '0', projects: [] }, fakeSource({}).source)).toThrow();
+    expect(() => parseManifest({ format: 1, version: '0', projects: [] }, fakeSource().source)).toThrow();
   });
 
   it('with no default flagged, the first project in document order is the default', () => {
-    const multi: AppConfig = {
+    const multi: Manifest = {
+      format: 1,
       version: '0',
       projects: [
-        { name: 'First', id: 'first', scenes: [] },
-        { name: 'Second', id: 'second', scenes: [] },
+        { id: 'first', name: 'First', scenes: [] },
+        { id: 'second', name: 'Second', scenes: [] },
       ],
     };
-    const catalog = parseManifest(multi, fakeSource({}).source);
+    const catalog = parseManifest(multi, fakeSource().source);
     expect(catalog.projects.map((p) => [p.id, p.default])).toEqual([
       ['first', true],
       ['second', false],
     ]);
   });
 
-  it('delivers the traced term graphs a policy.json refers to (ADR 0005)', async () => {
-    // One graph per traced term beside the network, keyed by the config-relative path
-    // the runtime looks a session up by, and fetched relative to policy.json.
-    const traced = {
-      onnx: { path: 'walk.onnx' },
-      observations: {
-        policy: [
-          { name: 'joint_pos', onnx: 'obs/joint_pos.onnx' },
-          { name: 'actions', native: 'prev_action' },
-        ],
-      },
-      terminations: { fell_over: { name: 'fell_over', onnx: 'term/fell_over.onnx' } },
-      commands: { twist: { name: 'OnnxCommand', onnx: 'command/twist.onnx' } },
-    };
-    const { source, requested } = fakeSource(traced);
-    const catalog = parseManifest(CONFIG, source);
-    const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk' });
-
-    expect(Object.keys(input.policy?.graphs ?? {}).sort()).toEqual([
-      'command/twist.onnx',
-      'obs/joint_pos.onnx',
-      'term/fell_over.onnx',
-    ]);
-    expect(requested).toContain('demo/assets/humanoid/obs/joint_pos.onnx');
-    expect(requested).toContain('demo/assets/humanoid/term/fell_over.onnx');
-    expect(requested).toContain('demo/assets/humanoid/command/twist.onnx');
-    // The policy network's own `onnx` is an object, not a term reference.
-    expect(input.policy?.graphs).not.toHaveProperty('walk.onnx');
-  });
-
-  it('resolves event graphs relative to the model, not to policy.json', async () => {
-    // Event graphs sit beside the scene model, and a scene may have them with no policy.
-    const withEvents: AppConfig = {
-      ...CONFIG,
-      projects: [
-        {
-          ...CONFIG.projects[0],
-          scenes: [
-            {
-              ...CONFIG.projects[0].scenes[0],
-              events: [
-                { name: 'push_robot', onnx: 'event/push_robot.onnx' },
-                { name: 'randomize_terrain' },
-              ] as never,
-            },
-          ],
-        },
-      ],
-    };
-    const { source, requested } = fakeSource(POLICY_JSON);
-    const catalog = parseManifest(withEvents, source);
-    const input = await catalog.projects[0].scenes[0].buildScene({ policy: 'walk' });
-
-    expect(Object.keys(input.graphs ?? {})).toEqual(['event/push_robot.onnx']);
-    expect(requested).toContain('demo/assets/humanoid/event/push_robot.onnx');
-  });
-
   it('surfaces the runtime plugin module path when present', () => {
-    const withPlugins = { ...CONFIG, plugins: 'assets/plugins.js' };
-    expect(parseManifest(withPlugins, fakeSource(POLICY_JSON).source).pluginsPath).toBe(
-      'assets/plugins.js',
-    );
-    expect(parseManifest(CONFIG, fakeSource(POLICY_JSON).source).pluginsPath).toBeUndefined();
+    const withPlugins = { ...MANIFEST, plugins: 'assets/plugins.js' };
+    expect(parseManifest(withPlugins, fakeSource().source).pluginsPath).toBe('assets/plugins.js');
+    expect(parseManifest(MANIFEST, fakeSource().source).pluginsPath).toBeUndefined();
   });
 });
 
 describe('document format', () => {
-  it('accepts the current format and a document that predates the field', () => {
-    const { source } = fakeSource(POLICY_JSON);
-    expect(() => parseManifest({ ...CONFIG, format: 1 }, source)).not.toThrow();
-    expect(() => parseManifest(CONFIG, source)).not.toThrow();
+  it('accepts the current format', () => {
+    expect(() => parseManifest({ ...MANIFEST, format: 1 }, fakeSource().source)).not.toThrow();
+  });
+
+  it('refuses a document with no format as one that predates the layout', () => {
+    const legacy: Partial<Manifest> = { ...MANIFEST };
+    delete legacy.format;
+    expect(() => parseManifest(legacy as Manifest, fakeSource().source)).toThrow(
+      /predates document format 1/,
+    );
   });
 
   it('refuses a newer format, naming both numbers and the writing version', () => {
-    const { source } = fakeSource(POLICY_JSON);
-    expect(() => parseManifest({ ...CONFIG, format: 99, version: '9.9.9' }, source)).toThrow(
+    expect(() => parseManifest({ ...MANIFEST, format: 99, version: '9.9.9' }, fakeSource().source)).toThrow(
       /format 99 .*9\.9\.9.*up to format 1/,
     );
   });
 
   it('does not gate on version: an unknown version with a known format parses', () => {
-    const { source } = fakeSource(POLICY_JSON);
-    expect(() => parseManifest({ ...CONFIG, format: 1, version: '99.0.0' }, source)).not.toThrow();
+    expect(() => parseManifest({ ...MANIFEST, format: 1, version: '99.0.0' }, fakeSource().source)).not.toThrow();
   });
 });
 

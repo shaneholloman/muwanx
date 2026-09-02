@@ -61,7 +61,6 @@ def test_clip_actions_reaches_the_policy_json(tmp_path, minimal_model, minimal_o
     import json
 
     from mjswan import Builder
-    from mjswan.utils import name2id
 
     builder = Builder()
     scene = builder.add_project(name="P").add_scene(
@@ -71,9 +70,8 @@ def test_clip_actions_reaches_the_policy_json(tmp_path, minimal_model, minimal_o
 
     out = tmp_path / "out"
     builder._save_web(out)
-    data = json.loads(
-        (out / "p" / "assets" / name2id("S") / f"{name2id('Policy')}.json").read_text()
-    )
+    manifest = json.loads((out / "manifest.json").read_text())
+    data = manifest["projects"][0]["scenes"][0]["policies"][0]
     assert data["clip_actions"] == 100.0
 
 
@@ -82,7 +80,6 @@ def test_clip_actions_zero_is_not_dropped(tmp_path, minimal_model, minimal_onnx)
     import json
 
     from mjswan import Builder
-    from mjswan.utils import name2id
 
     builder = Builder()
     scene = builder.add_project(name="P").add_scene(
@@ -92,9 +89,8 @@ def test_clip_actions_zero_is_not_dropped(tmp_path, minimal_model, minimal_onnx)
 
     out = tmp_path / "out"
     builder._save_web(out)
-    data = json.loads(
-        (out / "p" / "assets" / name2id("S") / f"{name2id('Policy')}.json").read_text()
-    )
+    manifest = json.loads((out / "manifest.json").read_text())
+    data = manifest["projects"][0]["scenes"][0]["policies"][0]
     assert data["clip_actions"] == 0.0
 
 
@@ -102,7 +98,6 @@ def test_clip_actions_absent_when_unset(tmp_path, minimal_model, minimal_onnx):
     import json
 
     from mjswan import Builder
-    from mjswan.utils import name2id
 
     builder = Builder()
     scene = builder.add_project(name="P").add_scene(
@@ -114,9 +109,8 @@ def test_clip_actions_absent_when_unset(tmp_path, minimal_model, minimal_onnx):
 
     out = tmp_path / "out"
     builder._save_web(out)
-    data = json.loads(
-        (out / "p" / "assets" / name2id("S") / f"{name2id('Policy')}.json").read_text()
-    )
+    manifest = json.loads((out / "manifest.json").read_text())
+    data = manifest["projects"][0]["scenes"][0]["policies"][0]
     assert "clip_actions" not in data
 
 

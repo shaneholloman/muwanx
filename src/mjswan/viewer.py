@@ -70,24 +70,24 @@ class ViewerConfig:
     """Viewer canvas width in pixels."""
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a JSON-compatible dict for config.json."""
+        """Serialize to the manifest's ``camera`` entry (snake_case, ADR 0006)."""
         d: dict[str, Any] = {
             "lookat": list(self.lookat),
             "distance": self.distance,
             "elevation": self.elevation,
             "azimuth": self.azimuth,
-            "originType": self.origin_type.name,
-            "enableReflections": self.enable_reflections,
-            "enableShadows": self.enable_shadows,
+            "origin_type": self.origin_type.name,
+            "enable_reflections": self.enable_reflections,
+            "enable_shadows": self.enable_shadows,
             "height": self.height,
             "width": self.width,
         }
         if self.fovy is not None:
             d["fovy"] = self.fovy
         if self.entity_name is not None:
-            d["entityName"] = self.entity_name
+            d["entity_name"] = self.entity_name
         if self.body_name is not None:
-            d["bodyName"] = self.body_name
+            d["body_name"] = self.body_name
         return d
 
     @staticmethod

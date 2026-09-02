@@ -8,7 +8,7 @@
  */
 
 /** Sections of a policy config whose entries may carry a traced graph. */
-const POLICY_SECTIONS = ['observations', 'terminations', 'commands'] as const;
+const POLICY_SECTIONS = ['observations', 'terminations', 'commands', 'events'] as const;
 
 function collectFrom(value: unknown, into: Set<string>): void {
   if (Array.isArray(value)) {
@@ -26,14 +26,14 @@ function collectFrom(value: unknown, into: Set<string>): void {
   for (const nested of Object.values(record)) collectFrom(nested, into);
 }
 
-/** Graph paths a `policy.json` refers to, relative to it and sorted for determinism. */
+/** Graph paths a policy's config refers to — scene-relative — sorted for determinism. */
 export function policyGraphRefs(config: Record<string, unknown>): string[] {
   const refs = new Set<string>();
   for (const section of POLICY_SECTIONS) collectFrom(config[section], refs);
   return [...refs].sort();
 }
 
-/** Traced-graph paths referenced by a scene's event configs (`config.json`). */
+/** Traced-graph paths referenced by a list of event configs. */
 export function eventGraphRefs(events: unknown): string[] {
   const refs = new Set<string>();
   collectFrom(events, refs);

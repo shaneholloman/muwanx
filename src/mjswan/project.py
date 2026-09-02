@@ -103,10 +103,8 @@ class ProjectHandle:
                 :meth:`add_scene_mjlab` fills it in from the task.
             events: Optional dict of ``EventTermCfg`` instances (mjswan or mjlab).
                 Equivalent to calling :meth:`~mjswan.scene.SceneHandle.set_events`
-                afterwards. Events are scene-scoped rather than per-policy: the runtime
-                builds one ``EventManager`` per scene and keeps it across policy
-                switches, and ``mode="startup"`` fires once at scene load, before any
-                policy is chosen (ADR 0004 §10, ADR 0005 brief §4).
+                afterwards: the default every policy's MDP on this scene takes for its
+                events (ADR 0006 §3).
 
         Returns:
             SceneHandle for adding policies and further configuration.
@@ -242,11 +240,10 @@ class ProjectHandle:
         terrain_data = _extract_terrain_data(scene)
         if terrain_data:
             handle._config.terrain_data = terrain_data
-        scene_events = (
-            events if events is not None else getattr(env_cfg, "events", None)
-        )
-        if scene_events:
-            handle.set_events(scene_events)
+        if events is not None:
+            handle.set_events(events)
+        elif getattr(env_cfg, "events", None):
+            handle.set_events(env_cfg.events, _explicit=False)
         # After both: it rewrites an adapted event term using the patch table.
         apply_terrain_spawn(handle._config)
         return handle

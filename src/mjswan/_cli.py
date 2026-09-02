@@ -421,40 +421,47 @@ def info_cmd(
 
     from rich.tree import Tree
 
-    from mjswan.utils import name2id
-
-    config_path = dist_dir / "assets" / "config.json"
-    if not config_path.exists():
-        console.print(f"[red]Error:[/red] No assets/config.json found in {dist_dir}")
+    manifest_path = dist_dir / "manifest.json"
+    if not manifest_path.exists():
+        console.print(f"[red]Error:[/red] No manifest.json found in {dist_dir}")
         raise typer.Exit(1)
 
-    config = json.loads(config_path.read_text())
-    version = config.get("version", "unknown")
+    manifest = json.loads(manifest_path.read_text())
+    version = manifest.get("version", "unknown")
+    fmt = manifest.get("format", "?")
 
-    tree = Tree(f"[bold]mjswan app[/bold] — {dist_dir}  [dim]v{version}[/dim]")
+    tree = Tree(
+        f"[bold]mjswan app[/bold] — {dist_dir}  [dim]v{version}, format {fmt}[/dim]"
+    )
 
     total_bytes = 0
-    for project in config.get("projects", []):
-        project_dir_name = project["id"]
+    for project in manifest.get("projects", []):
         p_node = tree.add(
-            f"[cyan]{project['name']}[/cyan]  [dim][{project_dir_name}][/dim]"
+            f"[cyan]{project['name']}[/cyan]  [dim][{project['id']}][/dim]"
         )
         for scene in project.get("scenes", []):
-            scene_rel = scene.get("path", "")
-            scene_path = dist_dir / project_dir_name / "assets" / scene_rel
+            scene_dir = dist_dir / project["id"] / scene["id"]
+            scene_path = scene_dir / scene.get("scene", "")
             scene_size = scene_path.stat().st_size if scene_path.exists() else 0
             total_bytes += scene_size
             s_node = p_node.add(
                 f"[green]{scene['name']}[/green]  "
-                f"[dim]{scene_rel}  ({_fmt_size(scene_size)})[/dim]"
+                f"[dim]{scene['id']}/{scene.get('scene', '')}  "
+                f"({_fmt_size(scene_size)})[/dim]"
             )
+            for mdp in scene.get("mdps", []):
+                graphs = list((scene_dir / "mdp" / mdp["id"]).rglob("*.onnx"))
+                s_node.add(
+                    f"MDP: [magenta]{mdp['id']}[/magenta]  [dim]{len(graphs)} graph(s)[/dim]"
+                )
             for policy in scene.get("policies", []):
-                onnx_path = scene_path.parent / f"{name2id(policy['name'])}.onnx"
+                onnx_path = scene_dir / policy.get("onnx", "")
                 policy_size = onnx_path.stat().st_size if onnx_path.exists() else 0
                 total_bytes += policy_size
                 size_str = f"  ({_fmt_size(policy_size)})" if policy_size else ""
                 s_node.add(
-                    f"Policy: [yellow]{policy['name']}[/yellow][dim]{size_str}[/dim]"
+                    f"Policy: [yellow]{policy['name']}[/yellow]  "
+                    f"[dim]mdp={policy.get('mdp')}{size_str}[/dim]"
                 )
 
     tree.add(f"[dim]Total scene+policy assets: {_fmt_size(total_bytes)}[/dim]")

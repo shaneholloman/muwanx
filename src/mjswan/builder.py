@@ -438,16 +438,249 @@ class Builder:
 
         return MjswanApp(output_path)
 
-    def _save_config_json(self, output_path: Path) -> None:
-        """Save configuration as JSON.
+    # Keys of a `config_path` sidecar that describe the MDP rather than the checkpoint.
+    _MDP_SIDECAR_KEYS = (
+        "observations",
+        "actions",
+        "terminations",
+        "commands",
+        "events",
+    )
 
-        Creates root assets/config.json with project metadata and structure information.
-        Individual project assets (scenes/policies) are saved under project-id/assets/.
+    def _load_sidecar(self, policy) -> dict:
+        """The policy's authored ``config_path`` JSON, or ``{}``.
+
+        A missing file warns and reads as empty, as before: the policy still ships, with
+        whatever the Python side declared.
         """
-        self._check_defaults()
-        # Create root config with project metadata and structure info
+        config_path = getattr(policy, "config_path", None)
+        if not config_path:
+            return {}
+        config_src = Path(config_path).expanduser()
+        if not config_src.is_absolute():
+            config_src = (Path.cwd() / config_src).resolve()
+        if not config_src.exists():
+            warnings.warn(
+                f"Policy config path not found: {config_src}",
+                category=RuntimeWarning,
+                stacklevel=2,
+            )
+            return {}
+        with open(config_src, "r") as f:
+            return json.load(f)
+
+    def _serialize_mdp(
+        self,
+        mdp,
+        mdp_id: str,
+        owners: list,
+        *,
+        sidecars: dict[str, dict],
+        env,
+        scene_dir: Path,
+        on_term,
+    ) -> dict:
+        """Trace one MDP's five term sets into ``<scene>/mdp/<mdp_id>/`` and return its entry.
+
+        ``owners`` are the policies that run against it, in order. The first one supplies
+        the per-policy context a trace needs — its joint names fix the native widths, its
+        sidecar's ``actions`` block carries the authored PD gains — and the rest must agree
+        with it: they were trained against one MDP, so a disagreement is a config mistake,
+        not a second MDP.
+        """
+        from ._onnx_build import (
+            policy_native_sizes,
+            serialize_command,
+            serialize_events,
+            serialize_observation_group,
+            serialize_terminations,
+        )
+
+        first = owners[0]
+        first_sidecar = sidecars[first.id]
+        for other in owners[1:]:
+            disagreements = [
+                field
+                for field in ("policy_joint_names", "policy_num_actions")
+                if getattr(other, field) != getattr(first, field)
+            ]
+            disagreements += [
+                f"config_path.{key}"
+                for key in self._MDP_SIDECAR_KEYS
+                if sidecars[other.id].get(key) != first_sidecar.get(key)
+            ]
+            if disagreements:
+                raise ValueError(
+                    f"Policies {first.name!r} and {other.name!r} on scene "
+                    f"{scene_dir.name!r} share one MdpConfig but disagree on "
+                    f"{disagreements}. Policies trained against one MDP share these; "
+                    "give the odd one its own MdpConfig."
+                )
+
+        scope = f"mdp/{mdp_id}"
+        if env is None and (mdp.observations or mdp.terminations):
+            raise ValueError(
+                f"MDP {mdp_id!r} on scene {scene_dir.name!r} has observation/termination "
+                "terms to trace, but the scene has no trace env to trace them against. "
+                "`add_scene_mjlab` supplies one; a plain `add_scene` scene needs it "
+                "explicitly: `scene.set_trace_env(build_single_entity_trace_env(spec_fn))` "
+                "(ADR 0005 §6)."
+            )
+
+        entry: dict = {"id": mdp_id}
+        if mdp.commands:
+            on_term("commands")
+            entry["commands"] = {
+                name: serialize_command(name, cmd, env, scene_dir, scope=scope)
+                for name, cmd in mdp.commands.items()
+            }
+        if mdp.observations:
+            on_term("observations")
+            native_sizes = policy_native_sizes(
+                {
+                    "policy_joint_names": first.policy_joint_names,
+                    "policy_num_actions": first.policy_num_actions,
+                    **{
+                        k: first_sidecar[k]
+                        for k in ("policy_joint_names", "policy_num_actions")
+                        if k in first_sidecar and getattr(first, k) is None
+                    },
+                },
+                mdp.commands,
+            )
+            # Authored groups first, never overwritten: the key names the fused graph too.
+            obs_config = dict(first_sidecar.get("observations") or {})
+            for key, group in mdp.observations.items():
+                target_key = f"{key}_monitor" if key in obs_config else key
+                obs_config[target_key] = serialize_observation_group(
+                    group, env, scene_dir, target_key, native_sizes, scope=scope
+                )
+            entry["observations"] = obs_config
+        elif first_sidecar.get("observations"):
+            entry["observations"] = first_sidecar["observations"]
+        if mdp.actions:
+            # Merged field-wise over the authored config, where a motor robot's PD gains
+            # live, so a scene can tweak the offset without restating them.
+            authored = first_sidecar.get("actions") or {}
+            entry["actions"] = {
+                name: {**authored.get(name, {}), **cfg.to_dict()}
+                for name, cfg in mdp.actions.items()
+            }
+        elif first_sidecar.get("actions"):
+            entry["actions"] = first_sidecar["actions"]
+        if mdp.terminations:
+            on_term("terminations")
+            terminations = serialize_terminations(
+                mdp.terminations, env, scene_dir, scope=scope
+            )
+            if terminations:
+                entry["terminations"] = terminations
+        elif first_sidecar.get("terminations"):
+            entry["terminations"] = first_sidecar["terminations"]
+        if mdp.events:
+            events = serialize_events(
+                mdp.events,
+                env,
+                scene_dir,
+                on_term=lambda name: on_term(f"event/{name}"),
+                scope=scope,
+            )
+            if events:
+                entry["events"] = events
+        elif first_sidecar.get("events"):
+            entry["events"] = first_sidecar["events"]
+        return entry
+
+    def _serialize_policy_entry(
+        self, policy, mdp_id: str, sidecar: dict, motion_files: dict[str, str]
+    ) -> dict:
+        """One policy's manifest entry: the checkpoint's own metadata plus its MDP ref.
+
+        The sidecar's keys pass through except the MDP sections (merged by
+        :meth:`_serialize_mdp`) and ``onnx``, whose ``meta.in_keys`` / ``out_keys`` land
+        as the top-level slot tables (ADR 0006 §5). Python-side fields win over it.
+        """
+        entry: dict = {
+            "id": policy.id,
+            "name": policy.name,
+            **({"default": True} if policy.default else {}),
+            "mdp": mdp_id,
+            "onnx": f"policy/{policy.id}.onnx",
+        }
+        skip = {*self._MDP_SIDECAR_KEYS, "onnx", "in_keys", "out_keys", "id", "name"}
+        skip |= {"mdp", "default", "motions"}
+        entry.update({k: v for k, v in sidecar.items() if k not in skip})
+        meta = sidecar.get("onnx", {}) if isinstance(sidecar.get("onnx"), dict) else {}
+        meta = dict(meta.get("meta") or {})
+        for key in ("in_keys", "out_keys"):
+            value = sidecar.get(key, meta.get(key))
+            if value is not None:
+                entry[key] = value
+
+        if policy.policy_joint_names:
+            entry["policy_joint_names"] = policy.policy_joint_names
+        if policy.policy_num_actions:
+            entry["policy_num_actions"] = policy.policy_num_actions
+        if policy.default_joint_pos:
+            entry["default_joint_pos"] = policy.default_joint_pos
+        if policy.encoder_bias:
+            entry["encoder_bias"] = policy.encoder_bias
+        # Not `if policy.clip_actions:` — 0.0 is a legal bound, not "unset".
+        if policy.clip_actions is not None:
+            entry["clip_actions"] = float(policy.clip_actions)
+        if getattr(policy, "initial_qpos", None):
+            entry["initial_qpos"] = policy.initial_qpos
+        if getattr(policy, "initial_qvel", None):
+            entry["initial_qvel"] = policy.initial_qvel
+        if getattr(policy, "extras", None):
+            entry["extras"] = policy.extras
+        if policy.motions:
+            entry["motions"] = [
+                motion.to_dict(f"assets/{motion_files[_motion_key(motion)]}")
+                for motion in policy.motions
+            ]
+        return entry
+
+    def _scene_entry(
+        self, scene: SceneConfig, mdps: list[dict], policies: list[dict]
+    ) -> dict:
+        """A scene's manifest entry; every path in it resolves against the scene directory."""
+        return {
+            "id": scene.id,
+            "name": scene.name,
+            "scene": scene.scene_filename,
+            **({"control_dt": _require_control_dt(scene)} if scene.policies else {}),
+            **(
+                {"camera": scene.viewer.to_dict()}
+                if scene.viewer and scene.viewer.to_dict()
+                else {}
+            ),
+            **({"terrain_data": scene.terrain_data} if scene.terrain_data else {}),
+            **(
+                {"splat_section": True}
+                if scene.splat_section and not scene.splats
+                else {}
+            ),
+            **(
+                {"splats": [self._build_splat_config_dict(s) for s in scene.splats]}
+                if scene.splats
+                else {}
+            ),
+            "mdps": mdps,
+            "policies": policies,
+        }
+
+    def _save_manifest(
+        self, output_path: Path, scene_entries: dict[tuple[str, str], dict]
+    ) -> None:
+        """Write the one descriptor of the document, ``manifest.json``, at its root.
+
+        Every key is ``snake_case``; a path resolves against the directory of the level
+        that declares it — the scene directory for everything under a scene entry, the
+        document root for the top-level ``plugins`` (ADR 0006, manifest rules 1–2).
+        """
         uses_custom_js = _build_uses_custom_js()
-        root_config = {
+        manifest = {
             "format": DOCUMENT_FORMAT,
             "version": __version__,
             "uses_custom_js": uses_custom_js,
@@ -455,96 +688,19 @@ class Builder:
             **({"plugins": "assets/plugins.js"} if uses_custom_js else {}),
             "projects": [
                 {
-                    "name": project.name,
                     "id": project.id,
+                    "name": project.name,
                     **({"default": True} if project.default else {}),
                     "scenes": [
-                        {
-                            "name": scene.name,
-                            "path": f"{scene.id}/{scene.scene_filename}",
-                            **(
-                                {
-                                    "splats": [
-                                        self._build_splat_config_dict(scene, s)
-                                        for s in scene.splats
-                                    ]
-                                }
-                                if scene.splats
-                                else {}
-                            ),
-                            **(
-                                {"splatSection": True}
-                                if scene.splat_section and not scene.splats
-                                else {}
-                            ),
-                            **(
-                                {"camera": scene.viewer.to_dict()}
-                                if scene.viewer and scene.viewer.to_dict()
-                                else {}
-                            ),
-                            **({"events": scene.events} if scene.events else {}),
-                            **(
-                                {"terrainData": scene.terrain_data}
-                                if scene.terrain_data
-                                else {}
-                            ),
-                            **(
-                                {"controlDt": _require_control_dt(scene)}
-                                if scene.policies
-                                else {}
-                            ),
-                            "policies": [
-                                (
-                                    {
-                                        "name": policy.name,
-                                        **(
-                                            {"config": f"{scene.id}/{policy.id}.json"}
-                                            if getattr(policy, "config_path", None)
-                                            or getattr(policy, "commands", None)
-                                            or getattr(policy, "observations", None)
-                                            or getattr(policy, "actions", None)
-                                            or getattr(policy, "terminations", None)
-                                            or getattr(policy, "motions", None)
-                                            else {}
-                                        ),
-                                        **(
-                                            {"source": policy.source_path}
-                                            if getattr(policy, "source_path", None)
-                                            else {}
-                                        ),
-                                        **(
-                                            {"default": True}
-                                            if getattr(policy, "default", False)
-                                            else {}
-                                        ),
-                                        **(
-                                            {
-                                                "motions": [
-                                                    motion.to_summary_dict()
-                                                    for motion in policy.motions
-                                                ]
-                                            }
-                                            if getattr(policy, "motions", None)
-                                            else {}
-                                        ),
-                                    }
-                                )
-                                for policy in scene.policies
-                            ],
-                        }
+                        scene_entries[(project.id, scene.id)]
                         for scene in project.scenes
                     ],
                 }
                 for project in self._projects
             ],
         }
-
-        # Save root config.json in assets directory
-        assets_dir = output_path / "assets"
-        assets_dir.mkdir(exist_ok=True)
-        root_config_file = assets_dir / "config.json"
-        with open(root_config_file, "w") as f:
-            json.dump(root_config, f, indent=2)
+        with open(output_path / "manifest.json", "w") as f:
+            json.dump(manifest, f, indent=2)
 
     def _save_mt_headers(self, output_path: Path) -> None:
         """Write COOP/COEP response headers needed by multi-threaded MuJoCo.
@@ -562,16 +718,11 @@ class Builder:
         )
         (output_path / "_headers").write_text(headers_content)
 
-    def _build_splat_config_dict(self, scene: SceneConfig, splat: SplatConfig) -> dict:
-        """Build the splat dict for config.json.
-
-        When ``source`` is set the file is copied to the scene asset directory
-        during :meth:`_save_web`, and the resulting relative path is injected
-        here so the frontend can resolve it to a URL.
-        """
+    def _build_splat_config_dict(self, splat: SplatConfig) -> dict:
+        """A splat's manifest entry; ``path`` is the bundled copy under ``assets/``."""
         d = splat.to_dict()
         if splat.source is not None:
-            d["path"] = f"{scene.id}/{splat.id}.spz"
+            d["path"] = f"assets/{splat.id}.spz"
         return d
 
     def _check_defaults(self) -> None:
@@ -603,141 +754,6 @@ class Builder:
             )
         return name
 
-    def _serialize_policy_config(
-        self,
-        policy,
-        env,
-        scene_dir: Path,
-        policy_path: Path,
-        motion_files: dict[str, str] | None = None,
-    ) -> dict | None:
-        """Assemble one policy's JSON config, tracing ONNX terms via the scene's env.
-
-        Returns ``None`` (with a warning) when ``policy.config_path`` names a file that
-        does not exist, or when the policy has nothing to serialize. A trace or parse
-        failure is not caught: it fails the build.
-        """
-        from ._onnx_build import (
-            policy_native_sizes,
-            serialize_command,
-            serialize_observation_group,
-            serialize_terminations,
-        )
-
-        config_path = getattr(policy, "config_path", None)
-        has_mdp = (
-            policy.commands
-            or policy.observations
-            or policy.actions
-            or policy.terminations
-            or policy.policy_joint_names
-            or policy.policy_num_actions
-            or policy.motions
-            or policy.clip_actions is not None
-        )
-        if not config_path and not has_mdp:
-            return None
-
-        # Every graph this policy traces goes under its own directory. A group or term
-        # name is scene-wide otherwise, and two policies in one scene routinely name
-        # their observation group "policy" — the ONNX input name, not a free label.
-        scope = policy_path.stem
-
-        if env is None and (policy.observations or policy.terminations):
-            raise ValueError(
-                f"Policy {policy.name!r} on scene {scene_dir.name!r} has "
-                "observation/termination terms to trace, but the scene has no trace "
-                "env to trace them against. `add_scene_mjlab` supplies one; a plain "
-                "`add_scene` scene needs it explicitly: "
-                "`scene.set_trace_env(build_single_entity_trace_env(spec_fn))` "
-                "(ADR 0005 §6)."
-            )
-
-        data: dict = {}
-        if config_path:
-            config_src = Path(config_path).expanduser()
-            if not config_src.is_absolute():
-                config_src = (Path.cwd() / config_src).resolve()
-            if not config_src.exists():
-                warnings.warn(
-                    f"Policy config path not found: {config_src}",
-                    category=RuntimeWarning,
-                    stacklevel=2,
-                )
-                return None
-            with open(config_src, "r") as f:
-                data = json.load(f)
-            data.setdefault("onnx", {})
-            if isinstance(data["onnx"], dict):
-                onnx_config = data["onnx"]
-                onnx_config["path"] = policy_path.name
-                meta = dict(onnx_config.get("meta") or {})
-                if "in_keys" in data and "in_keys" not in meta:
-                    meta["in_keys"] = data["in_keys"]
-                if "out_keys" in data and "out_keys" not in meta:
-                    meta["out_keys"] = data["out_keys"]
-                if meta:
-                    onnx_config["meta"] = meta
-        else:
-            data = {"onnx": {"path": policy_path.name}}
-
-        if policy.policy_joint_names:
-            data["policy_joint_names"] = policy.policy_joint_names
-        if policy.policy_num_actions:
-            data["policy_num_actions"] = policy.policy_num_actions
-        if policy.default_joint_pos:
-            data["default_joint_pos"] = policy.default_joint_pos
-        if policy.encoder_bias:
-            data["encoder_bias"] = policy.encoder_bias
-        # Not `if policy.clip_actions:` — 0.0 is a legal bound, not "unset".
-        if policy.clip_actions is not None:
-            data["clip_actions"] = float(policy.clip_actions)
-        if getattr(policy, "initial_qpos", None):
-            data["initial_qpos"] = policy.initial_qpos
-        if getattr(policy, "initial_qvel", None):
-            data["initial_qvel"] = policy.initial_qvel
-        if getattr(policy, "extras", None):
-            data["extras"] = policy.extras
-
-        if policy.commands:
-            data["commands"] = {
-                name: serialize_command(name, cmd, env, scene_dir, scope=scope)
-                for name, cmd in policy.commands.items()
-            }
-        if policy.observations:
-            native_sizes = policy_native_sizes(data, policy.commands)
-            obs_config = data.get("observations", {})
-            for key, group in policy.observations.items():
-                # Never overwrite a group `config_path` already declared. The key names
-                # the fused graph too, so two groups cannot collide.
-                target_key = key
-                if target_key in obs_config:
-                    target_key = f"{key}_monitor"
-                obs_config[target_key] = serialize_observation_group(
-                    group, env, scene_dir, target_key, native_sizes, scope=scope
-                )
-            data["observations"] = obs_config
-        if policy.actions:
-            # Merged field-wise over the authored config, where a motor robot's PD gains
-            # live, so a scene can tweak the offset without restating them.
-            authored = data.get("actions", {})
-            data["actions"] = {
-                name: {**authored.get(name, {}), **cfg.to_dict()}
-                for name, cfg in policy.actions.items()
-            }
-        if policy.terminations:
-            terminations = serialize_terminations(
-                policy.terminations, env, scene_dir, scope=scope
-            )
-            if terminations:
-                data["terminations"] = terminations
-        if policy.motions:
-            files = motion_files or {}
-            data["motions"] = [
-                motion.to_dict(files[_motion_key(motion)]) for motion in policy.motions
-            ]
-        return data
-
     def _validate_muscle_action_terms(self, scene: SceneConfig) -> None:
         """Validate every ``MuscleActivationActionCfg`` in the scene's policies.
 
@@ -767,24 +783,19 @@ class Builder:
     def _save_web(self, output_path: Path, build_frontend: bool | None = None) -> None:
         """Save as a complete web application.
 
-        Output structure:
+        Output structure (ADR 0006 §2):
             dist/
-            ├── index.html
-            ├── logo.svg
-            ├── robots.txt
-            ├── assets/
-            │   ├── config.json
-            │   └── (compiled js/css files)
+            ├── index.html, logo.svg, robots.txt
+            ├── assets/            (compiled js/css/wasm, plugins.js)
+            ├── manifest.json      (the one descriptor; every key snake_case)
             └── <project-id>/
-                └── assets/
-                    └── <scene-id>/
-                        ├── scene.mjz/.mjb
-                        ├── <policy-id>.onnx
-                        ├── <policy-id>.json
-                        ├── <policy-id>/obs|term|command/<name>.onnx  (traced graphs)
-                        ├── event/<name>.onnx  (scene-scoped, so unprefixed)
-                        └── <splat-id>.spz  (when local source provided)
+                └── <scene-id>/
+                    ├── scene.mjz | scene.mjb
+                    ├── mdp/<mdp-id>/{obs,term,command,event}/<name>.onnx
+                    ├── policy/<policy-id>.onnx
+                    └── assets/    (<motion>.npz, <splat>.spz)
         """
+        self._check_defaults()
         if output_path.exists():
             shutil.rmtree(output_path)
 
@@ -836,28 +847,22 @@ class Builder:
                 category=RuntimeWarning,
             )
 
-        # Create root assets directory for shared config
+        # The SPA's own directory; `plugins.js` lives beside the bundle it extends.
         assets_dir = output_path / "assets"
         assets_dir.mkdir(exist_ok=True)
 
-        # Author custom-MDP terms compile to a runtime ESM beside config.json, via esbuild.
+        # Author custom-MDP terms compile to a runtime ESM the manifest points at, via esbuild.
         if _build_uses_custom_js() and client_builder is not None:
             print("Compiling custom-MDP term module (plugins.js)...")
-            client_builder.build_plugins_module(output_path / "assets" / "plugins.js")
+            client_builder.build_plugins_module(assets_dir / "plugins.js")
 
         # Write COOP/COEP headers for multi-threaded MuJoCo (SharedArrayBuffer)
         if self._mt:
             self._save_mt_headers(output_path)
 
-        self._check_defaults()
-
-        # Save MuJoCo models and ONNX policies per project
+        scene_entries: dict[tuple[str, str], dict] = {}
         max_name_len = max(len(p.name) for p in self._projects)
         for project in self._projects:
-            project_assets_dir = output_path / project.id / "assets"
-            project_assets_dir.mkdir(parents=True, exist_ok=True)
-
-            # Save scenes and policies
             with Progress(
                 SpinnerColumn(spinner_name="dots"),
                 TextColumn("[progress.description]{task.description}"),
@@ -873,7 +878,7 @@ class Builder:
                 steps = _SceneSteps(progress)
                 for scene in project.scenes:
                     progress.update(task, scene=scene.name)
-                    scene_dir = project_assets_dir / scene.id
+                    scene_dir = output_path / project.id / scene.id
                     scene_dir.mkdir(parents=True, exist_ok=True)
                     scene_path = scene_dir / scene.scene_filename
 
@@ -908,8 +913,12 @@ class Builder:
                     # Before anything needing the trace env: a tracking task's env loads
                     # its clip from disk, and the bundled copy is that file.
                     steps.on("bundling clips")
-                    motion_files = _write_scene_motions(scene, scene_dir)
-                    _point_env_cfg_at_bundled_motion(scene, scene_dir, motion_files)
+                    scene_assets_dir = scene_dir / "assets"
+                    scene_assets_dir.mkdir(exist_ok=True)
+                    motion_files = _write_scene_motions(scene, scene_assets_dir)
+                    _point_env_cfg_at_bundled_motion(
+                        scene, scene_assets_dir, motion_files
+                    )
 
                     steps.on("copying splats")
                     for splat in scene.splats:
@@ -920,7 +929,7 @@ class Builder:
                             if src.exists():
                                 shutil.copy2(
                                     str(src),
-                                    str(scene_dir / f"{splat.id}.spz"),
+                                    str(scene_assets_dir / f"{splat.id}.spz"),
                                 )
                             else:
                                 warnings.warn(
@@ -928,45 +937,65 @@ class Builder:
                                     category=RuntimeWarning,
                                     stacklevel=2,
                                 )
+                    if not any(scene_assets_dir.iterdir()):
+                        scene_assets_dir.rmdir()
+
+                    if scene.events and not scene.policies and scene.events_explicit:
+                        warnings.warn(
+                            f"Scene {scene.name!r} has events but no policy. Events "
+                            "belong to a policy's MDP (ADR 0006 §3), so with no policy "
+                            "to carry them they are not written.",
+                            category=RuntimeWarning,
+                            stacklevel=2,
+                        )
 
                     steps.begin(
-                        "tracing mdps",
-                        total=len(scene.events or {}) + len(scene.policies),
+                        "tracing mdps", total=len(scene.mdps) + len(scene.policies)
                     )
-                    if scene.events:
-                        from ._onnx_build import serialize_events
-
-                        # Overwrites `scene.events` with the JSON list `_save_config_json`
-                        # reads after this loop.
-                        scene.events = serialize_events(
-                            scene.events,
-                            _scene_trace_env(scene),
-                            scene_dir,
-                            on_term=lambda name: steps.on(f"event/{name}"),
+                    sidecars = {p.id: self._load_sidecar(p) for p in scene.policies}
+                    mdp_entries = []
+                    for mdp, mdp_id in zip(scene.mdps, scene.mdp_ids):
+                        owners = [p for p in scene.policies if p.mdp is mdp]
+                        steps.on(f"mdp/{mdp_id}")
+                        mdp_entries.append(
+                            self._serialize_mdp(
+                                mdp,
+                                mdp_id,
+                                owners,
+                                sidecars=sidecars,
+                                env=_scene_trace_env(scene),
+                                scene_dir=scene_dir,
+                                on_term=lambda name, mdp_id=mdp_id: steps.on(
+                                    f"mdp/{mdp_id}/{name}"
+                                ),
+                            )
                         )
 
+                    policy_entries = []
+                    if scene.policies:
+                        (scene_dir / "policy").mkdir(exist_ok=True)
                     for policy in scene.policies:
                         steps.on(f"policy/{policy.name}")
-                        policy_path = scene_dir / f"{policy.id}.onnx"
-                        onnx.save(policy.model, str(policy_path))
-
-                        data = self._serialize_policy_config(
-                            policy,
-                            _scene_trace_env(scene),
-                            scene_dir,
-                            policy_path,
-                            motion_files,
+                        onnx.save(
+                            policy.model,
+                            str(scene_dir / "policy" / f"{policy.id}.onnx"),
                         )
-                        if data is not None:
-                            target = policy_path.with_suffix(".json")
-                            with open(target, "w") as f:
-                                json.dump(data, f, indent=2)
+                        policy_entries.append(
+                            self._serialize_policy_entry(
+                                policy,
+                                scene.mdp_id(policy.mdp),
+                                sidecars[policy.id],
+                                motion_files,
+                            )
+                        )
 
+                    scene_entries[(project.id, scene.id)] = self._scene_entry(
+                        scene, mdp_entries, policy_entries
+                    )
                     progress.advance(task)
                 steps.close()
 
-        # After the scene loop, which resolves each scene's `events` into the JSON form.
-        self._save_config_json(output_path)
+        self._save_manifest(output_path, scene_entries)
 
         print(f"✓ Saved mjswan application to: {output_path}")
 
