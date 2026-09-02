@@ -1,6 +1,8 @@
 # ONNX-traced MDP term bodies, mjlab-native runtime internals
 
-> Status: **Accepted (design)** — supersedes the *term-body representation* of
+> Status: **Accepted (design)** — §1 ("no new `manifest.json`") is superseded, and §2's PRNG
+> rule and §4's graph-reference base amended, by
+> [ADR 0006](0006-swn-simulation-document.md). Supersedes the *term-body representation* of
 > [ADR 0003](0003-declarative-mdp-terms-alongside-custom-js.md) and preserves the
 > *external engine API* of [ADR 0004](0004-headless-engine-core.md). This is a
 > pre-1.0 rewrite of the runtime's MDP-execution layer with no

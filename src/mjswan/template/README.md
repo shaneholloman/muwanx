@@ -26,46 +26,42 @@ npm install mjswan
 Requires Node.js 20+ and a bundler that handles TypeScript sources (Vite recommended.
 See [Custom MDP terms](#custom-mdp-terms) below for why).
 
-## Embedding a simulation (`mount`)
+## Embedding a simulation
 
-The package ships a self-contained library build (`dist/mjswan.js`) that renders a
-published mjswan simulation into any element. It bundles every dependency and co-locates
-its WASM, runs single-threaded by default (no COOP/COEP headers needed), and works
-cross-origin — so it can be loaded straight from a CDN:
+The package ships a self-contained library build (`dist/mjswan.js`) that renders an mjswan
+simulation into any element. It bundles every dependency and co-locates its WASM, runs
+single-threaded by default (no COOP/COEP headers needed), and works cross-origin — so it
+can be loaded straight from a CDN. Two layers, deliberately separate: `createEngine` is
+**bytes in, snapshot out** and never fetches; `mjswan/manifest` turns a build's
+`manifest.json` — the simulation document's one descriptor — into a lazy catalog of
+loadable things, and the page owns the fetching.
 
 ```js
-const { mount } = await import(
-  'https://cdn.jsdelivr.net/npm/mjswan@0.7.1/dist/mjswan.js'
-);
+const { createEngine } = await import('https://cdn.jsdelivr.net/npm/mjswan/dist/mjswan.js');
+const { parseManifest } = await import('https://cdn.jsdelivr.net/npm/mjswan/dist/manifest.js');
 
-// `source` points at a published simulation's config.json; every other asset
-// (scene.mjz, policy.onnx/json, motion.npz, splats) resolves relative to it.
-const sim = await mount(container, 'https://cdn.mjswan.com/scenes/<id>/config.json');
+// Every other asset (scene.mjz, mdp/…/*.onnx, policy/*.onnx, assets/*.npz) resolves
+// against the manifest's directory.
+const base = 'https://example.com/myapp/';
+const bytes = (path) => async () => (await fetch(new URL(path, base))).arrayBuffer();
+
+const engine = await createEngine(container);
+const catalog = parseManifest(await (await fetch(new URL('manifest.json', base))).text(), bytes);
+await engine.loadScene(await catalog.projects[0].scenes[0].buildScene());
 ```
 
 Or as a normal bundled import:
 
 ```ts
-import { mount } from 'mjswan';
-
-const sim = await mount(document.getElementById('viewer')!, configUrl);
+import { createEngine } from 'mjswan';
+import { parseManifest } from 'mjswan/manifest';
 ```
 
-`mount(element, source)` resolves, once the first scene is running, to an instance:
-
-```ts
-interface MjswanInstance {
-  // Capture the current frame as a JPEG Blob.
-  captureThumbnail(options?: { maxDim?: number; quality?: number }): Promise<Blob>;
-  // Tear down the simulation and free resources.
-  dispose(): void;
-}
-```
-
-`source` is either a **config.json URL** (assets resolve against its directory) or an
-**in-memory file resolver** `{ resolve(path): Promise<ArrayBuffer | null> }` for rendering
-locally-selected files without an upload round-trip. Call `unmount(element)` to dispose a
-mounted instance by its host element.
+The catalog's `buildScene({ policy, splat })` takes ids — `name2id` of the display names,
+the same values the bundled app's `?scene=` / `?policy=` parameters use. A `.swn` document
+(the same tree as a ZIP) renders the same way once unpacked into an in-memory resolver. See
+the [Engine API](https://mjswan.readthedocs.io/en/latest/api/engine/) for `setPolicy`,
+`camera`, `commands`, `subscribe`, `captureThumbnail` and `dispose`.
 
 ## Custom MDP terms
 
@@ -101,7 +97,8 @@ The build step bundles your source into the engine. See the
 
 | Import | Provides |
 |---|---|
-| `mjswan` | `mount`, `unmount` (the runtime library build) |
+| `mjswan` | `createEngine`, `policyGraphRefs` (the runtime library build) |
+| `mjswan/manifest` | `parseManifest`, `sanitizeName`, the `Manifest` types (the catalog parser) |
 | `mjswan/observation` | `ObservationBase`, `ObservationConfig` |
 | `mjswan/command` | `CommandManager`, command types and helpers |
 | `mjswan/event` | `EventBase`, event config and context types |

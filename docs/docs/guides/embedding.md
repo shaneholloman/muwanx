@@ -87,12 +87,12 @@ and chrome you mean rather than the first thing in the build:
 
 | Parameter | Effect |
 |---|---|
-| `project` | Select a project by display name or slug. |
-| `scene` | Select a scene by display name or slug. |
-| `policy` | Select a policy by display name or slug. Defaults to the one marked `default=True`. |
+| `project` | Select a project by id — its sanitized name, `newton_s_cradle` for `"Newton's Cradle"`. The display name works too; it is sanitized the same way. Defaults to the project marked `default=True`. |
+| `scene` | Select a scene by id. |
+| `policy` | Select a policy by id. Defaults to the one marked `default=True`. |
 | `panel` | `panel=0` starts with the control panel hidden. Useful in a small iframe. |
 | `ref` | `ref=0` starts with the motion-tracking reference ghost hidden. |
-| `config` | Load a `config.json` from another URL entirely, relative to the page. |
+| `manifest` | Load a `manifest.json` from another URL entirely, relative to the page. |
 | `hands` | `hands=1` puts WebXR-tracked hands in the simulation, see below. |
 
 `panel` and `ref` are booleans read as "off only when exactly `0`", and the app writes the
@@ -188,7 +188,7 @@ const bytes = (path: string) => async () =>
 
 const engine = await createEngine(document.getElementById('viewer')!);
 const catalog = parseManifest(
-  await (await fetch(new URL('assets/config.json', base))).text(),
+  await (await fetch(new URL('manifest.json', base))).text(),
   bytes,
 );
 

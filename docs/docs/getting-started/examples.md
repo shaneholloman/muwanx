@@ -189,16 +189,18 @@ See [examples/tutorial/minimum_policy.py](https://github.com/ttktjmt/mjswan/blob
 
 ## Multiple projects
 
-Each `add_project()` call maps to its own URL. The first project is always the root (`/`); the rest live at `/<id>/`.
+One build can hold several projects. The app opens on the one marked `default=True` (or
+the first added); a URL picks another by its id, the sanitized name: `?project=humanoids`,
+`?scene=g1`.
 
 ```python
 builder = mjswan.Builder(base_path="/demo/")
 
-quadrupeds = builder.add_project(name="Quadrupeds")
+quadrupeds = builder.add_project(name="Quadrupeds", default=True)
 quadrupeds.add_scene(spec=mujoco.MjSpec.from_file("go2/scene.xml"), name="Go2")
 quadrupeds.add_scene(spec=mujoco.MjSpec.from_file("go1/scene.xml"), name="Go1")
 
-humanoids = builder.add_project(name="Humanoids", id="humanoid")
+humanoids = builder.add_project(name="Humanoids")
 humanoids.add_scene(spec=mujoco.MjSpec.from_file("g1/scene.xml"), name="G1")
 
 builder.build().launch()

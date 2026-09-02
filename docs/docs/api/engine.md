@@ -11,7 +11,7 @@ three.js rendering, and ONNX Runtime Web for the policy and traced MDP terms. Th
 Reach for it in three cases:
 
 - **embedding** a simulation in an app you already own, with your own UI;
-- **loading a build's `config.json`** and driving scene/policy switching yourself;
+- **loading a build's `manifest.json`** and driving scene/policy switching yourself;
 - **authoring custom MDP terms** in TypeScript, with type support.
 
 ```bash
@@ -19,8 +19,8 @@ npm install mjswan
 ```
 
 !!! note "Two layers, deliberately separate"
-    `createEngine` is **bytes in, snapshot out** — it knows nothing about `config.json`
-    and never fetches anything. `mjswan/manifest` parses a build's `config.json` into a
+    `createEngine` is **bytes in, snapshot out** — it knows nothing about `manifest.json`
+    and never fetches anything. `mjswan/manifest` parses a build's `manifest.json` into a
     catalog of loadable things. Keeping them apart is what lets the same engine serve the
     bundled React app, mjswan Cloud, and your own page.
 
@@ -109,10 +109,8 @@ The engine never fetches. Every asset arrives as `Bytes` — an `ArrayBuffer`, o
       policy?: PolicyInput | null;
       splat?: SplatInput | null;
       viewer?: ViewerConfig;
-      events?: EventConfig[];              // scene-scoped events
-      terrainData?: TerrainData;
+      terrainData?: TerrainData;           // spawn patches the policies' events may draw from
       controlDt?: number;                  // mjlab's timestep * decimation
-      graphs?: Record<string, Bytes>;      // "event/push_robot.onnx" → bytes
       plugins?: EnginePlugins;             // scene-scoped custom terms
     }
     ```
@@ -121,9 +119,9 @@ The engine never fetches. Every asset arrives as `Bytes` — an `ArrayBuffer`, o
 
     ```ts
     interface PolicyInput {
-      config: object;                      // parsed policy.json
+      config: object;                      // the manifest's policy entry merged with its MDP
       onnx: Bytes;                         // the trained network
-      graphs?: Record<string, Bytes>;      // "walk/obs/policy.onnx" → bytes
+      graphs?: Record<string, Bytes>;      // "mdp/mdp_0/obs/actor.onnx" → bytes
       motions?: MotionInput[];
       plugins?: EnginePlugins;             // policy-scoped custom terms
     }
@@ -139,12 +137,12 @@ The engine never fetches. Every asset arrives as `Bytes` — an `ArrayBuffer`, o
     }
     ```
 
-`graphs` is keyed by the path the config refers to a graph by — the same
-`<policy-id>/obs/`, `term/`, `command/` and scene-scoped `event/` layout the
-[build emits](../guides/how-it-works.md#artifact-layout). A missing entry warns and skips
-that term rather than failing the load. `policyGraphRefs(config)` and
-`eventGraphRefs(events)` enumerate what a config needs, for a caller assembling inputs by
-hand.
+`graphs` is keyed by the path the config refers to a graph by — the scene-relative
+`mdp/<mdp-id>/{obs,term,command,event}/` layout the
+[build emits](../guides/how-it-works.md#artifact-layout). Events travel with the policy:
+they are part of its MDP, so `setPolicy` swaps them along with everything else. A missing
+entry warns and skips that term rather than failing the load. `policyGraphRefs(config)`
+enumerates what a config needs, for a caller assembling inputs by hand.
 
 ## `mjswan/manifest`
 
@@ -153,14 +151,18 @@ import { parseManifest, type Catalog } from 'mjswan/manifest';
 ```
 
 ```ts
-function parseManifest(config: AppConfig | string, source: ByteSource): Catalog
+function parseManifest(manifest: Manifest | string, source: ByteSource): Catalog
 type ByteSource = (relPath: string) => Bytes
 ```
 
-Turns a Builder `config.json` plus a byte source into a typed catalog. `source` maps a
-build-relative path (`main/assets/g1/scene.mjz`) to bytes — usually a `fetch` wrapper over
+Turns a build's `manifest.json` plus a byte source into a typed catalog. `source` maps a
+build-relative path (`my_robots/g1/scene.mjz`) to bytes — usually a `fetch` wrapper over
 the deployment's base URL, but an in-memory resolver works too, which is how a page can
-render locally-selected files without an upload round-trip.
+render locally-selected files, or an unpacked `.swn`, without an upload round-trip.
+
+The parser refuses a manifest whose `format` is newer than it understands, naming both
+values and the document's `version`, and never gates on `version` itself: that is the
+release that wrote the document, for a host to pick a matching engine by.
 
 The catalog is lazy: nothing is fetched until you call a `build()`.
 
@@ -169,25 +171,27 @@ const base = 'https://example.com/myapp/';
 const bytes = (path: string) => async () =>
   (await fetch(new URL(path, base))).arrayBuffer();
 
-const config = await (await fetch(new URL('assets/config.json', base))).text();
-const catalog = parseManifest(config, bytes);
+const manifest = await (await fetch(new URL('manifest.json', base))).text();
+const catalog = parseManifest(manifest, bytes);
 
-const project = catalog.projects[0];           // the `id: null` "main" project
+const project = catalog.projects[0];           // the default project comes first
 const scene = project.scenes[0];
 await engine.loadScene(await scene.buildScene());          // defaults
-await engine.loadScene(await scene.buildScene({ policy: 'Locomotion' }));
+await engine.loadScene(await scene.buildScene({ policy: 'locomotion' }));  // by id
 ```
 
 | Type | Shape |
 |---|---|
-| `Catalog` | `{ projects: ProjectCatalog[], pluginsPath?: string }` |
-| `ProjectCatalog` | `{ name, id, scenes }` |
-| `SceneEntry` | `{ name, camera?, splatSection, policies, splats, buildScene(opts?) }` |
-| `PolicyEntry` | `{ name, default, motions, build() }` |
-| `SplatEntry` | `{ name, control, transform, build() }` |
+| `Catalog` | `{ projects: ProjectCatalog[], default: string, pluginsPath?: string }` |
+| `ProjectCatalog` | `{ name, id, default?, scenes }` |
+| `SceneEntry` | `{ id, name, camera?, splatSection, policies, splats, buildScene(opts?) }` |
+| `PolicyEntry` | `{ id, name, default, motions, build() }` |
+| `SplatEntry` | `{ id, name, control, transform, build() }` |
 
-`sanitizeName(name)` mirrors the Python `name2id` slug helper, for matching a URL fragment
-against a display name.
+Every entry carries its `id` — `name2id(name)`, the directory it lives in and the value
+the bundled app's `?project=` / `?scene=` / `?policy=` parameters take. `sanitizeName(name)`
+is the same function in TypeScript, pinned to the Python one by a shared table of cases,
+so a URL written from a display name resolves to the same entry on both sides.
 
 `pluginsPath` is set for a custom-JavaScript build: a trusted app imports that ESM and
 passes its exports as `EnginePlugins`. mjswan Cloud ignores it — see

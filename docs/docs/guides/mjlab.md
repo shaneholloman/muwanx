@@ -168,7 +168,7 @@ builder.build().launch()
 |---|---|
 | `env_cfg.scene` | the MuJoCo spec, compiled and bundled as `scene.mjz` |
 | `env_cfg.observations` / `actions` / `commands` / `terminations` | defaults for every policy on the scene, [traced to ONNX](how-it-works.md) |
-| `env_cfg.events` | scene-scoped events; `reset_root_state_uniform` is swapped for a spawn on a random flat terrain patch, since the browser runs one env where mjlab trains many spread across the terrain |
+| `env_cfg.events` | the scene's default events, which every policy that declares none inherits into its MDP; `reset_root_state_uniform` is swapped for a spawn on a random flat terrain patch, since the browser runs one env where mjlab trains many spread across the terrain |
 | `env_cfg.sim.timestep × decimation` | `control_dt` |
 | `env_cfg.viewer` | the initial camera |
 | terrain flat-patch table | baked spawn points |

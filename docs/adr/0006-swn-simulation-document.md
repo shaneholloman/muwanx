@@ -1,6 +1,6 @@
 # The `.swn` simulation document — one manifest, MDP configs, scene-scoped layout
 
-> Status: **Proposed (design)** — supersedes **§1 of
+> Status: **Accepted** — supersedes **§1 of
 > [ADR 0005](0005-onnx-traced-terms-superseding-the-declarative-dsl.md)**
 > ("Representation, not artifacts — extend `config.json` + `policy.json`", which
 > states verbatim *"No new `manifest.json`."*) and amends its **§2** (the PRNG is

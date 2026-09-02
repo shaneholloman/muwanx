@@ -112,8 +112,9 @@ def setup_builder() -> mjswan.Builder:
     scene = project.add_scene_mjlab(TASK_ID)
 
     meta = json.loads((HERE / "policy_meta.json").read_text())
+    mdp = mjswan.MdpConfig()  # one MDP, traced once, shared by every checkpoint
     for name in meta.pop("checkpoints"):
-        scene.add_policy(pathlib.Path(name).stem, onnx.load(HERE / name), **meta)
+        scene.add_policy(pathlib.Path(name).stem, onnx.load(HERE / name), mdp=mdp, **meta)
     return builder
 
 
@@ -128,7 +129,8 @@ if __name__ == "__main__":
 Canonical run command, from the repo root: `python -m mjswan_app.main`.
 
 - W&B instead of local checkpoints: replace the loop with `scene.add_policy_wandb("entity/project/run_id")` and drop the meta plumbing.
-- `add_policy` accepts `observations=` / `terminations=` / `actions=` / `commands=`. Leave all four out: `add_scene_mjlab` supplies `control_dt` and the trace env, and each term set already defaults to the scene's env config. To change a term set, mutate `env_cfg` instead (step 6) and pass `env_cfg=` to `add_scene_mjlab` *before* any policy is added, because a scene built first never sees the mutation.
+- `add_policy` accepts the five MDP term sets — `observations=` / `actions=` / `terminations=` / `commands=` / `events=` — or one `mdp=mjswan.MdpConfig(...)` carrying all five, shared by every policy handed the same object. Leave them all out: `add_scene_mjlab` supplies `control_dt` and the trace env, each term set already defaults to the scene's env config (events included), and `add_policy_wandb` builds one `MdpConfig` per call so a run's checkpoints share one traced MDP. When looping over local checkpoints as above, build one `MdpConfig()` before the loop and pass `mdp=` to each `add_policy` for the same effect. To change a term set, mutate `env_cfg` instead (step 6) and pass `env_cfg=` to `add_scene_mjlab` *before* any policy is added, because a scene built first never sees the mutation.
+- A single-input network — every mjlab export — needs no `in_keys`: its one observation group lands under the default slot, `actor`. Only a network with several inputs declares `in_keys=` (and `out_keys=`) on `add_policy`, and the build refuses one that does not.
 - When `terms.py` exists, import it in `main.py` for its side effects: `from mjswan_app import terms  # noqa: F401`.
 - No `ViewerConfig`. The default `OriginType.AUTO` tracks the first non-world body.
 
@@ -171,7 +173,8 @@ import mjswan_app.terms  # only if terms.py exists
 TASK_ID = "Mjlab-Velocity-Flat-Unitree-G1"
 cfg = load_env_cfg(TASK_ID, play=True)
 cfg.scene.num_envs = 1
-groups = resolve_runner_defaults(TASK_ID).policy_obs_groups
+obs_groups = resolve_runner_defaults(TASK_ID).obs_groups or {}
+groups = obs_groups.get("actor")
 report = run_parity(
     build_mjlab_env(cfg),
     obs_group=groups[0] if groups else "actor",

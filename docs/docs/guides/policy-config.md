@@ -6,9 +6,10 @@ icon: octicons/file-code-16
 
 A policy attached to a scene needs more than an ONNX file — the browser runtime has to
 know which observations to feed in, how to interpret the action, what commands to expose
-in the UI, and when to reset the episode. mjswan takes all of that as Python kwargs on
-`add_policy()`, using [mjlab](https://github.com/mujocolab/mjlab){:target="_blank"}'s own
-config classes.
+in the UI, when to reset the episode, and what to randomize. Those five term sets are the
+policy's **MDP**, and mjswan takes them as Python kwargs on `add_policy()` — or as one
+[`MdpConfig`](../api/core.md#mdpconfig) shared by several policies — using
+[mjlab](https://github.com/mujocolab/mjlab){:target="_blank"}'s own config classes.
 
 This page is the practical reference for those kwargs. For *how* they become browser
 artifacts, see [How the Build Works](how-it-works.md).
@@ -46,10 +47,13 @@ full list):
 |---|---|
 | `policy_joint_names` | Ordered list of joint names the policy controls. Required for browser-side actuator mapping. |
 | `default_joint_pos` | Default pose, one entry per `policy_joint_names`. Used when `use_default_offset=True` on the action term and when an observation subtracts the default pose. |
-| `observations` | A single `ObservationGroupCfg`, mjlab's whole `env_cfg.observations` dict, or a dict keyed by ONNX input tensor name. Prefer one of the first two — see [below](#why-not-a-dict-of-groups). |
+| `observations` | A single `ObservationGroupCfg`, mjlab's whole `env_cfg.observations` dict, or a dict keyed by the slot names `in_keys` uses. Prefer one of the first two — see [below](#why-not-a-dict-of-groups). |
 | `actions` | `dict[str, ActionTermCfg]` keyed by term name (e.g. `"joint_pos"`). |
 | `commands` | `dict[str, CommandTermConfig]` keyed by policy-visible command name. |
 | `terminations` | `dict[str, TerminationTermCfg]` keyed by termination name. |
+| `events` | `dict[str, EventTermCfg]` keyed by event name, in any mode. Defaults to the scene's events — see [Events](#events). |
+| `mdp` | An [`MdpConfig`](../api/core.md#mdpconfig) carrying all five term sets, shared by every policy handed the same object. Exclusive with the five kwargs above — see [Sharing one MDP](#sharing-one-mdp-between-policies). |
+| `in_keys` / `out_keys` | The network's input and output **slot tables**, needed only for a multi-input network — see [Multi-input policies](#multi-input-policies). |
 | `policy_num_actions` | Output width for policies whose action count cannot be inferred from `policy_joint_names` — muscle-driven ones, which drive actuators rather than joints. |
 | `encoder_bias` | Optional per-joint bias; the browser writes `processed_action - encoder_bias` to the actuators (mirrors mjlab). |
 | `clip_actions` | Symmetric bound on the raw policy output, applied before any action term, mirroring rsl-rl's `RslRlVecEnvWrapper`. `add_policy_wandb` fills it in from the task's runner config. Not `ActionTermCfg.clip` — see [Actions](#actions). |
@@ -58,10 +62,10 @@ full list):
 ## Defaults from an mjlab env config
 
 On a scene from [`add_scene_mjlab`](mjlab.md), `observations` / `commands` / `actions` /
-`terminations` each default to the matching field of the task's `env_cfg`, so a policy
-from an mjlab task needs none of them spelled out. Pass one to override that field only;
-pass `{}` to say the policy genuinely has none. `clip_actions` likewise defaults to the
-task's runner config.
+`terminations` / `events` each default to the matching field of the task's `env_cfg`, so a
+policy from an mjlab task needs none of them spelled out. Pass one to override that field
+only; pass `{}` to say the policy genuinely has none. `clip_actions` likewise defaults to
+the task's runner config.
 
 Per-policy `env_cfg=` takes a different config for one policy — in mjlab terms, several
 env configs sharing one `scene`, since an env has exactly one observation design. Its
@@ -72,6 +76,35 @@ silently reinterpreted.
 A scene from plain `add_scene` has no config to fall back on, so there every field means
 exactly what it says — and it needs a tracing env, see
 [below](#scenes-that-are-not-mjlab-tasks).
+
+## Sharing one MDP between policies
+
+The checkpoints of one training run were trained against one MDP, and the build should
+trace it once. Build the term sets into an `MdpConfig` and hand the same object to each
+policy:
+
+```python
+mdp = mjswan.MdpConfig(
+    observations=ObservationGroupCfg(terms={...}),
+    actions={"joint_pos": JointPositionActionCfg(...)},
+    terminations={"time_out": TerminationTermCfg(func=term_fns.time_out, time_out=True)},
+    commands={"velocity": mjswan.velocity_command()},
+)
+for step in (1000, 2000, 3000):
+    scene.add_policy(name=f"model_{step}", policy=onnx.load(f"model_{step}.onnx"), mdp=mdp)
+```
+
+Identity is by object: two `MdpConfig`s with equal contents are two MDPs. The build writes
+each one once, under `mdp/<mdp-id>/` in the scene directory — `mdp_0`, `mdp_1`, … in
+first-use order, or `name2id(name)` when the config is named — and every policy entry
+points at its MDP by id. Passing the five term sets straight to `add_policy` builds an
+anonymous `MdpConfig` for that policy alone; `add_policy_wandb` builds one per call, so a
+run's checkpoints share it without any of this being spelled out.
+
+The first policy to use an `MdpConfig` fills its unset fields from the scene's env config
+and adapts mjlab types in place; policies sharing one must agree on `policy_joint_names`
+and on the sidecar blocks that feed the trace (a disagreement fails the build — give the
+odd one its own MDP).
 
 ## Observations
 
@@ -122,17 +155,40 @@ for config compatibility and ignored — there is no training in the browser.
 
 ### Why not a dict of groups?
 
-`observations` also accepts `dict[str, ObservationGroupCfg]`, but the keys are **ONNX
-input tensor names**, not labels — the runtime feeds each group's vector as the input of
-that name. An ONNX policy exported by mjlab has exactly one input, so the dict form buys
-nothing and costs a silent failure mode: a group under the wrong key produces a console
-warning and a policy that never acts. Passing the group itself lets mjswan pick the key.
+`observations` also accepts `dict[str, ObservationGroupCfg]`, keyed by **slot name** —
+the name the policy's `in_keys` table uses for the tensor that fills one of the network's
+inputs. A policy exported by mjlab has exactly one input, so the dict form buys nothing:
+a lone group lands under `actor`, the default slot, and the network's own tensor name never
+matters (the mapping is positional). Passing the group itself is the whole story for a
+single-input policy, whatever its input is called.
 
-The dict form is for the rare multi-input policy, where the config's `in_keys` names each
-input. Groups named for a training-only mjlab network (`"critic"`) are dropped with a
-warning: only the actor is exported to ONNX, so nothing would consume them, and leaving
-them in would trace, bundle, and evaluate them every control step for a value nothing
-reads.
+Groups named for a training-only mjlab network (`"critic"`) are dropped: only the actor is
+exported to ONNX, so nothing would consume them, and leaving them in would trace, bundle,
+and evaluate them every control step for a value nothing reads.
+
+### Multi-input policies
+
+A network with several inputs — a proprioceptive group and a command group, plus a
+recurrent carry — needs a **slot table**: `in_keys[i]` names what fills its *i*-th input,
+an observation group or a tensor the runtime synthesizes (`is_init`, `adapt_hx`,
+`time_step`). Nothing else records where the synthesized tensors sit relative to the
+groups, so `add_policy` refuses a multi-input network without one and checks the table's
+length against the network's input count; a slot naming no group fails the build.
+
+```python
+scene.add_policy(
+    name="Facet",
+    policy=onnx.load("facet.onnx"),  # four inputs
+    observations={"actor": proprio_group, "command": command_group},
+    in_keys=["command", "actor", "is_init", "adapt_hx"],
+    out_keys=["command", "policy", ..., "action", ...],  # one label per output
+)
+```
+
+`out_keys` is the same table for the outputs; the runtime reads `action` and, for a
+recurrent policy, `["next", "adapt_hx"]`. Both tables are written to the manifest only
+when they differ from the defaults (`["actor"]`, `["action"]`), which a single-input policy
+never needs to declare. See `examples/demo/main.py` for the three Go2 policies.
 
 ### Coming from mjlab
 
@@ -294,6 +350,26 @@ unfused — one graph out of one buys no call and costs a wire shape.
 A termination the tracer cannot express fails the build. Registering a hand-written
 TypeScript class with `register_termination` is the escape hatch.
 
+## Events
+
+Events are the fifth term set, and the one that most obviously belongs to a policy rather
+than a scene: a policy trained with a push expects the push, a policy trained without one
+does not. Pass them like the others — mjlab's own `EventTermCfg`s, in any of the four modes
+(`startup`, `reset`, `interval`, `manual`) — or leave them to default to the scene's
+`events` (`add_scene(events=...)` / `set_events`), which is what an mjlab task's
+`env_cfg.events` becomes:
+
+```python
+scene.add_policy(
+    ...,
+    events={"push": EventTermCfg(func=evt_fns.push_by_setting_velocity, mode="interval", ...)},
+)
+```
+
+Switching between policies with different MDPs restores the model values the previous
+MDP's `mode="startup"` randomization changed, reseeds the term PRNG, then runs the new
+MDP's startup events, so the randomization never compounds and A → B → A reproduces A.
+
 ## Scenes that are not mjlab tasks
 
 Tracing needs a live environment to read shapes from and to resolve `SceneEntityCfg`
@@ -327,8 +403,10 @@ message naming this call.
 
 ## Legacy: passing a JSON file via `config_path=`
 
-`add_policy(config_path="policy.json")` still accepts a hand-written JSON file. mjswan
-reads it, merges the Python-side `commands` / `observations` / `actions` / `terminations`
-into it, and writes the result alongside the ONNX. Prefer the Python kwargs above for new
-policies — the JSON form is mostly useful when importing a config that was already
-produced by another tool.
+`add_policy(config_path="policy.json")` still accepts a JSON sidecar for the checkpoint's
+own defaults — `policy_joint_names`, `default_joint_pos`, an `actions` block carrying PD
+gains — as an exporter might write it. mjswan merges it into the policy's manifest entry at
+build time, Python-side fields winning; the build's output is `manifest.json` alone, and no
+per-policy JSON is written. A sidecar's `onnx` block, and any `in_keys` / `out_keys` in it,
+are ignored with a warning: the slot tables are declared on `add_policy`, where they are
+checked against the network. Prefer the Python kwargs above for new policies.

@@ -42,16 +42,19 @@ Constructor arguments:
 
 ## Project
 
-A project groups related scenes under a single URL. The first project added becomes the root (`/`); additional projects are reachable at `/<project-id>/`.
+A project groups related scenes. The app opens on the project marked `default=True` (or
+the first added), and a URL selects another with `?project=<id>`:
 
 ```python
-project = builder.add_project(name="My Robots")
-
-# Explicit URL slug — accessible at /demo/
-demo = builder.add_project(name="Demo", id="demo")
+project = builder.add_project(name="My Robots", default=True)
+demo = builder.add_project(name="Demo")  # ?project=demo
 ```
 
-If you omit `id`, mjswan derives it automatically from the project name (spaces and hyphens become underscores, lowercased). The first project is always the root regardless of `id`.
+Every project, scene, policy and splat has an **id** derived from its name — lowercased,
+runs of anything but `a-z0-9` collapsed to `_`, edges trimmed, so `"Newton's Cradle"`
+becomes `newton_s_cradle`. The id is the directory the object is written to and the value
+the URL parameters take. Two siblings whose names sanitize alike get `<id>` and `<id>_1`,
+with a warning naming both.
 
 ## Scene
 
@@ -93,15 +96,22 @@ task.
 ### Events
 
 Events are the reset and randomization terms mjlab attaches to a task — pushing the robot,
-perturbing joint positions on reset, randomizing friction at startup. They are
-**scene-scoped**, not per-policy: the runtime keeps one event manager per scene across
-policy switches, and `mode="startup"` fires once at scene load, before any policy is
-chosen.
+perturbing joint positions on reset, randomizing friction at startup. Like observations,
+actions, terminations and commands, they belong to the **MDP a policy runs against**
+([`MdpConfig`](../api/core.md#mdpconfig)): a policy trained with a push gets its push, and
+switching to a policy trained without one switches the push off. A scene's `events` are
+the default for any of its policies that declares none:
 
 ```python
 scene = project.add_scene(spec=spec, name="My Robot", control_dt=0.02, events=events)
 scene.set_events(events)  # equivalent, after the fact
+scene.add_policy(..., events={"push": push})  # this policy's own instead
 ```
+
+Switching to a policy with a different MDP first restores the model values the previous
+MDP's startup randomization changed, reseeds the term PRNG, and then runs the new MDP's
+`mode="startup"` events — so A → B → A reproduces A's first draw, however long the session
+has run.
 
 ## Splat
 
@@ -268,42 +278,38 @@ policy.add_motion_wandb(
 
 ## Output structure
 
-`builder.build()` writes the following layout to the output directory:
+`builder.build()` writes the engine plus the **simulation document**: one `manifest.json`
+describing every project, scene, MDP, policy and splat, and a directory per project with
+its data.
 
 ```
 dist/
 ├── index.html
 ├── logo.svg
-├── manifest.json
 ├── robots.txt
-├── assets/
-│   ├── config.json          ← project/scene/policy manifest
-│   └── …                    ← compiled JS/CSS
+├── manifest.json            ← the document's one descriptor: format, version, projects
+├── assets/                  ← compiled JS / CSS / WASM — the engine
 ├── _headers                 ← only when Builder(mt=True)
 ├── coi-serviceworker.js     ← only when Builder(mt=True)
-└── <project-id>/            ← "main" for the first project
-    ├── index.html
-    ├── logo.svg
-    ├── manifest.json
-    └── assets/
-        └── <scene-id>/
-            ├── scene.mjz          ← or scene.mjb
-            ├── <policy>.onnx      ← the trained network
-            ├── <policy>.json      ← its config: slots, layout, actions, commands
-            ├── <policy>/          ← that policy's traced graphs
-            │   ├── obs/<group>.onnx     ← traced observation group (usually fused into one)
-            │   ├── term/<name>.onnx     ← traced termination bodies
-            │   └── command/<name>.onnx
-            ├── event/<name>.onnx  ← scene-scoped, referenced from config.json
-            ├── <motion>.npz       ← one per distinct clip, shared by the scene's policies
-            └── <splat>.spz        ← only when source= is used
+└── <project-id>/            ← name2id(project name), e.g. my_robots/
+    └── <scene-id>/          ← name2id(scene name)
+        ├── scene.mjz              ← or scene.mjb
+        ├── mdp/<mdp-id>/          ← one per MdpConfig: mdp_0, mdp_1, … or its name
+        │   ├── obs/<group>.onnx       ← traced observation group (usually one fused graph)
+        │   ├── term/<name>.onnx       ← traced termination bodies
+        │   ├── command/<name>.onnx
+        │   └── event/<name>.onnx      ← the MDP's events
+        ├── policy/<policy-id>.onnx    ← the trained network, one per policy
+        └── assets/
+            ├── <motion-id>.npz        ← one per distinct clip, shared by the scene's policies
+            └── <splat-id>.spz         ← only when source= is used
 ```
 
 The result is a fully static site: copy `dist/` to any static host (GitHub Pages, Netlify, S3, …) and it works without a server.
 
-The `obs/`, `term/`, `command/` and `event/` directories hold the MDP term bodies traced to
-ONNX at build time. Each policy's graphs live under its own directory, so two policies in
-one scene never share a file — see [How the Build Works](../guides/how-it-works.md).
+The document is also one file: `app.save_document()` writes `dist.swn`, a ZIP of the
+manifest and the project directories with no engine in it, which `mjswan info` and
+`mjswan publish` accept wherever they accept a directory.
 
 ## Environment variables
 
