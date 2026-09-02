@@ -40,7 +40,7 @@ writes all of it once per policy, because the policy is the only unit that owns
 an MDP. There are 7 distinct MDPs in that example and dozens of copies of them.
 
 Policies are named for the W&B file they came from — `name = pt_path.stem`, so
-`model_0`, `model_50`, … (`wandb_io.py:344`) — and mjlab's runs for one task are
+`model_0`, `model_50`, … (`wandb_io.py:347`) — and mjlab's runs for one task are
 a **resume chain**: run *n+1* starts from run *n*'s last checkpoint, so the only
 name two runs share is that boundary. `add_policy_wandb` drops the repeat with a
 `seen_names` set (`scene.py:729-731`), which is the right answer for a resume
@@ -138,7 +138,7 @@ Two rules generate the whole layout:
 `index.html` / `logo.svg` copies
 (`builder.py:825-834`) are deleted — they served sub-directory routing, and the
 SPA selects a project from `?project=` against a build-time base URL
-(`App.tsx:37,100`). A URL like `…/mjswan/myosuite/` becomes a 404 rather than
+(`App.tsx:42,105`). A URL like `…/mjswan/myosuite/` becomes a 404 rather than
 rendering the wrong project, which is the correct outcome.
 
 ### 3. `MdpConfig` — the MDP is a named unit, and `event` belongs to it
@@ -199,7 +199,7 @@ means re-publishing — so a human-readable id that could in principle be reused
 across builds does not break a shared link.
 
 The URL parameters `?project=`, `?scene=` and `?policy=` resolve against these
-ids. `pickByName` (`App.tsx:45`) matches the sanitized form only; the raw-name
+ids. `pickByName` (`App.tsx:50`) matches the sanitized form only; the raw-name
 fallback is removed.
 
 ### 5. Observation group keys, and what `in_keys` actually is
@@ -212,7 +212,7 @@ names are read from the session at run time and never appear in any config.
 It is not a list of observation groups. In `examples/demo`, the go2 policies
 declare four slots — `['policy', 'is_init', 'adapt_hx', 'command_']` — of which
 two are observation groups and two (`is_init`, the recurrent carry `adapt_hx`)
-are synthesized by the runtime (`OnnxModule.ts:49-52`, `runtime.ts:1357-1359`).
+are synthesized by the runtime (`OnnxModule.ts:49-52`, `runtime.ts:1396-1398`).
 The observation dict's key order cannot express that, because two of the four
 slots are not in it.
 
@@ -240,7 +240,7 @@ Consequences:
 - The `name === 'obs' && configuredInKeys.includes('policy')` special case
   (`OnnxModule.ts:121-123`) is deleted. It was a fossil of the `"policy"`
   default.
-- The `PolicyConfig.observations` docstring (`policy.py:49-51`) currently says
+- The `PolicyConfig.observations` docstring (`policy.py:50`) currently says
   the keys are "**ONNX input names**". That is wrong — `g1/locomotion.onnx`'s
   real input is `observation` while its config declares `["policy"]`, and the
   go2 models' real inputs are `l_kwargs_policy_` / `arg1` — and it is corrected
@@ -373,7 +373,7 @@ single 50MB PUT, and forfeit incremental publishing. When the CLI is handed a
 
 Because §3 makes the event set switch with the policy, switching must re-run
 `mode="startup"` events, and re-running them must not compound.
-`ModelFieldDefaults` (`core/event/modelFieldDr.ts:51`) snapshots each model
+`ModelFieldDefaults` (`core/event/modelFieldDr.ts:52`) snapshots each model
 field on first touch, and `EventManager` constructs one per startup pass
 (`EventManager.ts:149`). It is **hoisted to scene lifetime**, so the compiled
 values remain the base across any number of switches.
@@ -390,12 +390,12 @@ rule the runtime already applies to the event of the same class. `loadEnvironmen
 does exactly this today:
 
 ```ts
-// runtime.ts:375 — "Reseed so two loads of the same scene draw the same randomness."
+// runtime.ts:393 — "Reseed so two loads of the same scene draw the same randomness."
 this.termRng = new SeededRng(this.termSeed);
 ```
 
 An MDP switch is a scene load in every way that matters to randomness, so it gets
-the same treatment. `termSeed` is the session's own seed (`runtime.ts:632`), held
+the same treatment. `termSeed` is the session's own seed (`runtime.ts:664`), held
 `readonly`, so the consequences are:
 
 - A scene's randomization is a function of **(session seed, MDP)** alone — not of
@@ -537,7 +537,7 @@ would have to change:
   (`tracer.py:379`).
 - The manifest's `input_slots` (`slots_json`, `tracer.py:588`) is the contract
   telling the runtime what to feed each input, and a fused observation graph also
-  carries `layout` — the per-term widths in concat order (`_onnx_build.py:311`).
+  carries `layout` — the per-term widths in concat order (`_onnx_build.py:309-310`).
 - `slots_json` re-reads the exported graph's real inputs and **drops slots the
   exporter folded into constants** (`tracer.py:600-604`). A graph and its slot
   list are therefore a matched pair produced by one specific torch version; you
