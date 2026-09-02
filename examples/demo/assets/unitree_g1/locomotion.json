@@ -61,17 +61,6 @@
     0.0,
     0.0
   ],
-  "onnx": {
-    "path": "policy/g1/g1_velocity.onnx",
-    "meta": {
-      "in_keys": [
-        "policy"
-      ],
-      "out_keys": [
-        "action"
-      ]
-    }
-  },
   "actions": {
     "joint_pos": {
       "type": "joint_position",

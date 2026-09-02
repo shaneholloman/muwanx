@@ -33,6 +33,7 @@ from .envs.mdp.actions.actions import (
     MuscleActivationActionCfg,
     validate_muscle_actuators,
 )
+from .policy import DEFAULT_IN_KEYS, DEFAULT_OUT_KEYS, RUNTIME_INPUT_SLOTS
 from .project import ProjectConfig, ProjectHandle
 from .scene import SceneConfig
 from .splat import SplatConfig
@@ -201,6 +202,64 @@ class _SceneSteps:
 
     def close(self) -> None:
         self._progress.remove_task(self._task)
+
+
+def _strip_slot_tables(sidecar: dict, config_src: Path) -> dict:
+    """Drop a sidecar's ``onnx`` block and slot tables; those are declared in Python now.
+
+    ``in_keys`` / ``out_keys`` (top-level or under ``onnx.meta``) used to ride in from
+    here. A single-input policy never needed them — its one input takes its one group —
+    and a multi-input one declares them on ``add_policy``, where the build checks them
+    against the network (ADR 0006 §5). Found here they are ignored with a warning rather
+    than obeyed, so a stale table cannot quietly win over the code. ``onnx.path`` named
+    the network's old location and means nothing to the build either.
+    """
+    onnx_block = sidecar.get("onnx")
+    meta = (onnx_block.get("meta") or {}) if isinstance(onnx_block, dict) else {}
+    found = [k for k in ("in_keys", "out_keys") if k in sidecar or k in meta]
+    if found:
+        warnings.warn(
+            f"{config_src.name} carries {found}; slot tables in a config_path sidecar "
+            "are ignored. Declare them on add_policy(in_keys=..., out_keys=...) — a "
+            "single-input policy needs neither (ADR 0006 §5).",
+            category=RuntimeWarning,
+            stacklevel=2,
+        )
+    return {
+        k: v for k, v in sidecar.items() if k not in ("onnx", "in_keys", "out_keys")
+    }
+
+
+def _input_slots(policy, obs_keys: list[str]) -> list[str]:
+    """The policy's effective ``in_keys``, checked against its MDP's observation groups.
+
+    Declared, it is taken as declared. Otherwise the network has one input
+    (``add_policy`` refused a multi-input policy without a table) and its one
+    observation group fills it, whatever the group is called; with several groups the
+    default slot must be one of them. Every slot must then name a group that exists or a
+    tensor the runtime supplies — anything else would surface at playback as a missing
+    input, with the policy silently inert.
+    """
+    if policy.in_keys is not None:
+        keys = list(policy.in_keys)
+    elif len(obs_keys) == 1:
+        keys = list(obs_keys)
+    elif not obs_keys or DEFAULT_IN_KEYS[0] in obs_keys:
+        keys = list(DEFAULT_IN_KEYS)
+    else:
+        raise ValueError(
+            f"Policy {policy.name!r} has one ONNX input but {len(obs_keys)} observation "
+            f"groups ({obs_keys}) and no in_keys; pass in_keys=[<group>] naming the one "
+            "that feeds it, or hand over just that group."
+        )
+    unknown = [k for k in keys if k not in obs_keys and k not in RUNTIME_INPUT_SLOTS]
+    if unknown and obs_keys:
+        raise ValueError(
+            f"Policy {policy.name!r}: in_keys names {unknown}, which is neither one of "
+            f"its observation groups ({obs_keys}) nor a tensor the runtime supplies "
+            f"({sorted(RUNTIME_INPUT_SLOTS)}). Playback would find no input for it."
+        )
+    return keys
 
 
 class Builder:
@@ -467,7 +526,8 @@ class Builder:
             )
             return {}
         with open(config_src, "r") as f:
-            return json.load(f)
+            sidecar = json.load(f)
+        return _strip_slot_tables(sidecar, config_src)
 
     def _serialize_mdp(
         self,
@@ -592,13 +652,21 @@ class Builder:
         return entry
 
     def _serialize_policy_entry(
-        self, policy, mdp_id: str, sidecar: dict, motion_files: dict[str, str]
+        self,
+        policy,
+        mdp_id: str,
+        sidecar: dict,
+        motion_files: dict[str, str],
+        *,
+        obs_keys: list[str],
     ) -> dict:
         """One policy's manifest entry: the checkpoint's own metadata plus its MDP ref.
 
         The sidecar's keys pass through except the MDP sections (merged by
-        :meth:`_serialize_mdp`) and ``onnx``, whose ``meta.in_keys`` / ``out_keys`` land
-        as the top-level slot tables (ADR 0006 §5). Python-side fields win over it.
+        :meth:`_serialize_mdp`); its slot tables were dropped on load. Python-side fields
+        win over it. ``obs_keys`` are the MDP entry's observation groups, which the slot
+        table is checked against (ADR 0006 §5); a table equal to the runtime's default is
+        omitted, so the common single-input policy carries none.
         """
         entry: dict = {
             "id": policy.id,
@@ -607,15 +675,13 @@ class Builder:
             "mdp": mdp_id,
             "onnx": f"policy/{policy.id}.onnx",
         }
-        skip = {*self._MDP_SIDECAR_KEYS, "onnx", "in_keys", "out_keys", "id", "name"}
-        skip |= {"mdp", "default", "motions"}
+        skip = {*self._MDP_SIDECAR_KEYS, "id", "name", "mdp", "default", "motions"}
         entry.update({k: v for k, v in sidecar.items() if k not in skip})
-        meta = sidecar.get("onnx", {}) if isinstance(sidecar.get("onnx"), dict) else {}
-        meta = dict(meta.get("meta") or {})
-        for key in ("in_keys", "out_keys"):
-            value = sidecar.get(key, meta.get(key))
-            if value is not None:
-                entry[key] = value
+        in_keys = _input_slots(policy, obs_keys)
+        if in_keys != list(DEFAULT_IN_KEYS):
+            entry["in_keys"] = in_keys
+        if policy.out_keys is not None and policy.out_keys != list(DEFAULT_OUT_KEYS):
+            entry["out_keys"] = policy.out_keys
 
         if policy.policy_joint_names:
             entry["policy_joint_names"] = policy.policy_joint_names
@@ -974,18 +1040,23 @@ class Builder:
                     policy_entries = []
                     if scene.policies:
                         (scene_dir / "policy").mkdir(exist_ok=True)
+                    mdp_entry_by_id = {entry["id"]: entry for entry in mdp_entries}
                     for policy in scene.policies:
                         steps.on(f"policy/{policy.name}")
                         onnx.save(
                             policy.model,
                             str(scene_dir / "policy" / f"{policy.id}.onnx"),
                         )
+                        mdp_id = scene.mdp_id(policy.mdp)
                         policy_entries.append(
                             self._serialize_policy_entry(
                                 policy,
-                                scene.mdp_id(policy.mdp),
+                                mdp_id,
                                 sidecars[policy.id],
                                 motion_files,
+                                obs_keys=list(
+                                    mdp_entry_by_id[mdp_id].get("observations") or {}
+                                ),
                             )
                         )
 

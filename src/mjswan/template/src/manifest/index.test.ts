@@ -105,19 +105,22 @@ describe('parseManifest', () => {
     expect(input.splat).toBeNull(); // no splat requested
   });
 
-  it('gives the engine the policy entry merged with its MDP, slot tables under onnx.meta', async () => {
+  it('gives the engine the policy entry merged with its MDP, slot tables at the top level', async () => {
     const catalog = parseManifest(MANIFEST, fakeSource().source);
     const run = await catalog.projects[0].scenes[0].policies[1].build();
     const config = run.config as Record<string, unknown>;
     expect(config.actions).toEqual({ joint_pos: { type: 'joint_position' } });
     expect(config).not.toHaveProperty('observations');
-    expect(config.onnx).toEqual({ meta: { in_keys: ['obs'], out_keys: ['action'] } });
-    // Bookkeeping keys stay out of what the engine interprets.
+    expect(config.in_keys).toEqual(['obs']);
+    expect(config.out_keys).toEqual(['action']);
+    // Bookkeeping keys stay out of what the engine interprets; the network is bytes.
     expect(config).not.toHaveProperty('mdp');
     expect(config).not.toHaveProperty('id');
+    expect(config).not.toHaveProperty('onnx');
     const walk = await catalog.projects[0].scenes[0].policies[0].build();
     expect((walk.config as Record<string, unknown>).policy_joint_names).toEqual(['a', 'b']);
-    expect((walk.config as Record<string, unknown>).onnx).toBeUndefined();
+    // No table declared: the engine assumes the single `actor` input.
+    expect((walk.config as Record<string, unknown>).in_keys).toBeUndefined();
   });
 
   it('delivers the traced graphs of the whole MDP, keyed by their scene-relative refs', async () => {

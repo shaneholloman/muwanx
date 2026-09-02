@@ -611,10 +611,10 @@ class TestPolicyTermsDerivedFromEnvCfg:
 
         cfg = scene.add_policy(name="Policy", policy=minimal_onnx)._config
 
-        # The actor group, keyed for the ONNX input; critic dropped.
+        # The actor group under the default slot; critic dropped (ADR 0006 §5).
         assert cfg.observations is not None
-        assert list(cfg.observations) == ["policy"]
-        assert cfg.observations["policy"] is env_cfg.observations["actor"]
+        assert list(cfg.observations) == ["actor"]
+        assert cfg.observations["actor"] is env_cfg.observations["actor"]
         assert list(cfg.commands) == ["velocity"]
         assert cfg.actions is not None and list(cfg.actions) == ["joint_pos"]
         assert cfg.terminations is not None and list(cfg.terminations) == ["time_out"]
@@ -631,7 +631,7 @@ class TestPolicyTermsDerivedFromEnvCfg:
         )._config
 
         assert list(cfg.terminations or {}) == ["fallen"]
-        assert list(cfg.observations or {}) == ["policy"]
+        assert list(cfg.observations or {}) == ["actor"]
         assert list(cfg.commands) == ["velocity"]
 
     def test_an_empty_dict_means_none_not_derive(self, minimal_model, minimal_onnx):

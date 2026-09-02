@@ -60,7 +60,7 @@ def _fetch_myofinger() -> Path:
 
 def _build_policy() -> onnx.ModelProto:
     """Random-uniform policy: ignores the observation, emits fresh [0, 1] samples."""
-    obs_in = helper.make_tensor_value_info("policy", TensorProto.FLOAT, [1, OBS_DIM])
+    obs_in = helper.make_tensor_value_info("actor", TensorProto.FLOAT, [1, OBS_DIM])
     act_out = helper.make_tensor_value_info(
         "action", TensorProto.FLOAT, [1, NUM_MUSCLES]
     )

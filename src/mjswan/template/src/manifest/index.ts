@@ -282,9 +282,8 @@ function graphBytes(refs: string[], dir: string, source: ByteSource): Record<str
 }
 
 /**
- * The engine's policy config: the policy entry's own fields plus the five term sets of
- * its MDP. The slot tables travel as `onnx.meta` for now, which is where the runtime
- * still reads them.
+ * The engine's policy config: the policy entry's own fields — the slot tables among
+ * them — plus the five term sets of its MDP.
  */
 function policyConfig(scene: ManifestScene, policy: ManifestPolicy): Record<string, unknown> {
   const mdp = scene.mdps.find((m) => m.id === policy.mdp);
@@ -294,15 +293,12 @@ function policyConfig(scene: ManifestScene, policy: ManifestPolicy): Record<stri
         `which scene "${scene.name}" does not declare.`,
     );
   }
-  // Bookkeeping keys stay out of what the engine interprets.
+  // Bookkeeping keys stay out of what the engine interprets; the network arrives as bytes.
   const own = Object.fromEntries(
-    Object.entries(policy).filter(([key]) => !['id', 'mdp', 'onnx', 'in_keys', 'out_keys'].includes(key)),
+    Object.entries(policy).filter(([key]) => !['id', 'mdp', 'onnx'].includes(key)),
   );
   const sections = Object.fromEntries(Object.entries(mdp).filter(([key]) => key !== 'id'));
-  const meta: Record<string, unknown> = {};
-  if (policy.in_keys) meta.in_keys = policy.in_keys;
-  if (policy.out_keys) meta.out_keys = policy.out_keys;
-  return { ...own, ...sections, ...(Object.keys(meta).length ? { onnx: { meta } } : {}) };
+  return { ...own, ...sections };
 }
 
 function buildPolicy(

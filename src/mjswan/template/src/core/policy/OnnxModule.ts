@@ -11,10 +11,20 @@ if (typeof __ORT_CDN_BASE__ !== 'undefined') {
   ort.env.wasm.wasmPaths = __ORT_CDN_BASE__;
 }
 
-export type OnnxMeta = {
+/**
+ * The policy's slot tables (ADR 0006 §5). `in_keys[i]` names the tensor that fills the
+ * session's i-th input — an observation group, or one the runtime synthesizes (`is_init`,
+ * `adapt_hx`, `time_step`) — and `out_keys[i]` names its i-th output. Positional: the
+ * model's own tensor names are read from the session and appear in no config.
+ */
+export type OnnxSlotTables = {
   in_keys?: string[];
   out_keys?: (string | string[])[];
 };
+
+/** What a policy that declares no tables gets: one input fed by the `actor` group. */
+export const DEFAULT_IN_KEYS: readonly string[] = ['actor'];
+export const DEFAULT_OUT_KEYS: readonly string[] = ['action'];
 
 export class OnnxModule {
   private bytes: ArrayBuffer;
@@ -24,11 +34,11 @@ export class OnnxModule {
   outKeys: string[];
   isRecurrent: boolean;
 
-  constructor(bytes: ArrayBuffer, meta?: OnnxMeta) {
+  constructor(bytes: ArrayBuffer, slots?: OnnxSlotTables) {
     this.bytes = bytes;
     this.session = null;
-    const inKeys = meta?.in_keys ?? ['policy'];
-    const outKeys = meta?.out_keys ?? ['action'];
+    const inKeys = slots?.in_keys ?? [...DEFAULT_IN_KEYS];
+    const outKeys = slots?.out_keys ?? [...DEFAULT_OUT_KEYS];
     this.configuredInKeys = inKeys.map((key) => (Array.isArray(key) ? key.join(',') : key));
     this.inKeys = [...this.configuredInKeys];
     this.outKeys = outKeys.map((key) => (Array.isArray(key) ? key.join(',') : key));
@@ -99,30 +109,21 @@ export class OnnxModule {
     this.session = null;
   }
 
+  /**
+   * Settle the input table against the session. A single-input model takes the configured
+   * key as is — the label is free, only the position matters — and so does a table exactly
+   * as long as the model's input list, which is what the build guarantees for a document.
+   * Anything else is a hand-written config that disagrees with its network; the model's
+   * own input names are used, so a tensor supplied under them is still found.
+   */
   private inferInputKeys(): void {
     if (!this.session) {
       return;
     }
     const modelInputs = this.session.inputNames;
-    if (modelInputs.length <= 1) {
-      this.inKeys = [...this.configuredInKeys];
-      return;
-    }
-
-    if (this.configuredInKeys.length === modelInputs.length) {
-      this.inKeys = [...this.configuredInKeys];
-      return;
-    }
-
-    this.inKeys = modelInputs.map((name) => {
-      if (this.configuredInKeys.includes(name)) {
-        return name;
-      }
-      if (name === 'obs' && this.configuredInKeys.includes('policy')) {
-        return 'policy';
-      }
-      // No configured key matches: `runInference` forwards it under the model's own name.
-      return name;
-    });
+    this.inKeys =
+      modelInputs.length <= 1 || this.configuredInKeys.length === modelInputs.length
+        ? [...this.configuredInKeys]
+        : [...modelInputs];
   }
 }

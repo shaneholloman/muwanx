@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import re
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -343,6 +343,59 @@ class SceneConfig:
         return ident
 
 
+def _onnx_io_names(model: onnx.ModelProto) -> tuple[list[str], list[str]]:
+    """The network's real input and output names, initializers excluded."""
+    initializers = {init.name for init in model.graph.initializer}
+    inputs = [i.name for i in model.graph.input if i.name not in initializers]
+    return inputs, [o.name for o in model.graph.output]
+
+
+def _check_slot_tables(
+    name: str,
+    model: onnx.ModelProto,
+    in_keys: Sequence[str] | None,
+    out_keys: Sequence[str | Sequence[str]] | None,
+) -> tuple[list[str] | None, list[str | list[str]] | None]:
+    """Check a policy's slot tables against its network and return them as lists.
+
+    ``in_keys[i]`` fills the *i*-th input and ``out_keys[i]`` names the *i*-th output,
+    so each table must be exactly as long as what it indexes. A network with several
+    inputs must declare ``in_keys``: nothing else records where the runtime-synthesized
+    tensors sit relative to the observation groups, and without it the policy would fail
+    at playback with a missing input rather than here (ADR 0006 §5).
+    """
+    inputs, outputs = _onnx_io_names(model)
+    if in_keys is None:
+        if len(inputs) > 1:
+            raise ValueError(
+                f"Policy {name!r} has {len(inputs)} ONNX inputs ({inputs}) but declares "
+                "no in_keys. Pass in_keys naming, per input in order, the observation "
+                "group or runtime tensor (is_init, adapt_hx, time_step) that fills it."
+            )
+        checked_in = None
+    else:
+        checked_in = [str(k) for k in in_keys]
+        if len(checked_in) != len(inputs):
+            raise ValueError(
+                f"Policy {name!r} declares {len(checked_in)} in_keys {checked_in} but its "
+                f"ONNX has {len(inputs)} inputs ({inputs}). in_keys[i] fills the i-th "
+                "input, so the two must have the same length."
+            )
+    if out_keys is None:
+        checked_out: list[str | list[str]] | None = None
+    else:
+        checked_out = [
+            k if isinstance(k, str) else [str(p) for p in k] for k in out_keys
+        ]
+        if len(checked_out) != len(outputs):
+            raise ValueError(
+                f"Policy {name!r} declares {len(checked_out)} out_keys but its ONNX has "
+                f"{len(outputs)} outputs ({outputs}). out_keys[i] names the i-th output, "
+                "so the two must have the same length."
+            )
+    return checked_in, checked_out
+
+
 class SceneHandle:
     """Handle for adding policies and configuring a scene.
 
@@ -461,7 +514,7 @@ class SceneHandle:
             task_id if task_id is not None else self._config.mjlab_task_id
         )
         mdp.observations = adapt_observations(
-            observations, policy_groups=runner.policy_obs_groups
+            observations, obs_groups=runner.obs_groups
         )
         mdp.commands = adapt_commands(commands) or {}
         mdp.actions = adapt_actions(actions)
@@ -493,6 +546,8 @@ class SceneHandle:
         actions: Mapping[str, ActionTermCfg] | Mapping[str, Any] | None = None,
         terminations: dict[str, TerminationTermCfg] | dict[str, Any] | None = None,
         events: dict[str, EventTermCfg] | Mapping[str, Any] | None = None,
+        in_keys: Sequence[str] | None = None,
+        out_keys: Sequence[str | Sequence[str]] | None = None,
         policy_joint_names: list[str] | None = None,
         policy_num_actions: int | None = None,
         default_joint_pos: list[float] | None = None,
@@ -533,15 +588,24 @@ class SceneHandle:
                 Its unset fields are filled and its mjlab types adapted, in place, by
                 the first policy to use it.
             observations: A single observation group, mjlab's whole
-                ``env_cfg.observations`` dict, or a dict already keyed by ONNX input
-                name. Prefer the first two and let mjswan key it — the key is the input
-                name the runtime feeds, not a free label. A group named for a
-                training-only network (``"critic"``) is dropped with a warning.
+                ``env_cfg.observations`` dict, or a dict keyed by the slot names
+                ``in_keys`` uses. Prefer the first two: a lone group lands under
+                ``"actor"``, the default slot, and needs no ``in_keys`` at all. A group
+                named for a training-only network (``"critic"``) is dropped.
             commands: Command term configurations. Custom mjlab terms are converted
                 through the Python command-term registry.
             actions: Action term configurations.
             terminations: Termination term configurations.
             events: Event term configurations, in any of the four modes.
+            in_keys: The network's input slot table: ``in_keys[i]`` names what fills its
+                *i*-th input — an observation group, or a tensor the runtime synthesizes
+                (``is_init``, ``adapt_hx``, ``time_step``). The network's own input names
+                never matter; the mapping is positional. Required when the network has
+                more than one input; a single-input network takes its one observation
+                group and needs none. Checked here against the model's input count.
+            out_keys: The output slot table, ``out_keys[i]`` naming the *i*-th output.
+                ``action`` is the one the runtime drives the actuators from; a recurrent
+                policy also carries ``["next", "adapt_hx"]``. Defaults to ``["action"]``.
             policy_num_actions: Output width for policies whose action count cannot be
                 inferred from ``policy_joint_names`` (e.g. muscle-driven ones).
             clip_actions: Symmetric bound on the raw policy output, before any action
@@ -611,6 +675,7 @@ class SceneHandle:
         )
         if clip_actions is None:
             clip_actions = runner.clip_actions
+        slot_in, slot_out = _check_slot_tables(name, policy, in_keys, out_keys)
 
         policy_config = PolicyConfig(
             name=name,
@@ -622,6 +687,8 @@ class SceneHandle:
             source_path=source_path,
             config_path=config_path,
             mdp=mdp,
+            in_keys=slot_in,
+            out_keys=slot_out,
             policy_joint_names=policy_joint_names,
             policy_num_actions=policy_num_actions,
             default_joint_pos=default_joint_pos,

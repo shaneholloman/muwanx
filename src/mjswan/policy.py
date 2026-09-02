@@ -23,6 +23,14 @@ if TYPE_CHECKING:
     from .managers.termination_manager import TerminationTermCfg
     from .scene import SceneHandle
 
+#: Input slots the runtime fills itself rather than from an observation group: the
+#: recurrent carry (``is_init``, ``adapt_hx``) and the step counter (``time_step``).
+RUNTIME_INPUT_SLOTS = frozenset({"is_init", "adapt_hx", "time_step"})
+
+#: What the runtime assumes when a policy declares no slot table (ADR 0006 §5).
+DEFAULT_IN_KEYS = ("actor",)
+DEFAULT_OUT_KEYS = ("action",)
+
 
 @dataclass
 class PolicyConfig:
@@ -84,6 +92,21 @@ class PolicyConfig:
     Used by the browser runtime to mirror mjlab's joint-position action path:
     the final target written to actuators is ``processed_action - encoder_bias``.
     """
+
+    in_keys: list[str] | None = None
+    """The ONNX input slot table: ``in_keys[i]`` names the tensor that fills the
+    network's *i*-th input — an observation group, or one the runtime synthesizes
+    (:data:`RUNTIME_INPUT_SLOTS`). The network's own input names never matter; the
+    mapping is positional. ``None`` for a single-input policy, whose one input takes its
+    one observation group whatever that is called; required when the network has more
+    than one input (ADR 0006 §5). Written to the manifest unless it is the default
+    ``["actor"]``."""
+
+    out_keys: list[str | list[str]] | None = None
+    """The ONNX output slot table, positional like ``in_keys``: ``out_keys[i]`` names the
+    network's *i*-th output. The runtime reads ``action`` and, for a recurrent policy,
+    the ``["next", "adapt_hx"]`` carry; the rest are labels. ``None`` means
+    ``["action"]``."""
 
     clip_actions: float | None = None
     """Symmetric bound the raw policy output is clamped to, or ``None`` for unbounded.
@@ -282,4 +305,10 @@ class PolicyHandle:
         return MotionHandle(motion, self)
 
 
-__all__ = ["PolicyConfig", "PolicyHandle"]
+__all__ = [
+    "DEFAULT_IN_KEYS",
+    "DEFAULT_OUT_KEYS",
+    "RUNTIME_INPUT_SLOTS",
+    "PolicyConfig",
+    "PolicyHandle",
+]

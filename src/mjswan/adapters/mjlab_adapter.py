@@ -168,14 +168,17 @@ def _adapt_obs_group(group: Any) -> MjswanObservationGroupCfg:
 #: so these have no input to feed and are dropped rather than traced and bundled.
 _TRAINING_ONLY_OBS_GROUPS = frozenset({"critic"})
 
-#: The key a single observation group lands under — an ONNX input name, not a label:
-#: ``OnnxModule`` defaults ``in_keys`` to ``['policy']``, and an input it cannot find
-#: leaves the policy silently inert.
-DEFAULT_OBS_GROUP_KEY = "policy"
+#: The slot a single observation group lands under, and the one the runtime feeds when a
+#: policy declares no ``in_keys`` (``OnnxModule`` defaults to ``['actor']``). It is mjlab's
+#: own name for the group its actor network reads, so the common case needs no key at all
+#: (ADR 0006 §5). Python and TypeScript change this together, or every policy without an
+#: ``in_keys`` table goes silently inert.
+DEFAULT_OBS_GROUP_KEY = "actor"
 
-#: mjlab's name for the group its actor network reads, and the fallback when no runner
-#: config says otherwise (a hand-built ``env_cfg`` has none).
-_MJLAB_ACTOR_GROUP = "actor"
+#: mjlab's name for the network whose group the exported policy reads, as the runner's
+#: ``obs_groups`` keys it. The same word as the default slot, by design, but a different
+#: namespace: this one is looked up in ``rl_cfg.obs_groups``, the other in ``in_keys``.
+_MJLAB_ACTOR_NETWORK = "actor"
 
 
 def _is_obs_group(value: Any) -> bool:
@@ -188,81 +191,94 @@ def _is_obs_group(value: Any) -> bool:
 
 def _select_policy_group(
     observations: Mapping[str, Any],
-    policy_groups: tuple[str, ...] | None,
+    obs_groups: Mapping[str, tuple[str, ...]] | None,
 ) -> Mapping[str, Any]:
-    """Reduce an mjlab-shaped group dict to the one group the policy's ONNX input reads.
+    """Reduce mjlab's network-keyed group dict to what the exported actor reads.
 
-    mjlab keys ``observations`` by *network* name; mjswan keys it by *ONNX input* name.
-    Only a dict that is plainly the former is remapped — a policy whose input really is
-    called ``"obs_history"``, or a multi-input one, keeps the keys it declares.
+    mjlab keys ``env_cfg.observations`` by *network* (``"actor"``, ``"critic"``); mjswan
+    keys it by *slot*, the name the policy's ``in_keys`` table uses. The default slot is
+    also called ``actor``, so mjlab's own dict needs no renaming, only the other networks'
+    groups dropped. A task whose runner names the actor's group something else
+    (``rl_cfg.obs_groups == {"actor": ("proprio",), "critic": ("privileged",)}``) has
+    that group moved under the default slot.
 
-    *policy_groups* (``rl_cfg.obs_groups["actor"]``) wins over the ``"actor"`` name, but
-    only when it names a key actually present: remapping on the strength of a task id
-    alone would break a policy whose input is named something else.
+    Only groups the runner attributes to a network are touched. A key it does not know
+    (``"command_"`` on a multi-input policy) is a slot the author added and stays, and a
+    dict sharing no key with the actor's is not the task's dict and is left alone.
+    Without a runner nothing here is known, and :func:`adapt_observations` drops only the
+    training-only names.
     """
     if not observations:
         return observations
-
-    if policy_groups and not set(policy_groups).isdisjoint(observations):
-        if len(policy_groups) != 1:
-            # rsl-rl concatenates several groups per network; mjswan feeds one vector
-            # per ONNX input, and taking the first would silently shorten it.
-            raise ValueError(
-                "The task's runner config feeds its actor network "
-                f"{len(policy_groups)} concatenated observation groups "
-                f"({', '.join(map(repr, policy_groups))}). mjswan feeds one group per "
-                "ONNX input and cannot concatenate them, so pass the single group the "
-                "exported policy actually takes: "
-                "`observations=env_cfg.observations[<name>]`."
-            )
-        return {DEFAULT_OBS_GROUP_KEY: observations[policy_groups[0]]}
-
-    if _MJLAB_ACTOR_GROUP in observations:
-        return {DEFAULT_OBS_GROUP_KEY: observations[_MJLAB_ACTOR_GROUP]}
-    return observations
+    actor_groups = tuple((obs_groups or {}).get(_MJLAB_ACTOR_NETWORK) or ())
+    if not actor_groups or set(actor_groups).isdisjoint(observations):
+        return observations
+    if len(actor_groups) != 1:
+        # rsl-rl concatenates several groups per network; mjswan feeds one vector per
+        # ONNX input, and taking the first would silently shorten it.
+        raise ValueError(
+            "The task's runner config feeds its actor network "
+            f"{len(actor_groups)} concatenated observation groups "
+            f"({', '.join(map(repr, actor_groups))}). mjswan feeds one group per "
+            "ONNX input and cannot concatenate them, so pass the single group the "
+            "exported policy actually takes: "
+            "`observations=env_cfg.observations[<name>]`."
+        )
+    actor_key = actor_groups[0]
+    network_groups = {g for groups in (obs_groups or {}).values() for g in groups}
+    selected: dict[str, Any] = {}
+    for key, group in observations.items():
+        if key == actor_key:
+            selected[DEFAULT_OBS_GROUP_KEY] = group
+        elif key not in network_groups:
+            selected[key] = group
+    return selected
 
 
 def adapt_observations(
     observations: Mapping[str, Any] | Any | None,
     *,
-    policy_groups: tuple[str, ...] | None = None,
+    obs_groups: Mapping[str, tuple[str, ...]] | None = None,
 ) -> dict[str, MjswanObservationGroupCfg] | None:
     """Adapt observation groups, converting mjlab types if detected.
 
-    Accepts three shapes, because the caller should not have to know which key the
-    runtime will look for:
+    Accepts three shapes, because the caller should not have to know which slot the
+    runtime will feed:
 
     * a **single** group — mjlab's ``env_cfg.observations["actor"]`` — which lands
       under :data:`DEFAULT_OBS_GROUP_KEY`;
     * mjlab's whole ``env_cfg.observations`` dict, from which the policy's group is
-      selected (see :func:`_select_policy_group`) and the rest dropped;
-    * a dict already keyed by ONNX input name, passed through as-is.
+      selected (see :func:`_select_policy_group`) and the other networks' dropped;
+    * a dict already keyed by slot name — the names the policy's ``in_keys`` table
+      uses — passed through as-is.
 
     mjlab groups convert transparently, mjswan ones pass through, and a group named for
-    a training-only network (:data:`_TRAINING_ONLY_OBS_GROUPS`) is dropped with a
-    warning.
+    a training-only network (:data:`_TRAINING_ONLY_OBS_GROUPS`) is dropped: silently
+    beside an ``actor`` group, since the pair is mjlab's own dict, with a warning
+    otherwise.
 
-    *policy_groups* is the task's ``rl_cfg.obs_groups["actor"]``, consulted only for the
-    dict form.
+    *obs_groups* is the task's runner ``rl_cfg.obs_groups`` — which group(s) each
+    network reads — consulted only for the dict form.
     """
     if observations is None:
         return None
     if _is_obs_group(observations):
         observations = {DEFAULT_OBS_GROUP_KEY: observations}
     else:
-        observations = _select_policy_group(observations, policy_groups)
+        observations = _select_policy_group(observations, obs_groups)
 
     # `Any`-valued while filling: the last branch passes a duck-typed group through.
     adapted: dict[str, Any] = {}
     for key, group in observations.items():
         if key in _TRAINING_ONLY_OBS_GROUPS:
-            warnings.warn(
-                f"Dropping observation group {key!r}: mjlab exports only the actor "
-                "network, so no ONNX input consumes it. Pass just the policy's own "
-                'group — `observations=env_cfg.observations["actor"]`.',
-                category=RuntimeWarning,
-                stacklevel=3,
-            )
+            if DEFAULT_OBS_GROUP_KEY not in observations:
+                warnings.warn(
+                    f"Dropping observation group {key!r}: mjlab exports only the actor "
+                    "network, so no ONNX input consumes it. Pass just the policy's own "
+                    'group — `observations=env_cfg.observations["actor"]`.',
+                    category=RuntimeWarning,
+                    stacklevel=3,
+                )
             continue
         if isinstance(group, MjswanObservationGroupCfg):
             adapted[key] = group
@@ -279,14 +295,15 @@ class MjlabRunnerDefaults(NamedTuple):
     Everything else on it is training-only or already inside the exported ONNX.
     """
 
-    policy_obs_groups: tuple[str, ...] | None
-    """``obs_groups["actor"]``: which observation group(s) the actor network reads."""
+    obs_groups: Mapping[str, tuple[str, ...]] | None
+    """``rl_cfg.obs_groups``: which observation group(s) each network reads, keyed by
+    network (``{"actor": ("actor",), "critic": ("critic",)}`` by default)."""
 
     clip_actions: float | None
     """The symmetric bound rsl-rl clamps the policy's raw output to."""
 
 
-_NO_RUNNER_DEFAULTS = MjlabRunnerDefaults(policy_obs_groups=None, clip_actions=None)
+_NO_RUNNER_DEFAULTS = MjlabRunnerDefaults(obs_groups=None, clip_actions=None)
 
 
 def resolve_runner_defaults(task_id: str | None) -> MjlabRunnerDefaults:
@@ -307,10 +324,13 @@ def resolve_runner_defaults(task_id: str | None) -> MjlabRunnerDefaults:
         return _NO_RUNNER_DEFAULTS
 
     obs_groups = getattr(rl_cfg, "obs_groups", None)
-    groups = obs_groups.get("actor") if isinstance(obs_groups, Mapping) else None
     clip = getattr(rl_cfg, "clip_actions", None)
     return MjlabRunnerDefaults(
-        policy_obs_groups=tuple(groups) if groups else None,
+        obs_groups=(
+            {network: tuple(groups) for network, groups in obs_groups.items()}
+            if isinstance(obs_groups, Mapping)
+            else None
+        ),
         clip_actions=float(clip) if clip is not None else None,
     )
 

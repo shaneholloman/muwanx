@@ -16,7 +16,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import onnx
 import pytest
+from onnx import TensorProto, helper
 
 import mjswan
 from mjswan._build_client import ClientBuilder
@@ -55,6 +57,15 @@ def _entry(
 # ===========================================================================
 # L1 — project ID assignment rules
 # ===========================================================================
+def _two_input_onnx() -> onnx.ModelProto:
+    """A network with two inputs (concatenated into one output), for slot-table tests."""
+    a = helper.make_tensor_value_info("a", TensorProto.FLOAT, [1, 2])
+    b = helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, 2])
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])
+    node = helper.make_node("Concat", ["a", "b"], ["y"], axis=1)
+    return helper.make_model(helper.make_graph([node], "two_inputs", [a, b], [y]))
+
+
 class TestProjectIdAssignment:
     """A project's id is `name2id(name)`, unique in the document (ADR 0006 §4)."""
 
@@ -1207,10 +1218,10 @@ class TestSaveWebPolicyJson:
     def test_two_policies_in_one_scene_keep_their_own_graphs(
         self, tmp_path, minimal_model, minimal_onnx
     ):
-        """A graph's path is scoped to its policy, so a sibling cannot overwrite it.
+        """A graph's path is scoped to its MDP, so a sibling cannot overwrite it.
 
-        Both policies name their observation group `"policy"` — the ONNX input name
-        their networks read, not a label either is free to change — so an unscoped path
+        Both policies key their one observation group the same way — as every
+        single-input policy does, there being one slot to fill — so an unscoped path
         gave them one file. The build never noticed, and neither did playback: the
         loser's config still declared its own `size`, and `conformToSize` pads or
         truncates the winner's vector to it without an error.
@@ -1577,9 +1588,14 @@ class TestSaveWebPolicyJson:
         assert entry["damping"] == {"j": 2.5}
         assert entry["scale"] == {"j": 0.5}
 
-    def test_config_path_onnx_block_does_not_leak_and_its_slot_tables_move_up(
+    def test_config_path_slot_tables_are_ignored_with_a_warning(
         self, tmp_path, minimal_model, minimal_onnx
     ):
+        """A sidecar's `onnx` block never reaches the output, and its tables are not read.
+
+        The slot tables are declared on `add_policy` now (ADR 0006 §5); a sidecar still
+        carrying one is told so rather than silently obeyed.
+        """
         config_file = tmp_path / "policy_cfg.json"
         config_file.write_text(
             json.dumps(
@@ -1596,12 +1612,110 @@ class TestSaveWebPolicyJson:
             config_path=str(config_file),
             actions={"joint_pos": JointPositionActionCfg(actuator_names=(".*",))},
         )
-        data = self._policy_json(self._run(builder, tmp_path), "Policy")
+        with pytest.warns(RuntimeWarning, match="in_keys"):
+            data = self._policy_json(self._run(builder, tmp_path), "Policy")
         # The network's path is the build's, never the sidecar's stale one.
         assert data["onnx"] == "policy/policy.onnx"
-        # And the slot table is a top-level key of the entry (ADR 0006 §5).
-        assert data["in_keys"] == ["obs_history"]
+        assert "in_keys" not in data
         assert "out_keys" not in data
+
+    def test_declared_slot_tables_land_in_the_entry_and_defaults_are_omitted(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
+        terms = {"joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel)}
+        scene.add_policy(
+            name="Two",
+            policy=_two_input_onnx(),
+            observations={
+                "actor": ObservationGroupCfg(terms=terms),
+                "command_": ObservationGroupCfg(terms=terms),
+            },
+            in_keys=["command_", "actor"],
+            out_keys=["action"],
+        )
+        scene.add_policy(
+            name="One",
+            policy=minimal_onnx,
+            observations=ObservationGroupCfg(terms=terms),
+        )
+
+        out = self._run(builder, tmp_path)
+        two = self._policy_json(out, "Two")
+        assert two["in_keys"] == ["command_", "actor"]
+        assert "out_keys" not in two  # `["action"]` is the default
+        one = self._policy_json(out, "One")
+        assert "in_keys" not in one  # a lone group under `actor` needs no table
+        assert one["observations"]["actor"]["fused"] == "mdp/mdp_1/obs/actor.onnx"
+
+    def test_a_single_input_policy_takes_its_one_group_whatever_it_is_called(
+        self, tmp_path, minimal_model, minimal_onnx
+    ):
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
+        scene.add_policy(
+            name="Policy",
+            policy=minimal_onnx,
+            observations={
+                "obs_history": ObservationGroupCfg(
+                    terms={"joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel)}
+                )
+            },
+        )
+        data = self._policy_json(self._run(builder, tmp_path), "Policy")
+        # Not the default, so the table is written, and the runtime feeds that group.
+        assert data["in_keys"] == ["obs_history"]
+
+    def test_a_multi_input_policy_without_in_keys_is_refused(self, minimal_model):
+        scene = (
+            Builder()
+            .add_project(name="P")
+            .add_scene(control_dt=0.02, name="S", model=minimal_model)
+        )
+        with pytest.raises(ValueError, match="2 ONNX inputs .* no in_keys"):
+            scene.add_policy(name="Two", policy=_two_input_onnx())
+
+    def test_slot_tables_must_match_the_networks_input_and_output_counts(
+        self, minimal_model, minimal_onnx
+    ):
+        scene = (
+            Builder()
+            .add_project(name="P")
+            .add_scene(control_dt=0.02, name="S", model=minimal_model)
+        )
+        with pytest.raises(ValueError, match="2 in_keys .* 1 inputs"):
+            scene.add_policy(name="P", policy=minimal_onnx, in_keys=["a", "b"])
+        with pytest.raises(ValueError, match="2 out_keys .* 1 outputs"):
+            scene.add_policy(name="Q", policy=minimal_onnx, out_keys=["a", "b"])
+
+    def test_an_in_key_naming_no_group_fails_the_build(self, tmp_path, minimal_model):
+        pytest.importorskip("torch")
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            control_dt=0.02, name="S", model=minimal_model
+        )
+        scene._config.mjlab_env = _fake_trace_env()
+        terms = {"joint_pos": ObservationTermCfg(func=_fake_joint_pos_rel)}
+        scene.add_policy(
+            name="Two",
+            policy=_two_input_onnx(),
+            observations={
+                "actor": ObservationGroupCfg(terms=terms),
+                "command_": ObservationGroupCfg(terms=terms),
+            },
+            in_keys=["actor", "command"],  # typo: the group is `command_`
+        )
+        with pytest.raises(ValueError, match=r"\['command'\]"):
+            self._run(builder, tmp_path)
 
     def test_config_path_onnx_path_updated_when_extras_present(
         self, tmp_path, minimal_model, minimal_onnx

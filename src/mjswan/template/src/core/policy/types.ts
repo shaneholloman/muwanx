@@ -72,13 +72,14 @@ export type PolicyConfig = {
    * which bounds `raw * scale + offset` per target.
    */
   clip_actions?: number;
-  onnx?: {
-    // Weights arrive as bytes via PolicyInput.onnx; policy.json holds only the io keys.
-    meta?: {
-      in_keys?: string[];
-      out_keys?: (string | string[])[];
-    };
-  };
+  /**
+   * The ONNX input slot table (ADR 0006 §5): `in_keys[i]` names the tensor that fills the
+   * network's i-th input — an observation group, or one the runtime synthesizes. Absent
+   * for the common single-input policy, whose one input takes the `actor` group.
+   */
+  in_keys?: string[];
+  /** The output slot table, positional like `in_keys`; absent means `['action']`. */
+  out_keys?: (string | string[])[];
   commands?: CommandsConfig;
   motions?: Array<{
     name: string;

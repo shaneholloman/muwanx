@@ -1004,7 +1004,7 @@ export class mjswanRuntime {
         console.log(`[TerminationManager] ${this.terminationManager.size} termination term(s) loaded`);
       }
 
-      const module = new OnnxModule(policy.onnx, config.onnx?.meta);
+      const module = new OnnxModule(policy.onnx, { in_keys: config.in_keys, out_keys: config.out_keys });
       await module.init();
       this.onnxModule = module;
       this.onnxInputDict = module.initInput();

@@ -13,7 +13,7 @@ describe('policyGraphRefs', () => {
   it('collects refs from observation groups, terminations and commands', () => {
     expect(
       policyGraphRefs({
-        onnx: { path: 'walk.onnx', meta: { in_keys: ['obs'] } },
+        onnx: 'policy/walk.onnx',
         observations: {
           policy: [
             { name: 'joint_pos', onnx: 'obs/joint_pos.onnx' },
