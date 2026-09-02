@@ -3,8 +3,8 @@
 > Status: **Proposed (design)** — supersedes **§1 of
 > [ADR 0005](0005-onnx-traced-terms-superseding-the-declarative-dsl.md)**
 > ("Representation, not artifacts — extend `config.json` + `policy.json`", which
-> states verbatim *"No new `manifest.json`."*) and amends its **§2** (defined PRNG
-> behaviour at an MDP switch) and **§4** (one graph-reference resolution base). ADR 0005 §3,
+> states verbatim *"No new `manifest.json`."*) and amends its **§2** (the PRNG is
+> reseeded at an MDP switch) and **§4** (one graph-reference resolution base). ADR 0005 §3,
 > §5–§9 carry over unchanged. This is a pre-1.0 change to the **build output**:
 > what files a build writes, how they are laid out, and what describes them. It
 > does not change how a term body is traced or executed.
@@ -249,6 +249,35 @@ Consequences:
   **build-time error**. Today it fails at playback with `Missing ONNX input for
   key`.
 
+**The slot tables live in the manifest, declared in Python.** `in_keys` and its
+sibling `out_keys` (mapped the same way onto `session.outputNames`) become
+arguments on `add_policy` and are written into the manifest's policy entry:
+
+```python
+scene.add_policy(
+    name="Facet",
+    policy=onnx.load("assets/unitree_go2/facet.onnx"),
+    observations={"actor": …, "command_": …},
+    in_keys=["command", "actor", "is_init", "adapt_hx"],
+    out_keys=[…],
+)
+```
+
+They stop being read from a `config_path` sidecar, and the top-level
+`in_keys` / `out_keys` promotion into `onnx.meta` (`builder.py:635-636`) is
+deleted with them. `config_path` stays an **authoring** input for the
+checkpoint's own defaults — `policy_joint_names`, `default_joint_pos`,
+`actions`, `clip_actions` — merged at build time; it stops being a place the
+*output* reads from, because §1 leaves exactly one descriptor in the output.
+
+This is affordable precisely because every script under `examples/` is
+restructured for this architecture anyway. The one cost is visible: facet's
+`out_keys` is sixteen entries, most of them placeholders for outputs mjswan
+never reads, and in a script it is verbose where a sidecar hid it. Visible is
+the better failure mode — a positional table that nobody can see is the reason
+`g1/locomotion.json` has declared the wrong name for its input all along
+without anyone noticing.
+
 ### 6. Graph references resolve against the scene directory — amends ADR 0005 §4
 
 ADR 0005 §4 fixed *what* is fused; it left the reference form to §1's
@@ -276,7 +305,10 @@ structurally impossible within a scene.
   for a released version. A host uses `version` to **select the engine**.
 - **`format`** is a manually incremented integer describing the document's
   structure. A reader refuses a document whose `format` exceeds the highest it
-  knows. It is the guard for the cases where engine selection is not available:
+  knows. **An absent `format` means the pre-0006 layout** (root
+  `assets/config.json`, per-policy JSONs); this ADR's layout is `format: 1`.
+  The phases below land in one release, so no document is ever published at an
+  intermediate value. It is the guard for the cases where engine selection is not available:
   a document opened by whatever engine is already present, and third-party
   tooling reading the tree.
 
@@ -349,18 +381,33 @@ values remain the base across any number of switches.
 An MDP switch is, in order:
 
 1. restore every snapshotted model field to its compiled value;
-2. apply the incoming MDP's `startup` events;
-3. re-derive dependent quantities — `mj_setConst`, joint/actuator bounds;
-4. draw the incoming MDP's randomness from a **defined** point in the
-   orchestrator PRNG stream.
+2. **reseed the orchestrator PRNG to the session seed**;
+3. apply the incoming MDP's `startup` events;
+4. re-derive dependent quantities — `mj_setConst`, joint/actuator bounds.
 
-Step 4 is the amendment to ADR 0005 §2. Today the PRNG has no defined behaviour
-at a switch because there are no switches; once there are, the draw must not
-depend on how many frames happened to elapse first, or the same demo produces a
-different robot on every visit. Which rule gives that — a switch-indexed
-substream, or a reseed — is left open below. §2's substance —
-orchestrator-owned PRNG, `rand` threaded as an explicit graph input, no ONNX
-random ops — is unchanged.
+The reseed is the amendment to ADR 0005 §2, and it is not a new idea — it is the
+rule the runtime already applies to the event of the same class. `loadEnvironment`
+does exactly this today:
+
+```ts
+// runtime.ts:375 — "Reseed so two loads of the same scene draw the same randomness."
+this.termRng = new SeededRng(this.termSeed);
+```
+
+An MDP switch is a scene load in every way that matters to randomness, so it gets
+the same treatment. `termSeed` is the session's own seed (`runtime.ts:632`), held
+`readonly`, so the consequences are:
+
+- A scene's randomization is a function of **(session seed, MDP)** alone — not of
+  how long playback ran before the switch, and not of the switch history.
+- Switching away from an MDP and back reproduces its first draw exactly, which is
+  what makes a switch testable at all.
+- Two MDPs with the same domain-randomization terms land in the **same** world,
+  which is the right default for the workflow this ADR exists to serve: comparing
+  policies means comparing them under one set of conditions, not two.
+
+§2's substance — orchestrator-owned PRNG, `rand` threaded as an explicit graph
+input, no ONNX random ops — is unchanged.
 
 ### 10. What ADR 0005 keeps
 
@@ -450,8 +497,10 @@ Phases are commit boundaries within one release, not separate releases.
 6. **`.swn` packaging** plus the app mode that carries the expanded tree, and
    the publish path that unpacks a `.swn` before uploading.
 7. **Observation key change**: `actor` default in Python and TypeScript
-   together, `in_keys` dropped for single-input policies, the `obs`→`policy`
-   special case deleted, the build-time slot-count check added.
+   together, `in_keys` dropped for single-input policies, the slot tables moved
+   from `config_path` to `add_policy` arguments, the `obs`→`policy` special case
+   deleted, the build-time slot-count check added. Every script under
+   `examples/` is restructured in this phase.
 
 ## Migrating stored documents
 
@@ -549,18 +598,6 @@ Migration and `format` are complements, not alternatives: the migrator needs
 `format` to know what it is reading, and the engine needs it as its own guard for
 the documents migration cannot reach.
 
-## Open questions
-
-- Whether the multi-input go2 assets keep `in_keys` in their own JSON or move it
-  into the manifest with the rest of the policy metadata.
-- **PRNG semantics at an MDP switch** (§9 step 4). A switch-indexed substream
-  makes the *n*-th switch reproducible while still differing from the first;
-  reseeding to the session seed makes switching back to an MDP reproduce its
-  first draw exactly. The second is easier to explain and easier to test; the
-  first is closer to what a viewer probably wants. Not decided here. Note that
-  bit-for-bit session replay itself was measured and **declined** in the ADR 0005
-  implementation brief and is not reopened by this ADR.
-
 ## Acceptance criteria
 
 - [ ] `examples/mjlab/defaults` builds with one `mdp/` directory per scene, not
@@ -573,7 +610,11 @@ the documents migration cannot reach.
       randomization, and switching back, restores the compiled model values
       exactly — no compounding.
 - [ ] Switching to an MDP after 10 seconds and after 10 minutes of playback
-      applies the same model-field randomization.
+      applies the same model-field randomization, and switching A → B → A
+      reproduces A's first draw.
+- [ ] No `in_keys` or `out_keys` is read from a `config_path` sidecar; the
+      multi-input go2 policies declare theirs in `examples/demo/main.py` and
+      they appear in `manifest.json`.
 - [ ] A document whose `format` exceeds the engine's maximum is refused with an
       error naming both values and the document's `version`.
 - [ ] `mjswan publish` accepts either a built directory or a `.swn` and uploads
