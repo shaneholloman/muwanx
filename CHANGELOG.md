@@ -30,6 +30,13 @@ velocity-command shortcuts were removed outright, see Removed.
   true })`, or `?hands=1` on the bundled app). Six mocap spheres a hand, each welded to
   a dynamic twin that owns the contact, so a headset can push a scene's objects around
   and pick them up. Opt-in: roughly a third more per physics step, in every scene.
+- **Thumbstick locomotion in VR.** The camera and the tracked hands now hang off an XR
+  rig, which is what a session moves: the left stick slides the viewer along its heading,
+  the right stick snap-turns it 30° at a time about the head. Body tracking drives the rig
+  too, so a scene that follows a walking robot finally follows it in a headset as well —
+  the head pose used to overwrite the camera every frame, leaving the viewer behind. The
+  rig returns to the origin when the session ends, and the desktop camera comes back to
+  the offset it had.
 - Debug visualisation for command terms, mirroring mjlab's `debug_vis`: `default_viz()`
   emits arrows and markers as data, toggled via `engine.debugVis.set`, on by default.
 - **`UniformVelocityCommandCfg` binds to a traced command term in mjswan itself**, so a

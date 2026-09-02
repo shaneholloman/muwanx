@@ -143,16 +143,18 @@ export function updateCameraFromData(
   mjData: MjData,
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
-  state: ViewerState
+  state: ViewerState,
+  /** In XR the head pose owns the camera, so the delta moves the rig instead. */
+  rig: THREE.Object3D | null = null
 ): void {
   if (state.trackBodyId !== null) {
-    // Parallel tracking: translate both the camera and the orbit target by the
-    // body's delta each frame, preserving the camera angle and zoom level.
+    // Parallel tracking: the viewpoint and the orbit target both take the body's
+    // delta each frame, so the camera angle and zoom level survive.
     const b = state.trackBodyId;
     const bodyPos = mjcToThreeCoordinate(mjData.xpos.slice(b * 3, b * 3 + 3));
     if (state.prevBodyPos !== null) {
       const delta = bodyPos.clone().sub(state.prevBodyPos);
-      camera.position.add(delta);
+      (rig ?? camera).position.add(delta);
       controls.target.add(delta);
     }
     state.prevBodyPos = bodyPos;

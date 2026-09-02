@@ -17,6 +17,7 @@ import { createTendonState, updateTendonGeometry, updateTendonRendering } from '
 import { updateHeadlightFromCamera, updateLightsFromData } from '../scene/lights';
 import { mjcToThreeCoordinate, threeToMjcCoordinate } from '../scene/coordinate';
 import { HandMocap, injectHandMocapFile } from '../xr/handMocap';
+import { XrLocomotion } from '../xr/locomotion';
 import {
   type CameraView,
   type ViewerConfig,
@@ -217,6 +218,11 @@ export class mjswanRuntime {
   private terrainData: TerrainData | null;
   private vrButton: HTMLElement | null;
   private handMocap: HandMocap | null;
+  /** Parent of the camera and hands: what XR locomotion moves. Identity outside a session. */
+  private readonly xrRig: THREE.Group;
+  private readonly locomotion: XrLocomotion;
+  /** Camera-to-target offset from before a session, which owns the camera pose while it runs. */
+  private preXrCameraOffset: THREE.Vector3 | null;
   private splatMesh: SplatMesh | null;
   private colliderMesh: THREE.Group | null;
   private currentSplatTransform: SplatTransform;
@@ -294,7 +300,12 @@ export class mjswanRuntime {
     this.camera = new THREE.PerspectiveCamera(45, width / height, 0.001, 1000);
     this.camera.name = 'PerspectiveCamera';
     this.camera.position.set(2.0, 1.7, 1.7);
-    this.scene.add(this.camera);
+    // three.js writes the XR head pose relative to the camera's parent, so this Group is
+    // where a session's movement goes; see `XrLocomotion`.
+    this.xrRig = new THREE.Group();
+    this.xrRig.name = 'XR Rig';
+    this.xrRig.add(this.camera);
+    this.scene.add(this.xrRig);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.xr.enabled = true;
@@ -310,7 +321,7 @@ export class mjswanRuntime {
     if (handTracking) {
       const hands = [0, 1].map((i) => this.renderer.xr.getHand(i));
       for (const hand of hands) {
-        this.scene.add(hand);
+        this.xrRig.add(hand);
       }
       this.handMocap = new HandMocap(hands);
     }
@@ -334,6 +345,11 @@ export class mjswanRuntime {
     this.controls.dampingFactor = 0.1;
     this.controls.screenSpacePanning = true;
     this.controls.update();
+
+    this.locomotion = new XrLocomotion(this.xrRig, this.camera);
+    this.preXrCameraOffset = null;
+    this.renderer.xr.addEventListener('sessionstart', this.onXrSessionStart);
+    this.renderer.xr.addEventListener('sessionend', this.onXrSessionEnd);
 
     this.renderer.setAnimationLoop(this.render);
     window.addEventListener('resize', this.onWindowResize);
@@ -1568,13 +1584,40 @@ export class mjswanRuntime {
     }
   }
 
+  /** Kept as an offset: the orbit target goes on tracking a moving body through a session. */
+  private onXrSessionStart = (): void => {
+    this.preXrCameraOffset = this.camera.position.clone().sub(this.controls.target);
+  };
+
+  private onXrSessionEnd = (): void => {
+    this.locomotion.reset();
+    if (this.preXrCameraOffset) {
+      this.camera.position.copy(this.controls.target).add(this.preXrCameraOffset);
+      this.preXrCameraOffset = null;
+    }
+    this.controls.update();
+  };
+
   private render = (): void => {
     this.commandManager.updateDebugVisuals();
 
+    // In a session the head pose owns the camera: body tracking moves the rig instead, and
+    // OrbitControls stays out of it, or its next update rebuilds the orbit from the head.
+    const presenting = this.renderer.xr.isPresenting;
     if (this.mjData) {
-      updateCameraFromData(this.mjData, this.camera, this.controls, this.cameraState);
+      updateCameraFromData(
+        this.mjData,
+        this.camera,
+        this.controls,
+        this.cameraState,
+        presenting ? this.xrRig : null
+      );
     }
-    this.controls.update();
+    if (presenting) {
+      this.locomotion.update(this.renderer.xr.getSession());
+    } else {
+      this.controls.update();
+    }
 
     if (this.mjModel && this.mjData && this.bodies) {
       updateHeadlightFromCamera(this.camera, this.lights);
@@ -1690,6 +1733,8 @@ export class mjswanRuntime {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
 
+    this.renderer.xr.removeEventListener('sessionstart', this.onXrSessionStart);
+    this.renderer.xr.removeEventListener('sessionend', this.onXrSessionEnd);
     this.controls.dispose();
     this.renderer.setAnimationLoop(null);
     this.renderer.dispose();

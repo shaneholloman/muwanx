@@ -103,6 +103,17 @@ bar into your `src`.
 <iframe src="https://ttktjmt.github.io/mjswan/?scene=G1&policy=Locomotion&panel=0" …></iframe>
 ```
 
+### Moving around in VR
+
+**Enter VR** stands you at the scene's origin, and the controller sticks take you from
+there: the left stick slides you along the way you are looking, the right stick turns you
+in 30° steps. Turns snap rather than sweep, and pivot on your head rather than on the
+play area's centre — both of those are what keep a viewer from feeling ill.
+
+A scene whose viewer config tracks a body carries you along with it, so a robot that walks
+off does not leave you behind. That is the default (`origin_type=OriginType.AUTO` tracks
+the first non-fixed body); pass `ViewerConfig.OriginType.WORLD` to stand still instead.
+
 ### Hand tracking in VR
 
 `hands=1`, or `createEngine(element, { handTracking: true })` when you drive the engine
