@@ -32,6 +32,23 @@ class MjswanApp:
     def __init__(self, app_dir: Path) -> None:
         self._app_dir = app_dir
 
+    @property
+    def app_dir(self) -> Path:
+        """The built directory: the engine plus the expanded simulation document."""
+        return self._app_dir
+
+    def save_document(self, path: str | Path | None = None) -> Path:
+        """Write the simulation as one ``.swn`` file and return its path (ADR 0006 §8).
+
+        The document is the build's data — ``manifest.json`` and every project directory
+        — packaged as a ZIP of the same tree. It carries no engine: hand it to someone,
+        open it in a viewer, or ``publish()`` it. ``path`` defaults to the build
+        directory's name with ``.swn``, beside it.
+        """
+        from .document import write_document
+
+        return write_document(self._app_dir, path)
+
     def publish(
         self,
         *,

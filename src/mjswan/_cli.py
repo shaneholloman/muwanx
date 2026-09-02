@@ -106,7 +106,8 @@ def serve_cmd(
 @app.command("publish")
 def publish_cmd(
     dist_dir: Annotated[
-        Path, typer.Argument(help="Path to a built mjswan dist directory.")
+        Path,
+        typer.Argument(help="A built mjswan dist directory, or a .swn document."),
     ],
     *,
     title: Annotated[
@@ -132,7 +133,7 @@ def publish_cmd(
         ),
     ] = None,
 ) -> None:
-    """Publish a built dist directory's data files to mjswan Cloud."""
+    """Publish a built dist directory, or a .swn document, to mjswan Cloud."""
     from mjswan.publish import (
         TOKEN_ENV_VAR,
         PublishError,
@@ -142,7 +143,7 @@ def publish_cmd(
 
     resolved = dist_dir.expanduser().resolve()
     if not resolved.exists():
-        console.print(f"[red]Error:[/red] Directory not found: {dist_dir}")
+        console.print(f"[red]Error:[/red] Not found: {dist_dir}")
         raise typer.Exit(1)
 
     # No flag, env or stored session: run the browser login first, then publish.
@@ -413,34 +414,56 @@ def demo_cmd(
 @app.command("info")
 def info_cmd(
     dist_dir: Annotated[
-        Path, typer.Argument(help="Path to a built mjswan dist directory.")
+        Path,
+        typer.Argument(help="A built mjswan dist directory, or a .swn document."),
     ],
 ) -> None:
-    """Show information about a built mjswan app."""
-    import json
-
+    """Show information about a built mjswan app or a .swn simulation document."""
     from rich.tree import Tree
 
-    manifest_path = dist_dir / "manifest.json"
-    if not manifest_path.exists():
-        console.print(f"[red]Error:[/red] No manifest.json found in {dist_dir}")
-        raise typer.Exit(1)
-
-    manifest = json.loads(manifest_path.read_text())
-    version = manifest.get("version", "unknown")
-    fmt = manifest.get("format", "?")
-
-    tree = Tree(
-        f"[bold]mjswan app[/bold] — {dist_dir}  [dim]v{version}, format {fmt}[/dim]"
+    from mjswan.document import (
+        MANIFEST_NAME,
+        DocumentError,
+        as_directory,
+        is_document,
+        read_manifest,
     )
 
+    if not dist_dir.exists():
+        console.print(f"[red]Error:[/red] Not found: {dist_dir}")
+        raise typer.Exit(1)
+    if not is_document(dist_dir) and not (dist_dir / MANIFEST_NAME).exists():
+        console.print(f"[red]Error:[/red] No {MANIFEST_NAME} found in {dist_dir}")
+        raise typer.Exit(1)
+
+    try:
+        with as_directory(dist_dir) as root:
+            manifest = read_manifest(root)
+            kind = "document" if is_document(dist_dir) else "app"
+            version = manifest.get("version", "unknown")
+            fmt = manifest.get("format", "?")
+            tree = Tree(
+                f"[bold]mjswan {kind}[/bold] — {dist_dir}  "
+                f"[dim]v{version}, format {fmt}[/dim]"
+            )
+            total_bytes = _describe_projects(tree, root, manifest)
+    except DocumentError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    tree.add(f"[dim]Total scene+policy assets: {_fmt_size(total_bytes)}[/dim]")
+    console.print(tree)
+
+
+def _describe_projects(tree, root: Path, manifest: dict) -> int:
+    """Add one node per project/scene/MDP/policy under ``tree``; return the asset bytes."""
     total_bytes = 0
     for project in manifest.get("projects", []):
         p_node = tree.add(
             f"[cyan]{project['name']}[/cyan]  [dim][{project['id']}][/dim]"
         )
         for scene in project.get("scenes", []):
-            scene_dir = dist_dir / project["id"] / scene["id"]
+            scene_dir = root / project["id"] / scene["id"]
             scene_path = scene_dir / scene.get("scene", "")
             scene_size = scene_path.stat().st_size if scene_path.exists() else 0
             total_bytes += scene_size
@@ -463,9 +486,7 @@ def info_cmd(
                     f"Policy: [yellow]{policy['name']}[/yellow]  "
                     f"[dim]mdp={policy.get('mdp')}{size_str}[/dim]"
                 )
-
-    tree.add(f"[dim]Total scene+policy assets: {_fmt_size(total_bytes)}[/dim]")
-    console.print(tree)
+    return total_bytes
 
 
 # ── Legacy entry points (backward compatibility) ──────────────

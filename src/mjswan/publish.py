@@ -357,10 +357,11 @@ def publish_dist(
     transport: HttpTransport | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> PublishResult:
-    """Publish a built ``dist/`` directory to mjswan Cloud.
+    """Publish a built ``dist/`` directory, or a ``.swn`` document, to mjswan Cloud.
 
     Args:
-        dist_dir: Path to a directory produced by ``builder.build()``.
+        dist_dir: A directory produced by ``builder.build()``, or a ``.swn`` written by
+            ``MjswanApp.save_document()``, which uploads the same file set.
         title: Simulation title. Defaults to the first project's name.
         description: Optional description.
         tags: Optional list of tags.
@@ -376,11 +377,43 @@ def publish_dist(
     Raises:
         PublishError: on any client-side validation failure or server rejection.
     """
+    from .document import DocumentError, as_directory
+
     transport = transport or HttpTransport()
     base = resolve_api_base(api_base)
     notify = on_progress or (lambda _msg: None)
 
-    plan = plan_publish(Path(dist_dir))
+    # A document uploads exactly the file set its directory would: the archive is a
+    # packaging of the tree, so the server never needs to know it existed (ADR 0006 §8).
+    try:
+        with as_directory(Path(dist_dir)) as tree:
+            return _publish_tree(
+                tree,
+                title=title,
+                description=description,
+                tags=tags,
+                token=token,
+                base=base,
+                transport=transport,
+                notify=notify,
+            )
+    except DocumentError as exc:
+        # Only `unpack_document` raises this; the upload itself speaks PublishError.
+        raise PublishError(str(exc), file=Path(dist_dir).name) from exc
+
+
+def _publish_tree(
+    dist_dir: Path,
+    *,
+    title: str | None,
+    description: str | None,
+    tags: list[str] | None,
+    token: str | None,
+    base: str,
+    transport: HttpTransport,
+    notify: Callable[[str], None],
+) -> PublishResult:
+    plan = plan_publish(dist_dir)
     resolved_token = resolve_token(token)
 
     resolved_title = title or _default_title(plan.config)
