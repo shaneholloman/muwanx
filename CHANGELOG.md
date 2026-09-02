@@ -37,6 +37,13 @@ velocity-command shortcuts were removed outright, see Removed.
   the head pose used to overwrite the camera every frame, leaving the viewer behind. The
   rig returns to the origin when the session ends, and the desktop camera comes back to
   the offset it had.
+- **Passthrough AR.** A device that supports `immersive-ar` gets a **Start AR** button
+  beside **Enter VR**, and in a see-through session the skybox and the ground planes stop
+  being drawn, so the room shows behind the scene. three.js already clears the framebuffer
+  transparent for an `alpha-blend` blend mode; what covered the room was mjswan's own
+  drawing — a `CubeTexture` background is rendered as a box mesh, and MuJoCo's infinite
+  plane is a full-screen quad. The button is mjswan's rather than three's `ARButton`, which
+  pins the session to the `local` reference space and would leave the floor at eye height.
 - Debug visualisation for command terms, mirroring mjlab's `debug_vis`: `default_viz()`
   emits arrows and markers as data, toggled via `engine.debugVis.set`, on by default.
 - **`UniformVelocityCommandCfg` binds to a traced command term in mjswan itself**, so a

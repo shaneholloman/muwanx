@@ -42,7 +42,7 @@
 - **Real-time**: Run mujoco simulations and policy control in real time.
 - **Interactive**: Change the state of objects by applying forces.
 - **Cross-platform**: Works seamlessly on desktop and mobile devices.
-- **VR Support**: Native WebXR viewer with tracked hands that interact with objects.
+- **VR & AR Support**: Native WebXR viewer with tracked hands that interact with objects, and a passthrough AR mode that stands the scene in your room.
 - **Client-only**: All computation runs in the browser. No server for simulation is required.
 - **Easy Sharing**: Host as a static site for effortless demo distribution (e.g., GitHub Pages).
 - **Portable**: Embed the simulation in a web page or Google Colab notebook.

@@ -18,6 +18,8 @@ import { updateHeadlightFromCamera, updateLightsFromData } from '../scene/lights
 import { mjcToThreeCoordinate, threeToMjcCoordinate } from '../scene/coordinate';
 import { HandMocap, injectHandMocapFile } from '../xr/handMocap';
 import { XrLocomotion } from '../xr/locomotion';
+import { createArButton } from '../xr/arButton';
+import { Passthrough } from '../xr/passthrough';
 import {
   type CameraView,
   type ViewerConfig,
@@ -217,6 +219,10 @@ export class mjswanRuntime {
   private eventManager: EventManager | null;
   private terrainData: TerrainData | null;
   private vrButton: HTMLElement | null;
+  private arButton: HTMLElement | null;
+  /** Both XR support checks are async: a late one must not add a button after teardown. */
+  private disposed = false;
+  private readonly passthrough: Passthrough;
   private handMocap: HandMocap | null;
   /** Parent of the camera and hands: what XR locomotion moves. Identity outside a session. */
   private readonly xrRig: THREE.Group;
@@ -326,14 +332,25 @@ export class mjswanRuntime {
       this.handMocap = new HandMocap(hands);
     }
 
+    // Asked for in both modes: a Quest leaves hands untracked without it, and three
+    // requests it for neither.
+    const sessionInit: XRSessionInit = handTracking ? { optionalFeatures: ['hand-tracking'] } : {};
+
     this.vrButton = null;
     navigator.xr?.isSessionSupported('immersive-vr').then((supported) => {
-      if (supported) {
-        this.vrButton = VRButton.createButton(
-          this.renderer,
-          handTracking ? { optionalFeatures: ['hand-tracking'] } : {},
-        );
+      if (supported && !this.disposed) {
+        this.vrButton = VRButton.createButton(this.renderer, sessionInit);
         document.body.appendChild(this.vrButton);
+        this.layoutArButton();
+      }
+    });
+
+    this.arButton = null;
+    createArButton(this.renderer, sessionInit).then((button) => {
+      if (button && !this.disposed) {
+        this.arButton = button;
+        document.body.appendChild(this.arButton);
+        this.layoutArButton();
       }
     });
 
@@ -347,6 +364,7 @@ export class mjswanRuntime {
     this.controls.update();
 
     this.locomotion = new XrLocomotion(this.xrRig, this.camera);
+    this.passthrough = new Passthrough(this.scene);
     this.preXrCameraOffset = null;
     this.renderer.xr.addEventListener('sessionstart', this.onXrSessionStart);
     this.renderer.xr.addEventListener('sessionend', this.onXrSessionEnd);
@@ -560,6 +578,7 @@ export class mjswanRuntime {
       }
 
       this.mujocoRoot = this.scene.getObjectByName('MuJoCo Root') as THREE.Group | null;
+      this.passthrough.refresh();
 
       this.mujoco.mj_forward(this.mjModel, this.mjData);
       updateLightsFromData(this.mujoco, this.mjData, this.lights);
@@ -1584,12 +1603,30 @@ export class mjswanRuntime {
     }
   }
 
+  /**
+   * Right of the VR button's own spot, or centred when there is none. Only the AR button
+   * moves: `VRButton` re-centres itself when its support check resolves, which lands after
+   * this runs, so anything set on it here would be overwritten.
+   */
+  private layoutArButton(): void {
+    if (!this.arButton) {
+      return;
+    }
+    this.arButton.style.left = this.vrButton ? 'calc(50% + 60px)' : 'calc(50% - 50px)';
+  }
+
   /** Kept as an offset: the orbit target goes on tracking a moving body through a session. */
   private onXrSessionStart = (): void => {
     this.preXrCameraOffset = this.camera.position.clone().sub(this.controls.target);
+    // Blend mode rather than which button was pressed: anything but `opaque` composites
+    // the room in behind the scene, so the scene has to stop covering it.
+    if (this.renderer.xr.getEnvironmentBlendMode() !== 'opaque') {
+      this.passthrough.enter();
+    }
   };
 
   private onXrSessionEnd = (): void => {
+    this.passthrough.exit();
     this.locomotion.reset();
     if (this.preXrCameraOffset) {
       this.camera.position.copy(this.controls.target).add(this.preXrCameraOffset);
@@ -1694,6 +1731,7 @@ export class mjswanRuntime {
   };
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     // Await stop so the loop halts before we free the state it reads.
     await this.stop();
     this.policyRunner = null;
@@ -1746,6 +1784,11 @@ export class mjswanRuntime {
     if (this.vrButton?.parentElement) {
       this.vrButton.parentElement.removeChild(this.vrButton);
       this.vrButton = null;
+    }
+
+    if (this.arButton?.parentElement) {
+      this.arButton.parentElement.removeChild(this.arButton);
+      this.arButton = null;
     }
 
     this.bodies = null;
