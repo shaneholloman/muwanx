@@ -1655,17 +1655,11 @@ export class mjswanRuntime {
   private render = (): void => {
     this.commandManager.updateDebugVisuals();
 
-    // In a session the head pose owns the camera: body tracking moves the rig instead, and
-    // OrbitControls stays out of it, or its next update rebuilds the orbit from the head.
+    // In a session the head pose owns the camera, and OrbitControls stays out of it, or its
+    // next update rebuilds the orbit from the head.
     const presenting = this.renderer.xr.isPresenting;
     if (this.mjData) {
-      updateCameraFromData(
-        this.mjData,
-        this.camera,
-        this.controls,
-        this.cameraState,
-        presenting ? this.xrRig : null
-      );
+      updateCameraFromData(this.mjData, this.camera, this.controls, this.cameraState, presenting);
     }
     if (presenting) {
       // Zero on the session's first frame, which is also the frame before three has

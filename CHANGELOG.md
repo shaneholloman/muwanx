@@ -39,10 +39,11 @@ velocity-command shortcuts were removed outright, see Removed.
   rig returns to the origin when the session ends, and the desktop camera comes back to
   the offset it had. The rig's height comes from a `mj_ray` cast straight down under the
   head, so the viewer stands on the ground at their own height and a generated `Rough`
-  terrain no longer buries the view: z = 0 is a generator's base plane, not its surface, and
-  body tracking used to add the robot's own climbing and descending on top. Tracking now
-  moves the rig horizontally only, and ignores the metre-plus jump an episode reset makes
-  when it draws a new spawn patch — a desktop chase camera still follows both.
+  terrain no longer buries the view: z = 0 is a generator's base plane, not its surface.
+  Body tracking does not carry a viewer at all in a session — you arrive beside the tracked
+  body, where the viewer config points the desktop camera, and move yourself from there, so
+  neither the robot's climbing nor an episode reset's teleport to a new spawn patch moves
+  you. A desktop chase camera still follows both, as it did.
 - **Passthrough AR.** A device that supports `immersive-ar` gets a **Start AR** button
   beside **Enter VR**, and in a see-through session the skybox and the ground planes stop
   being drawn, so the room shows behind the scene. three.js already clears the framebuffer

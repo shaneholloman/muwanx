@@ -1,11 +1,10 @@
 /**
  * Stands the XR viewer on the ground under it, rather than on the plane z = 0.
  *
- * The rig's height used to come from two places that know nothing about the terrain: it
- * starts at z = 0, which is the terrain generator's base plane rather than its surface,
- * and body tracking added the robot's own vertical motion. On a generated `Rough` terrain
- * that is enough to put the head under the surface — MuJoCo's meshes are front-faced, so
- * the ground does not go black, it disappears and the scene shows through it.
+ * Left alone the rig sits at z = 0, which is a terrain generator's base plane rather than
+ * its surface. On a generated `Rough` terrain that is enough to put the head under the
+ * ground — MuJoCo's meshes are front-faced, so it does not go black, it disappears and
+ * the scene shows through it.
  *
  * So the vertical is taken from a single `mj_ray` cast straight down under the head, and
  * the horizontal is left to locomotion and tracking. How far above that surface the eyes

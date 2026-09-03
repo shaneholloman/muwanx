@@ -105,22 +105,20 @@ bar into your `src`.
 
 ### Moving around in VR
 
-**Enter VR** stands you at the scene's origin, and the controller sticks take you from
-there: the left stick slides you along the way you are looking, and the right stick turns
-you for as long as you hold it, as fast as you push it. Turns pivot on your head rather
+**Enter VR** stands you in the scene, and the controller sticks take you from there: the
+left stick slides you along the way you are looking, and the right stick turns you for as
+long as you hold it, as fast as you push it. Turns pivot on your head rather
 than on the play area's centre, so turning does not swing you sideways through the scene.
 Smooth turning is easier to aim with than snapping to fixed steps and harder on the
 stomach, which is why the rate is a modest 90° a second at full deflection.
 
-A scene whose viewer config tracks a body carries you along with it, so a robot that walks
-off does not leave you behind. That is the default (`origin_type=OriginType.AUTO` tracks
-the first non-fixed body); pass `ViewerConfig.OriginType.WORLD` to stand still instead.
-Only the horizontal part of that follows you: your floor comes from a ray cast straight
-down at your feet, so you stand on the ground at your own height rather than the headset's
-idea of z = 0. On a generated terrain that is what keeps you on top of a slope, and
-you arrive beside the robot rather than at the world origin, which is a terrain
-generator's base plane and not a place to stand. An episode reset teleports the robot to a
-new spawn patch; the view stays where it is rather than being flung across the terrain.
+You arrive where the scene's viewer config points its desktop camera, which is beside the
+tracked body by default — not at the world origin, which on a generated terrain is the
+generator's base plane rather than a place to stand. From there the view is yours: it does
+not follow the body around, so a robot that walks off walks off and you go after it with
+the stick. Your floor comes from a ray cast straight down at your feet, so you stand on
+the ground at your own height rather than on the headset's idea of z = 0, which is what
+keeps you on top of a slope instead of inside it.
 
 ### Hand tracking in VR
 

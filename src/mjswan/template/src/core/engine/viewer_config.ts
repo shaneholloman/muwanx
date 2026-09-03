@@ -134,13 +134,6 @@ export function applyViewerConfig(
 }
 
 /**
- * A frame's horizontal delta beyond this is an episode reset teleporting the body to a new
- * spawn, not the body walking. A desktop camera should follow it — that is how a chase
- * view keeps up — but a rig carrying a viewer must not.
- */
-const MAX_RIG_FOLLOW_STEP = 1.0;
-
-/**
  * Update the Three.js camera each frame for body tracking.
  *
  * Must be called before controls.update().
@@ -151,35 +144,25 @@ export function updateCameraFromData(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
   state: ViewerState,
-  /** In XR the head pose owns the camera, so the delta moves the rig instead. */
-  rig: THREE.Object3D | null = null
+  /**
+   * True while an XR session is presenting. A viewer standing in the scene is not carried
+   * around by the body it is watching, so only the orbit target keeps tracking — which is
+   * what leaves the desktop view pointing at the body again on the way out.
+   */
+  presenting = false
 ): void {
   if (state.trackBodyId !== null) {
-    // Parallel tracking: the viewpoint and the orbit target both take the body's
-    // delta each frame, so the camera angle and zoom level survive.
+    // Parallel tracking: the orbit target takes the body's delta, and off a headset the
+    // camera with it, so the camera angle and zoom level survive.
     const b = state.trackBodyId;
     const bodyPos = mjcToThreeCoordinate(mjData.xpos.slice(b * 3, b * 3 + 3));
     if (state.prevBodyPos !== null) {
       const delta = bodyPos.clone().sub(state.prevBodyPos);
       controls.target.add(delta);
-      if (rig) {
-        followWithRig(rig, delta);
-      } else {
+      if (!presenting) {
         camera.position.add(delta);
       }
     }
     state.prevBodyPos = bodyPos;
   }
-}
-
-/**
- * Horizontal only: the rig's height belongs to the ground under the viewer, not to the
- * body's own rise and fall, which on a rough terrain is a different height entirely.
- */
-function followWithRig(rig: THREE.Object3D, delta: THREE.Vector3): void {
-  if (Math.hypot(delta.x, delta.z) > MAX_RIG_FOLLOW_STEP) {
-    return;
-  }
-  rig.position.x += delta.x;
-  rig.position.z += delta.z;
 }
