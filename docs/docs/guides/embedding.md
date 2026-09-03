@@ -103,6 +103,23 @@ bar into your `src`.
 <iframe src="https://ttktjmt.github.io/mjswan/?scene=G1&policy=Locomotion&panel=0" …></iframe>
 ```
 
+### Moving around in VR
+
+**Enter VR** stands you in the scene, and the controller sticks take you from there: the
+left stick slides you along the way you are looking, and the right stick turns you for as
+long as you hold it, as fast as you push it. Turns pivot on your head rather
+than on the play area's centre, so turning does not swing you sideways through the scene.
+Smooth turning is easier to aim with than snapping to fixed steps and harder on the
+stomach, which is why the rate is a modest 90° a second at full deflection.
+
+You arrive where the scene's viewer config points its desktop camera, which is beside the
+tracked body by default — not at the world origin, which on a generated terrain is the
+generator's base plane rather than a place to stand. From there the view is yours: it does
+not follow the body around, so a robot that walks off walks off and you go after it with
+the stick. Your floor comes from a ray cast straight down at your feet, so you stand on
+the ground at your own height rather than on the headset's idea of z = 0, which is what
+keeps you on top of a slope instead of inside it.
+
 ### Hand tracking in VR
 
 `hands=1`, or `createEngine(element, { handTracking: true })` when you drive the engine
@@ -114,8 +131,22 @@ and that weld is what makes grasping work rather than only batting.
 
 It is opt-in because both halves cost something: every scene the build loads gains the
 hand bodies, which is roughly a third more work per physics step, and the headset must
-grant the `hand-tracking` feature. Ordinary desktop and mobile viewing is unaffected:
-untracked hands sit parked far below the scene.
+grant the `hand-tracking` feature — **Meta Quest** is the recommended one, since its
+browser ships WebXR hand tracking with nothing to install. Ordinary desktop and mobile
+viewing is unaffected: untracked hands sit parked far below the scene.
+
+### Passthrough AR
+
+A headset that supports `immersive-ar` gets a second button, **Start AR**, next to
+**Enter VR**. The simulation is the same one — same physics, same policy — but the skybox
+and the ground planes stop being drawn, so the room shows through and the robot stands on
+your own floor rather than on MuJoCo's checkerboard. The session asks for the
+`local-floor` reference space, which is what puts the model's `z = 0` at floor level
+instead of at eye level; the sticks move you as they do in VR, so you can walk the scene
+to where you want it. Hand tracking works the same here, under the same `hands=1`.
+
+What is not there yet: nothing occludes the scene, so a robot behind your real sofa is
+drawn in front of it, and no shadow falls on your floor.
 
 ## Google Colab
 

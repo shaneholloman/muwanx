@@ -527,6 +527,10 @@ export async function loadSceneFromURL(
     mesh.userData.ignoreDragForce = ignoreDragForce;
     bodies[b].userData.ignoreDragForce = ignoreDragForce;
     bodies[b].add(mesh);
+    if (type === mujoco.mjtGeom.mjGEOM_PLANE.value) {
+      // Read by `Passthrough`, which hides these so an AR session shows the room's floor.
+      mesh.userData.isGroundPlane = true;
+    }
     getPosition(mjModel.geom_pos, g, mesh.position);
     const isInfinitePlane =
       type === mujoco.mjtGeom.mjGEOM_PLANE.value && (size[0] === 0 || size[1] === 0);
@@ -576,6 +580,7 @@ export async function loadSceneFromURL(
       backMat.opacity = frontMat.opacity * 0.35;
       backMat.depthWrite = false;
       const backMesh = new THREE.Mesh(geometry, backMat);
+      backMesh.userData.isGroundPlane = true;
       backMesh.position.copy(mesh.position);
       backMesh.quaternion.copy(mesh.quaternion);
       backMesh.raycast = () => {};

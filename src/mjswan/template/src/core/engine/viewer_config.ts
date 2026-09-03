@@ -143,17 +143,24 @@ export function updateCameraFromData(
   mjData: MjData,
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
-  state: ViewerState
+  state: ViewerState,
+  /**
+   * A viewer standing in the scene is not carried around by the body it is watching, so
+   * only the orbit target tracks: the desktop view still points at the body on the way out.
+   */
+  presenting = false
 ): void {
   if (state.trackBodyId !== null) {
-    // Parallel tracking: translate both the camera and the orbit target by the
-    // body's delta each frame, preserving the camera angle and zoom level.
+    // Parallel tracking: the orbit target takes the body's delta, and off a headset the
+    // camera with it, so the camera angle and zoom level survive.
     const b = state.trackBodyId;
     const bodyPos = mjcToThreeCoordinate(mjData.xpos.slice(b * 3, b * 3 + 3));
     if (state.prevBodyPos !== null) {
       const delta = bodyPos.clone().sub(state.prevBodyPos);
-      camera.position.add(delta);
       controls.target.add(delta);
+      if (!presenting) {
+        camera.position.add(delta);
+      }
     }
     state.prevBodyPos = bodyPos;
   }

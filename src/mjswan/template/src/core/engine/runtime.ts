@@ -17,6 +17,10 @@ import { createTendonState, updateTendonGeometry, updateTendonRendering } from '
 import { updateHeadlightFromCamera, updateLightsFromData } from '../scene/lights';
 import { mjcToThreeCoordinate, threeToMjcCoordinate } from '../scene/coordinate';
 import { HandMocap, injectHandMocapFile } from '../xr/handMocap';
+import { updateXrLocomotion } from '../xr/locomotion';
+import { updateRigGrounding } from '../xr/grounding';
+import { createArButton } from '../xr/arButton';
+import { Passthrough } from '../xr/passthrough';
 import {
   type CameraView,
   type ViewerConfig,
@@ -60,6 +64,9 @@ const EMPTY_ACTIONS = new Float32Array(0);
 
 /** Only for a policy-less scene; a policy carries its own rate in `controlDt`. */
 const DEFAULT_VIEWER_CONTROL_DT = 0.02;
+
+/** The frame time every XR rate is scaled by, capped so a slept tab is not a teleport. */
+const MAX_XR_FRAME_SECONDS = 0.1;
 
 /** Keyed by joint name: the slot reader needs entity-joint order, not action order. */
 function buildJointBias(config: PolicyConfig): Map<string, number> {
@@ -216,7 +223,20 @@ export class mjswanRuntime {
   private eventManager: EventManager | null;
   private terrainData: TerrainData | null;
   private vrButton: HTMLElement | null;
+  private arButton: HTMLElement | null;
+  /** Both XR support checks are async: a late one must not add a button after teardown. */
+  private disposed = false;
+  private readonly passthrough: Passthrough;
   private handMocap: HandMocap | null;
+  /** Parent of the camera and hands: what XR locomotion moves. Identity outside a session. */
+  private readonly xrRig: THREE.Group;
+  private readonly xrClock = new THREE.Clock(false);
+  /** three has not written a head pose yet on a session's first frame. */
+  private xrFirstFrame = true;
+  /** Only an opaque session stands the viewer on the terrain; passthrough keeps the room's floor. */
+  private groundsRig = false;
+  /** Camera-to-target offset from before a session. */
+  private preXrCameraOffset: THREE.Vector3 | null;
   private splatMesh: SplatMesh | null;
   private colliderMesh: THREE.Group | null;
   private currentSplatTransform: SplatTransform;
@@ -294,7 +314,10 @@ export class mjswanRuntime {
     this.camera = new THREE.PerspectiveCamera(45, width / height, 0.001, 1000);
     this.camera.name = 'PerspectiveCamera';
     this.camera.position.set(2.0, 1.7, 1.7);
-    this.scene.add(this.camera);
+    this.xrRig = new THREE.Group();
+    this.xrRig.name = 'XR Rig';
+    this.xrRig.add(this.camera);
+    this.scene.add(this.xrRig);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.xr.enabled = true;
@@ -310,19 +333,29 @@ export class mjswanRuntime {
     if (handTracking) {
       const hands = [0, 1].map((i) => this.renderer.xr.getHand(i));
       for (const hand of hands) {
-        this.scene.add(hand);
+        this.xrRig.add(hand);
       }
       this.handMocap = new HandMocap(hands);
     }
 
+    // Asked for in both modes: a Quest leaves hands untracked without it.
+    const sessionInit: XRSessionInit = handTracking ? { optionalFeatures: ['hand-tracking'] } : {};
+
     this.vrButton = null;
     navigator.xr?.isSessionSupported('immersive-vr').then((supported) => {
-      if (supported) {
-        this.vrButton = VRButton.createButton(
-          this.renderer,
-          handTracking ? { optionalFeatures: ['hand-tracking'] } : {},
-        );
+      if (supported && !this.disposed) {
+        this.vrButton = VRButton.createButton(this.renderer, sessionInit);
         document.body.appendChild(this.vrButton);
+        this.layoutArButton();
+      }
+    });
+
+    this.arButton = null;
+    createArButton(this.renderer, sessionInit).then((button) => {
+      if (button && !this.disposed) {
+        this.arButton = button;
+        document.body.appendChild(this.arButton);
+        this.layoutArButton();
       }
     });
 
@@ -334,6 +367,11 @@ export class mjswanRuntime {
     this.controls.dampingFactor = 0.1;
     this.controls.screenSpacePanning = true;
     this.controls.update();
+
+    this.passthrough = new Passthrough(this.scene);
+    this.preXrCameraOffset = null;
+    this.renderer.xr.addEventListener('sessionstart', this.onXrSessionStart);
+    this.renderer.xr.addEventListener('sessionend', this.onXrSessionEnd);
 
     this.renderer.setAnimationLoop(this.render);
     window.addEventListener('resize', this.onWindowResize);
@@ -544,6 +582,7 @@ export class mjswanRuntime {
       }
 
       this.mujocoRoot = this.scene.getObjectByName('MuJoCo Root') as THREE.Group | null;
+      this.passthrough.refresh();
 
       this.mujoco.mj_forward(this.mjModel, this.mjData);
       updateLightsFromData(this.mujoco, this.mjData, this.lights);
@@ -1568,13 +1607,79 @@ export class mjswanRuntime {
     }
   }
 
+  /**
+   * Right of the VR button, or centred when there is none. Only the AR button moves:
+   * `VRButton` re-centres itself when its own check resolves, after this runs.
+   */
+  private layoutArButton(): void {
+    if (!this.arButton) {
+      return;
+    }
+    this.arButton.style.left = this.vrButton ? 'calc(50% + 60px)' : 'calc(50% - 50px)';
+  }
+
+  /** Kept as an offset: the orbit target goes on tracking a moving body through a session. */
+  private onXrSessionStart = (): void => {
+    this.preXrCameraOffset = this.camera.position.clone().sub(this.controls.target);
+    this.xrClock.start();
+    this.xrFirstFrame = true;
+    // Blend mode rather than which button was pressed: anything but `opaque` composites
+    // the room in behind the scene, so the scene has to stop covering it.
+    const passthrough = this.renderer.xr.getEnvironmentBlendMode() !== 'opaque';
+    if (passthrough) {
+      this.passthrough.enter();
+    }
+    this.groundsRig = !passthrough;
+    if (this.groundsRig) {
+      // Where the viewer config points the desktop camera, beside the tracked body: the
+      // world origin is a terrain generator's base plane, not a place to stand.
+      this.xrRig.position.set(this.camera.position.x, 0, this.camera.position.z);
+    }
+  };
+
+  private onXrSessionEnd = (): void => {
+    this.passthrough.exit();
+    this.groundsRig = false;
+    this.xrClock.stop();
+    // Back to the origin, so the desktop camera is handed back where it was.
+    this.xrRig.position.set(0, 0, 0);
+    this.xrRig.quaternion.identity();
+    if (this.preXrCameraOffset) {
+      this.camera.position.copy(this.controls.target).add(this.preXrCameraOffset);
+      this.preXrCameraOffset = null;
+    }
+    this.controls.update();
+  };
+
   private render = (): void => {
     this.commandManager.updateDebugVisuals();
 
+    // In a session the head pose owns the camera, and OrbitControls stays out of it, or its
+    // next update rebuilds the orbit from the head.
+    const presenting = this.renderer.xr.isPresenting;
     if (this.mjData) {
-      updateCameraFromData(this.mjData, this.camera, this.controls, this.cameraState);
+      updateCameraFromData(this.mjData, this.camera, this.controls, this.cameraState, presenting);
     }
-    this.controls.update();
+    if (presenting) {
+      const seconds = Math.min(this.xrClock.getDelta(), MAX_XR_FRAME_SECONDS);
+      if (this.xrFirstFrame) {
+        this.xrFirstFrame = false;
+      } else {
+        updateXrLocomotion(this.xrRig, this.camera, this.renderer.xr.getSession(), seconds);
+        if (this.groundsRig) {
+          updateRigGrounding(
+            this.xrRig,
+            this.camera,
+            this.mujoco,
+            this.mjModel,
+            this.mjData,
+            seconds
+          );
+        }
+      }
+    } else {
+      this.controls.update();
+    }
 
     if (this.mjModel && this.mjData && this.bodies) {
       updateHeadlightFromCamera(this.camera, this.lights);
@@ -1651,6 +1756,7 @@ export class mjswanRuntime {
   };
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     // Await stop so the loop halts before we free the state it reads.
     await this.stop();
     this.policyRunner = null;
@@ -1690,6 +1796,8 @@ export class mjswanRuntime {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
 
+    this.renderer.xr.removeEventListener('sessionstart', this.onXrSessionStart);
+    this.renderer.xr.removeEventListener('sessionend', this.onXrSessionEnd);
     this.controls.dispose();
     this.renderer.setAnimationLoop(null);
     this.renderer.dispose();
@@ -1701,6 +1809,11 @@ export class mjswanRuntime {
     if (this.vrButton?.parentElement) {
       this.vrButton.parentElement.removeChild(this.vrButton);
       this.vrButton = null;
+    }
+
+    if (this.arButton?.parentElement) {
+      this.arButton.parentElement.removeChild(this.arButton);
+      this.arButton = null;
     }
 
     this.bodies = null;

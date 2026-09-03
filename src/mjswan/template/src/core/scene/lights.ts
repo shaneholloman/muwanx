@@ -248,6 +248,7 @@ export function updateLightsFromData(mujoco: MainModule, mjData: MjData, lights:
 
 export function updateHeadlightFromCamera(camera: THREE.Camera, lights: THREE.Light[]): void {
   const dir = new THREE.Vector3();
+  const pos = new THREE.Vector3();
   for (const light of lights) {
     const userData = light.userData as { isHeadlight?: boolean } | undefined;
     if (!userData?.isHeadlight) {
@@ -255,8 +256,10 @@ export function updateHeadlightFromCamera(camera: THREE.Camera, lights: THREE.Li
     }
     const dl = light as THREE.DirectionalLight;
     camera.getWorldDirection(dir);
-    dl.position.copy(camera.position);
-    dl.target.position.copy(camera.position).add(dir);
+    // World, not local: in XR the camera hangs off a rig that moves.
+    camera.getWorldPosition(pos);
+    dl.position.copy(pos);
+    dl.target.position.copy(pos).add(dir);
     dl.target.updateMatrixWorld?.();
   }
 }
