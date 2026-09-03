@@ -2,20 +2,12 @@
  * What has to stop being drawn for a passthrough session to show the room.
  *
  * three.js already clears the framebuffer transparent once the session reports an
- * `alpha-blend` blend mode, so the empty parts of the view come for free. What covers the
- * room is what mjswan itself draws over it:
- *
- * - The skybox. A CubeTexture on `scene.background` is rendered as a background box mesh,
- *   so a transparent clear underneath it changes nothing.
- * - The ground planes. MuJoCo's infinite plane is a full-screen quad that paints every
- *   pixel whose view ray meets z = 0, which is most of the lower half of the view.
- *
- * Both are restored on the way out, and re-hidden after a scene rebuild, which brings its
- * own skybox and floor.
+ * `alpha-blend` blend mode, so only mjswan's own drawing covers the room: a `CubeTexture`
+ * on `scene.background` is rendered as a background box mesh that a transparent clear
+ * underneath does not touch, and MuJoCo's infinite plane is a full-screen quad that paints
+ * every pixel whose view ray meets z = 0.
  */
 import * as THREE from 'three';
-
-import { isGroundPlane } from '../scene/scene';
 
 export class Passthrough {
   private readonly scene: THREE.Scene;
@@ -26,16 +18,11 @@ export class Passthrough {
     this.scene = scene;
   }
 
-  get isActive(): boolean {
-    return this.active;
-  }
-
   enter(): void {
-    if (this.active) {
-      return;
+    if (!this.active) {
+      this.active = true;
+      this.hide();
     }
-    this.active = true;
-    this.hide();
   }
 
   exit(): void {
@@ -45,9 +32,7 @@ export class Passthrough {
     this.active = false;
     this.scene.background = this.background;
     this.background = null;
-    for (const plane of this.groundPlanes()) {
-      plane.visible = true;
-    }
+    this.setPlanes(true);
   }
 
   /** After a scene rebuild mid-session, whose skybox and floor arrive visible. */
@@ -63,18 +48,15 @@ export class Passthrough {
       this.background = this.scene.background;
     }
     this.scene.background = null;
-    for (const plane of this.groundPlanes()) {
-      plane.visible = false;
-    }
+    this.setPlanes(false);
   }
 
-  private groundPlanes(): THREE.Object3D[] {
-    const planes: THREE.Object3D[] = [];
+  /** Tagged by the scene loader, which knows which geoms are planes. */
+  private setPlanes(visible: boolean): void {
     this.scene.traverse((object) => {
-      if (isGroundPlane(object)) {
-        planes.push(object);
+      if (object.userData.isGroundPlane === true) {
+        object.visible = visible;
       }
     });
-    return planes;
   }
 }

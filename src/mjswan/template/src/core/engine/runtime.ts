@@ -17,9 +17,8 @@ import { createTendonState, updateTendonGeometry, updateTendonRendering } from '
 import { updateHeadlightFromCamera, updateLightsFromData } from '../scene/lights';
 import { mjcToThreeCoordinate, threeToMjcCoordinate } from '../scene/coordinate';
 import { HandMocap, injectHandMocapFile } from '../xr/handMocap';
-import { XrLocomotion } from '../xr/locomotion';
-import { RigGrounding } from '../xr/grounding';
-import { FrameClock } from '../xr/frameClock';
+import { updateXrLocomotion } from '../xr/locomotion';
+import { updateRigGrounding } from '../xr/grounding';
 import { createArButton } from '../xr/arButton';
 import { Passthrough } from '../xr/passthrough';
 import {
@@ -65,6 +64,9 @@ const EMPTY_ACTIONS = new Float32Array(0);
 
 /** Only for a policy-less scene; a policy carries its own rate in `controlDt`. */
 const DEFAULT_VIEWER_CONTROL_DT = 0.02;
+
+/** The frame time every XR rate is scaled by, capped so a slept tab is not a teleport. */
+const MAX_XR_FRAME_SECONDS = 0.1;
 
 /** Keyed by joint name: the slot reader needs entity-joint order, not action order. */
 function buildJointBias(config: PolicyConfig): Map<string, number> {
@@ -228,9 +230,9 @@ export class mjswanRuntime {
   private handMocap: HandMocap | null;
   /** Parent of the camera and hands: what locomotion and grounding move. Identity outside a session. */
   private readonly xrRig: THREE.Group;
-  private readonly locomotion: XrLocomotion;
-  private readonly grounding: RigGrounding;
-  private readonly xrClock = new FrameClock();
+  private readonly xrClock = new THREE.Clock(false);
+  /** three has not written a head pose yet on a session's first frame. */
+  private xrFirstFrame = true;
   /** Only an opaque session stands the viewer on the terrain; passthrough keeps the room's floor. */
   private groundsRig = false;
   /** Camera-to-target offset from before a session, which owns the camera pose while it runs. */
@@ -369,8 +371,6 @@ export class mjswanRuntime {
     this.controls.screenSpacePanning = true;
     this.controls.update();
 
-    this.locomotion = new XrLocomotion(this.xrRig, this.camera);
-    this.grounding = new RigGrounding(this.xrRig, this.camera);
     this.passthrough = new Passthrough(this.scene);
     this.preXrCameraOffset = null;
     this.renderer.xr.addEventListener('sessionstart', this.onXrSessionStart);
@@ -1625,6 +1625,8 @@ export class mjswanRuntime {
   /** Kept as an offset: the orbit target goes on tracking a moving body through a session. */
   private onXrSessionStart = (): void => {
     this.preXrCameraOffset = this.camera.position.clone().sub(this.controls.target);
+    this.xrClock.start();
+    this.xrFirstFrame = true;
     // Blend mode rather than which button was pressed: anything but `opaque` composites
     // the room in behind the scene, so the scene has to stop covering it.
     const passthrough = this.renderer.xr.getEnvironmentBlendMode() !== 'opaque';
@@ -1643,8 +1645,10 @@ export class mjswanRuntime {
   private onXrSessionEnd = (): void => {
     this.passthrough.exit();
     this.groundsRig = false;
-    this.xrClock.reset();
-    this.locomotion.reset();
+    this.xrClock.stop();
+    // Back to the origin, so the desktop camera is handed back where it was.
+    this.xrRig.position.set(0, 0, 0);
+    this.xrRig.quaternion.identity();
     if (this.preXrCameraOffset) {
       this.camera.position.copy(this.controls.target).add(this.preXrCameraOffset);
       this.preXrCameraOffset = null;
@@ -1662,12 +1666,22 @@ export class mjswanRuntime {
       updateCameraFromData(this.mjData, this.camera, this.controls, this.cameraState, presenting);
     }
     if (presenting) {
-      // Zero on the session's first frame, which is also the frame before three has
-      // written a head pose for the modules below to read.
-      const seconds = this.xrClock.tick(performance.now());
-      this.locomotion.update(this.renderer.xr.getSession(), seconds);
-      if (this.groundsRig && seconds > 0) {
-        this.grounding.update(this.mujoco, this.mjModel, this.mjData, seconds);
+      // Clamped, or the first frame back from a slept tab teleports whatever it drives.
+      const seconds = Math.min(this.xrClock.getDelta(), MAX_XR_FRAME_SECONDS);
+      if (this.xrFirstFrame) {
+        this.xrFirstFrame = false;
+      } else {
+        updateXrLocomotion(this.xrRig, this.camera, this.renderer.xr.getSession(), seconds);
+        if (this.groundsRig) {
+          updateRigGrounding(
+            this.xrRig,
+            this.camera,
+            this.mujoco,
+            this.mjModel,
+            this.mjData,
+            seconds
+          );
+        }
       }
     } else {
       this.controls.update();

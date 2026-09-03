@@ -63,16 +63,6 @@ describe('Passthrough', () => {
     expect(scene.background).toBe(skybox);
   });
 
-  it('reports whether it is holding the scene open', () => {
-    const { scene } = loaded();
-    const passthrough = new Passthrough(scene);
-
-    expect(passthrough.isActive).toBe(false);
-    passthrough.enter();
-    expect(passthrough.isActive).toBe(true);
-    passthrough.exit();
-    expect(passthrough.isActive).toBe(false);
-  });
 
   it('leaves a scene alone when a session it never entered ends', () => {
     const { scene, skybox, floor } = loaded();

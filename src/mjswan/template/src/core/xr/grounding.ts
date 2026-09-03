@@ -1,15 +1,12 @@
 /**
- * Stands the XR viewer on the ground under it, rather than on the plane z = 0.
+ * Stands the XR viewer on the ground under it, rather than on the plane z = 0, which is a
+ * terrain generator's base plane rather than its surface.
  *
- * Left alone the rig sits at z = 0, which is a terrain generator's base plane rather than
- * its surface. On a generated `Rough` terrain that is enough to put the head under the
- * ground — MuJoCo's meshes are front-faced, so it does not go black, it disappears and
- * the scene shows through it.
- *
- * So the vertical is taken from a single `mj_ray` cast straight down under the head, and
- * the horizontal is left to locomotion and tracking. How far above that surface the eyes
- * end up is the headset's to report, exactly as it is in a room: the rig carries the
- * viewer's floor, not their height.
+ * A head under the surface does not go black: MuJoCo's meshes are front-faced, so the
+ * ground disappears and the scene shows through it. The vertical therefore comes from a
+ * single `mj_ray` cast straight down under the head, and the horizontal is left to
+ * locomotion. How far above that surface the eyes end up is the headset's to report: the
+ * rig carries the viewer's floor, not their height.
  */
 import * as THREE from 'three';
 
@@ -21,10 +18,9 @@ type MjData = import('mujoco').MjData;
 type MainModule = import('mujoco').MainModule;
 
 /**
- * Group 0 only, which is where a terrain's geoms live and a robot's do not — the same
- * mask mjlab's height scan uses, and for the same reason. A scene that leaves everything
- * in group 0 can have a ray land on the robot instead; the rate limit below bounds what
- * that costs, and it corrects itself as soon as the viewer moves.
+ * Group 0 only, the mask mjlab's height scan uses to miss the robot's own legs. A scene
+ * that leaves everything in group 0 can have a ray land on the robot instead; the rate
+ * limit below bounds what that costs, and it corrects itself as the viewer moves.
  */
 const TERRAIN_GROUP = geomGroupMask([0]);
 
@@ -40,69 +36,62 @@ const CLIMB_SPEED = 3;
 /** The head is never allowed closer to the ground than this, whatever the rate limit says. */
 const MIN_HEAD_CLEARANCE = 0.15;
 
-export class RigGrounding {
-  private readonly rig: THREE.Object3D;
-  private readonly camera: THREE.Camera;
-  private readonly head = new THREE.Vector3();
-  private readonly origin: number[] = [0, 0, 0];
-  /** `mj_ray` writes the geom it hit here; unused, but the binding wants the slot. */
-  private readonly geomId = new Int32Array(1);
+const head = new THREE.Vector3();
+const origin: number[] = [0, 0, 0];
+/** `mj_ray` writes the geom it hit here; unused, but the binding wants the slot. */
+const geomId = new Int32Array(1);
 
-  constructor(rig: THREE.Object3D, camera: THREE.Camera) {
-    this.rig = rig;
-    this.camera = camera;
+/** Once per rendered XR frame, after locomotion and tracking have moved the rig. */
+export function updateRigGrounding(
+  rig: THREE.Object3D,
+  camera: THREE.Camera,
+  mujoco: MainModule,
+  mjModel: MjModel | null,
+  mjData: MjData | null,
+  seconds: number
+): void {
+  if (!mjModel || !mjData) {
+    return;
+  }
+  camera.getWorldPosition(head);
+  // Read before the rig moves below, which would otherwise take this with it.
+  const headAboveRig = head.y - rig.position.y;
+
+  const ground = sampleGround(mujoco, mjModel, mjData);
+  if (ground === null) {
+    return; // nothing under the viewer: keep the height it already had
   }
 
-  /** Once per rendered XR frame, after locomotion and tracking have moved the rig. */
-  update(
-    mujoco: MainModule,
-    mjModel: MjModel | null,
-    mjData: MjData | null,
-    seconds: number
-  ): void {
-    if (!mjModel || !mjData) {
-      return;
-    }
-    this.camera.getWorldPosition(this.head);
-    // Read before the rig moves below, which would otherwise take this with it.
-    const headAboveRig = this.head.y - this.rig.position.y;
+  const limit = CLIMB_SPEED * seconds;
+  rig.position.y += THREE.MathUtils.clamp(ground - rig.position.y, -limit, limit);
 
-    const ground = this.sampleGround(mujoco, mjModel, mjData);
-    if (ground === null) {
-      return; // nothing under the viewer: keep the height it already had
-    }
-
-    const limit = CLIMB_SPEED * seconds;
-    this.rig.position.y += THREE.MathUtils.clamp(ground - this.rig.position.y, -limit, limit);
-
-    // Being inside the ground is worse than a jump, so this one ignores the rate limit.
-    const floor = ground + MIN_HEAD_CLEARANCE - headAboveRig;
-    if (this.rig.position.y < floor) {
-      this.rig.position.y = floor;
-    }
+  // Being inside the ground is worse than a jump, so this one ignores the rate limit.
+  const floor = ground + MIN_HEAD_CLEARANCE - headAboveRig;
+  if (rig.position.y < floor) {
+    rig.position.y = floor;
   }
+}
 
-  /** World height of the ground under the head, or null where the ray hit nothing. */
-  private sampleGround(mujoco: MainModule, mjModel: MjModel, mjData: MjData): number | null {
-    const mjc = threeToMjcCoordinate(this.head);
-    this.origin[0] = mjc.x;
-    this.origin[1] = mjc.y;
-    this.origin[2] = mjc.z + RAY_START_ABOVE;
-    const distance = mujoco.mj_ray(
-      mjModel,
-      mjData,
-      this.origin,
-      DOWN,
-      TERRAIN_GROUP as unknown as number[],
-      1,
-      -1,
-      this.geomId,
-      null
-    );
-    if (distance < 0) {
-      return null;
-    }
-    // MuJoCo's z is three.js's y, so the hit height needs no conversion of its own.
-    return this.origin[2] - distance;
+/** World height of the ground under the head, or null where the ray hit nothing. */
+function sampleGround(mujoco: MainModule, mjModel: MjModel, mjData: MjData): number | null {
+  const mjc = threeToMjcCoordinate(head);
+  origin[0] = mjc.x;
+  origin[1] = mjc.y;
+  origin[2] = mjc.z + RAY_START_ABOVE;
+  const distance = mujoco.mj_ray(
+    mjModel,
+    mjData,
+    origin,
+    DOWN,
+    TERRAIN_GROUP as unknown as number[],
+    1,
+    -1,
+    geomId,
+    null
+  );
+  if (distance < 0) {
+    return null;
   }
+  // MuJoCo's z is three.js's y, so the hit height needs no conversion of its own.
+  return origin[2] - distance;
 }

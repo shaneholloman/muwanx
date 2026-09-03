@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 
-import { RigGrounding } from '../grounding';
+import { updateRigGrounding } from '../grounding';
 
 const CLIMB_SPEED = 3;
 const FRAME = 0.05;
@@ -47,7 +47,8 @@ const DATA = {} as MjData;
 function rigged(headHeight = 1.5): {
   rig: THREE.Group;
   camera: THREE.PerspectiveCamera;
-  ground: RigGrounding;
+  /** One frame of grounding, bound to this rig. */
+  ground: (mujoco: MainModule, m?: MjModel | null, d?: MjData | null) => void;
   /** The head's world height, which is what the module is really placing. */
   headY: () => number;
 } {
@@ -59,7 +60,8 @@ function rigged(headHeight = 1.5): {
   return {
     rig,
     camera,
-    ground: new RigGrounding(rig, camera),
+    ground: (mujoco, m = MODEL, d = DATA) =>
+      updateRigGrounding(rig, camera, mujoco, m, d, FRAME),
     headY: () => {
       rig.updateMatrixWorld(true);
       return camera.getWorldPosition(new THREE.Vector3()).y;
@@ -69,14 +71,14 @@ function rigged(headHeight = 1.5): {
 
 /** Run frames until the height settles, or fail loudly rather than loop forever. */
 function settle(
-  ground: RigGrounding,
+  ground: (mujoco: MainModule) => void,
   mujoco: MainModule,
   rig: THREE.Group,
   frames = 200
 ): void {
   for (let i = 0; i < frames; i++) {
     const before = rig.position.y;
-    ground.update(mujoco, MODEL, DATA, FRAME);
+    ground(mujoco);
     rig.updateMatrixWorld(true);
     if (Math.abs(rig.position.y - before) < 1e-9) {
       return;
@@ -85,7 +87,7 @@ function settle(
   throw new Error('the rig height never settled');
 }
 
-describe('RigGrounding', () => {
+describe('updateRigGrounding', () => {
   /** The viewer's height in the scene is their own, so only the floor is placed. */
   it('puts the floor on the ground and leaves the headset its own height', () => {
     for (const headHeight of [1.5, 1.7, 1.9]) {
@@ -115,7 +117,7 @@ describe('RigGrounding', () => {
 
     camera.position.y -= 0.5;
     rig.updateMatrixWorld(true);
-    ground.update(mujoco, MODEL, DATA, FRAME);
+    ground(mujoco);
 
     expect(headY()).toBeCloseTo(standing - 0.5, 6);
   });
@@ -127,9 +129,9 @@ describe('RigGrounding', () => {
     expect(rig.position.y).toBeCloseTo(0, 6);
 
     const step = mujocoWith(() => 0.5);
-    ground.update(step, MODEL, DATA, FRAME);
+    ground(step);
     expect(rig.position.y).toBeCloseTo(CLIMB_SPEED * FRAME, 6);
-    ground.update(step, MODEL, DATA, FRAME);
+    ground(step);
     expect(rig.position.y).toBeCloseTo(2 * CLIMB_SPEED * FRAME, 6);
 
     settle(ground, step, rig);
@@ -140,7 +142,7 @@ describe('RigGrounding', () => {
   it('lifts the head clear of the ground at once', () => {
     const { rig, ground, headY } = rigged();
     // Standing in a hollow, then the ground under the viewer jumps well above the head.
-    ground.update(mujocoWith(() => 8), MODEL, DATA, FRAME);
+    ground(mujocoWith(() => 8));
     rig.updateMatrixWorld(true);
 
     expect(headY()).toBeCloseTo(8 + MIN_HEAD_CLEARANCE, 6);
@@ -151,7 +153,7 @@ describe('RigGrounding', () => {
     settle(ground, mujocoWith(() => 0.4), rig);
     const held = rig.position.y;
 
-    ground.update(mujocoWith(() => null), MODEL, DATA, FRAME);
+    ground(mujocoWith(() => null));
     expect(rig.position.y).toBeCloseTo(held, 6);
   });
 
@@ -177,8 +179,8 @@ describe('RigGrounding', () => {
 
   it('does nothing without a model', () => {
     const { rig, ground } = rigged();
-    ground.update(mujocoWith(() => 5), null, DATA, FRAME);
-    ground.update(mujocoWith(() => 5), MODEL, null, FRAME);
+    ground(mujocoWith(() => 5), null, DATA);
+    ground(mujocoWith(() => 5), MODEL, null);
     expect(rig.position.y).toBe(0);
   });
 

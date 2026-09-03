@@ -51,14 +51,6 @@ function normalizePathSegments(path: string): string {
   return resolved.join('/');
 }
 
-/**
- * A plane geom's mesh. Tagged by the loader below and read by `Passthrough`, which hides
- * the set of them so an AR session shows the room's own floor instead.
- */
-export function isGroundPlane(object: THREE.Object3D): boolean {
-  return object.userData.isGroundPlane === true;
-}
-
 function createInfinitePlaneShaderMaterial(params: {
   color: THREE.Color;
   opacity: number;
@@ -536,6 +528,7 @@ export async function loadSceneFromURL(
     bodies[b].userData.ignoreDragForce = ignoreDragForce;
     bodies[b].add(mesh);
     if (type === mujoco.mjtGeom.mjGEOM_PLANE.value) {
+      // Read by `Passthrough`, which hides these so an AR session shows the room's floor.
       mesh.userData.isGroundPlane = true;
     }
     getPosition(mjModel.geom_pos, g, mesh.position);

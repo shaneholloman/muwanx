@@ -1,30 +1,18 @@
 /**
- * An "START AR" button, alongside three's `VRButton` rather than in place of it: a Quest
+ * A "START AR" button, alongside three's `VRButton` rather than in place of it: a Quest
  * supports both modes, and VR stays what the bundled app opens in.
  *
  * three ships an `ARButton`, but it pins the session to the `local` reference space, whose
- * origin is wherever the head started — on a headset that leaves the scene's floor at eye
+ * origin is wherever the head started, which on a headset leaves the scene's floor at eye
  * height. This asks for `local-floor` instead, so MuJoCo's z = 0 lands on the real floor.
  */
 import type * as THREE from 'three';
 
 /** VRButton's own look, so the two buttons read as a pair. */
-function stylize(element: HTMLElement): void {
-  element.style.position = 'absolute';
-  element.style.bottom = '20px';
-  element.style.padding = '12px 6px';
-  element.style.border = '1px solid #fff';
-  element.style.borderRadius = '4px';
-  element.style.background = 'rgba(0,0,0,0.1)';
-  element.style.color = '#fff';
-  element.style.font = 'normal 13px sans-serif';
-  element.style.textAlign = 'center';
-  element.style.opacity = '0.5';
-  element.style.outline = 'none';
-  element.style.zIndex = '999';
-  element.style.cursor = 'pointer';
-  element.style.width = '100px';
-}
+const STYLE =
+  'position:absolute;bottom:20px;width:100px;padding:12px 6px;border:1px solid #fff;' +
+  'border-radius:4px;background:rgba(0,0,0,0.1);color:#fff;font:normal 13px sans-serif;' +
+  'text-align:center;opacity:0.5;outline:none;z-index:999;cursor:pointer';
 
 /**
  * A button that enters `immersive-ar`, or `null` where the device cannot. Unpositioned:
@@ -55,27 +43,24 @@ export async function createArButton(
   };
 
   const button = document.createElement('button');
-  stylize(button);
+  button.style.cssText = STYLE;
   button.textContent = 'START AR';
   button.onmouseenter = () => (button.style.opacity = '1.0');
   button.onmouseleave = () => (button.style.opacity = '0.5');
 
   let current: XRSession | null = null;
 
-  const onEnded = (): void => {
-    current?.removeEventListener('end', onEnded);
-    current = null;
-    button.textContent = 'START AR';
-  };
-
   button.onclick = () => {
     if (current) {
-      current.end();
+      void current.end();
       return;
     }
     xr.requestSession('immersive-ar', options)
       .then(async (session) => {
-        session.addEventListener('end', onEnded);
+        session.addEventListener('end', () => {
+          current = null;
+          button.textContent = 'START AR';
+        });
         // Before `setSession`, which is where the space is actually requested.
         renderer.xr.setReferenceSpaceType('local-floor');
         await renderer.xr.setSession(session);
