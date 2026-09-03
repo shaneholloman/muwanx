@@ -25,15 +25,15 @@ export interface MotionInput {
 
 export interface PolicyInput {
   /**
-   * The policy's manifest entry merged with its MDP — observations, actions,
-   * terminations, commands and events; opaque to the app, interpreted by the engine.
+   * The policy's manifest entry merged with its MDP (observations, actions,
+   * terminations, commands and events); opaque to the app, interpreted by the engine.
    */
   config: object;
   onnx: Bytes;
   /**
    * Traced term-body graphs of the whole MDP, events included, keyed by the path the
    * config refers to them by (`"mdp/locomotion/obs/actor.onnx"`). The engine never fetches,
-   * so the app delivers the bytes — `mjswan/manifest` fills this in,
+   * so the app delivers the bytes: `mjswan/manifest` fills this in,
    * `policyGraphRefs(config)` enumerates what to load. A missing entry warns and skips
    * that term.
    */

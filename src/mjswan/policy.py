@@ -57,7 +57,7 @@ class PolicyConfig:
     """Optional source path for the policy config JSON file."""
 
     mdp: MdpConfig = field(default_factory=MdpConfig)
-    """The MDP this policy runs against — its observations, actions, terminations,
+    """The MDP this policy runs against: its observations, actions, terminations,
     commands and events as one unit (ADR 0006 §3). Two policies given the same object
     share one MDP: one set of traced graphs, one ``mdp/<id>/`` directory. The five
     read-only properties below are views onto it."""
@@ -95,7 +95,7 @@ class PolicyConfig:
 
     in_keys: list[str] | None = None
     """The ONNX input slot table: ``in_keys[i]`` names the tensor that fills the
-    network's *i*-th input — an observation group, or one the runtime synthesizes
+    network's *i*-th input, an observation group or one the runtime synthesizes
     (:data:`RUNTIME_INPUT_SLOTS`). The network's own input names never matter; the
     mapping is positional. ``None`` for a single-input policy, whose one input takes its
     one observation group whatever that is called; required when the network has more
@@ -135,7 +135,7 @@ class PolicyConfig:
     default: bool = False
     """Whether this policy should be the initially selected one in the viewer.
 
-    At most one policy in a scene may set it — two fail the build — and when none does,
+    At most one policy in a scene may set it (two fail the build); when none does,
     the first added is the default.
     """
 

@@ -26,16 +26,9 @@ function collectFrom(value: unknown, into: Set<string>): void {
   for (const nested of Object.values(record)) collectFrom(nested, into);
 }
 
-/** Graph paths a policy's config refers to — scene-relative — sorted for determinism. */
+/** Graph paths a policy's config refers to (scene-relative), sorted for determinism. */
 export function policyGraphRefs(config: Record<string, unknown>): string[] {
   const refs = new Set<string>();
   for (const section of POLICY_SECTIONS) collectFrom(config[section], refs);
-  return [...refs].sort();
-}
-
-/** Traced-graph paths referenced by a list of event configs. */
-export function eventGraphRefs(events: unknown): string[] {
-  const refs = new Set<string>();
-  collectFrom(events, refs);
   return [...refs].sort();
 }

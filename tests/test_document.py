@@ -1,6 +1,6 @@
 """The `.swn` simulation document (ADR 0006 §8).
 
-Layer: L1 — a built tree on disk, the Node build and template copy mocked. What is
+Layer: L1, a built tree on disk with the Node build and template copy mocked. What is
 pinned: a document is the manifest plus the project trees and nothing of the engine,
 it unpacks to the tree it was made from, and publishing it uploads exactly what
 publishing the directory would.

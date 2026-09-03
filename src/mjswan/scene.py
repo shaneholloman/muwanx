@@ -243,13 +243,13 @@ class SceneConfig:
     events: dict[str, Any] | None = None
     """The scene's event terms (mjswan or mjlab ``EventTermCfg``), adapted.
 
-    The default a policy's MDP takes when it says nothing about events — a task's own,
+    The default a policy's MDP takes when it says nothing about events: a task's own,
     for an :meth:`ProjectHandle.add_scene_mjlab` scene (ADR 0006 §3). Serialized lazily
     at build time so ONNX tracing has the scene's live env and output directory."""
 
     events_explicit: bool = field(default=False, repr=False, compare=False)
     """Whether :attr:`events` were set by the author rather than inherited from a task's
-    env config — decides whether dropping them on a policy-less scene is worth a warning."""
+    env config; decides whether dropping them on a policy-less scene is worth a warning."""
 
     mdps: list[MdpConfig] = field(default_factory=list, repr=False, compare=False)
     """Every distinct :class:`MdpConfig` a policy on this scene uses, in first-use order.
@@ -330,8 +330,8 @@ class SceneConfig:
         An MDP the term-set sugar built for one policy takes that policy's id
         (``policy_id``), so ``mdp/locomotion/`` sits beside ``policy/locomotion.onnx``
         and a scene's MDP directories read as its policies do. Only a config handed to
-        several policies by hand — what ``add_policy_wandb`` does for a run's
-        checkpoints — falls back to ``mdp_<n>``, with *n* its first-use index on this
+        several policies by hand (what ``add_policy_wandb`` does for a run's
+        checkpoints) falls back to ``mdp_<n>``, with *n* its first-use index on this
         scene: per scene, so adding a scene in front of this one moves none of its ids.
         """
         for known, ident in zip(self.mdps, self.mdp_ids):
@@ -369,7 +369,7 @@ def _check_slot_tables(
     inputs must declare ``in_keys``: nothing else records where the runtime-synthesized
     tensors sit relative to the observation groups, and without it the policy would fail
     at playback with a missing input rather than here (ADR 0006 §5). Several *outputs*
-    cannot be refused the same way — one of them may well be the action — but which one
+    cannot be refused the same way, since one of them may well be the action; which one
     is unknowable here, so the default (the first) is announced.
     """
     inputs, outputs = _onnx_io_names(model)
@@ -471,8 +471,8 @@ class SceneHandle:
         term set still reads as "this policy has none".
 
         Events default differently from the other four: a per-policy ``env_cfg`` supplies
-        its own, but otherwise they come from the *scene's* events — already adapted, and
-        with the terrain-spawn patch applied — not from the env config again.
+        its own, but otherwise they come from the *scene's* events (already adapted, and
+        with the terrain-spawn patch applied), not from the env config again.
 
         :meth:`add_policy_wandb` needs the resolved ``commands`` too — it scans them for
         the tracking term to know which motion clip to fetch — hence a shared helper.
@@ -509,7 +509,7 @@ class SceneHandle:
 
         Runs on the first policy to use the config; later policies find ``_adapted`` set
         and share the result. Action scales and PD gains are resolved against the first
-        policy's joint names — the checkpoints of one run share them.
+        policy's joint names: the checkpoints of one run share them.
         """
         if mdp._adapted:
             return
@@ -577,7 +577,7 @@ class SceneHandle:
     ) -> PolicyHandle:
         """Add an ONNX policy to this scene.
 
-        The policy runs against an MDP — observations, actions, terminations, commands
+        The policy runs against an MDP: observations, actions, terminations, commands
         and events (ADR 0006 §3). Pass one as ``mdp`` to share it between policies (the
         checkpoints of one run), or pass the five term sets directly and an anonymous
         :class:`~mjswan.mdp.MdpConfig` is built from them; not both.
@@ -615,7 +615,7 @@ class SceneHandle:
             terminations: Termination term configurations.
             events: Event term configurations, in any of the four modes.
             in_keys: The network's input slot table: ``in_keys[i]`` names what fills its
-                *i*-th input — an observation group, or a tensor the runtime synthesizes
+                *i*-th input, an observation group or a tensor the runtime synthesizes
                 (``is_init``, ``adapt_hx``, ``time_step``). The network's own input names
                 never matter; the mapping is positional. Required when the network has
                 more than one input; a single-input network takes its one observation
@@ -1143,7 +1143,7 @@ class SceneHandle:
     def set_events(
         self, events: Mapping[str, Any], *, _explicit: bool = True
     ) -> SceneHandle:
-        """Set the scene's events — the default for every policy's MDP on it.
+        """Set the scene's events, the default for every policy's MDP on it.
 
         Accepts mjswan or mjlab ``EventTermCfg`` instances in any of the four modes.
         ONNX tracing happens at build time, as for observations and terminations. Events

@@ -34,12 +34,7 @@ from mjswan.utils import (
 NAME2ID_CASES = json.loads(
     (
         Path(__file__).resolve().parents[1]
-        / "src"
-        / "mjswan"
-        / "template"
-        / "src"
-        / "manifest"
-        / "name2id_cases.json"
+        / "src/mjswan/template/src/manifest/name2id_cases.json"
     ).read_text()
 )
 

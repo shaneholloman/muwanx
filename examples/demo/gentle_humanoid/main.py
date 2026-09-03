@@ -275,10 +275,9 @@ def setup_builder() -> mjswan.Builder:
         name="Gentle Humanoid Tracking",
         policy=onnx.load(str(policy_path), load_external_data=True),
         config_path=str(policy_json),
-        # The checkpoint's own output table, which the build no longer reads from the
-        # sidecar (ADR 0006 §5). Without it the runtime would drive the robot from
-        # output 0 instead of `action`. The sidecar still carries it, so the build
-        # warns once that it ignored it; that warning is expected here.
+        # Without this the runtime drives the robot from output 0 instead of `action`
+        # (ADR 0006 §5). The sidecar still carries the table, so the build's
+        # ignored-slot-table warning is expected here.
         out_keys=[
             "policy",
             "priv_pred",

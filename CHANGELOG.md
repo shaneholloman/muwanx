@@ -193,8 +193,11 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   `manifest.json` (supersedes ADR 0005 §1). The per-project `index.html` / `logo.svg`
   copies and the `main/` special case for the first project go with them: a project's
   directory is its id, and the app resolves `?project=` against ids only.
-- `add_project(id=...)`: a project's id is `name2id(name)`. Passing `id=` raises
-  `TypeError`.
+- `add_project(id=...)`: a project's id is `name2id(name)`, so the directory and the
+  `?project=` value can never disagree. Passing `id=` raises `TypeError`.
+- `eventGraphRefs` from `mjswan/engine`, with no alias. Events are part of a policy's MDP
+  now, so `policyGraphRefs(config)` already enumerates their graphs; a scene carries no
+  event list for a separate helper to scan.
 - Slot tables read from a `config_path` sidecar (`onnx.meta.in_keys` / `out_keys`, or
   top-level `in_keys` / `out_keys`): declare them on `add_policy` instead.
 - **`mjswan.dsl`**, the declarative composition-graph DSL (ADR 0003) and its TypeScript

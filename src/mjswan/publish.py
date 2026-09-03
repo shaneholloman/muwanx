@@ -1,8 +1,8 @@
 """Publish a built mjswan ``dist/`` to mjswan Cloud (v2).
 
 This module extracts the **data files** from a local build (manifest.json plus
-scene/policy/motion/splat assets and traced MDP graphs — never HTML/JS/WASM) and uploads them to
-mjswan Cloud using the three-step presigned-upload protocol described in
+scene/policy/motion/splat assets and traced MDP graphs; never HTML/JS/WASM) and uploads
+them to mjswan Cloud using the three-step presigned-upload protocol described in
 mjswan-cloud ADR 0001 §6:
 
 1. ``POST {base}/api/simulations/upload-session`` with a file manifest and the
@@ -257,7 +257,7 @@ def plan_publish(dist_dir: Path) -> PublishPlan:
     plan = PublishPlan(dist_dir=dist_dir, config=config)
 
     # `manifest.json` already sits at the root, where every path under a scene entry
-    # resolves against `<project-id>/<scene-id>/` — nothing to hoist (ADR 0006 §8).
+    # resolves against `<project-id>/<scene-id>/`; nothing to hoist (ADR 0006 §8).
     for path in sorted(dist_dir.rglob("*")):
         if not path.is_file():
             continue

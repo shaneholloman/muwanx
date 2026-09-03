@@ -71,14 +71,10 @@ export class ModelFieldDefaults {
     return copy;
   }
 
-  /** Whether any field has been touched, and so whether `restore()` has work to do. */
-  get dirty(): boolean {
-    return this.snapshots.size > 0;
-  }
-
   /**
-   * Write every snapshotted field back to its compiled value. The caller owes an
-   * `mj_setConst` afterwards when it returns true, for the same reason a write does.
+   * Write every snapshotted field back to its compiled value, and report whether there
+   * was anything to write. The caller owes an `mj_setConst` afterwards when it returns
+   * true, for the same reason a write does.
    */
   restore(): boolean {
     if (this.snapshots.size === 0) return false;
@@ -230,7 +226,7 @@ function recomputeGeomBounds(
   const size = mjModel.geom_size as ArrayLike<number> | undefined;
   const types = mjModel.geom_type as ArrayLike<number> | undefined;
   // Snapshotted before they are written, so `restore()` covers the bounds as well as the
-  // sizes they follow from — otherwise a switch would restore a size to a stale bound.
+  // sizes they follow from; otherwise a switch would restore a size to a stale bound.
   defaults.base('geom_rbound');
   defaults.base('geom_aabb');
   const rbound = mjModel.geom_rbound as unknown as { [index: number]: number } | undefined;

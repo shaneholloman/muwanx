@@ -7,8 +7,8 @@ hosting several checkpoints of one task traced the same MDP once per checkpoint 
 could not switch its events with the policy. :class:`MdpConfig` puts the five back
 together (ADR 0006 §3).
 
-Identity is by object: two policies handed the *same* ``MdpConfig`` share one MDP —
-one ``mdp/<id>/`` directory in the build, one set of traced graphs — while two equal
+Identity is by object: two policies handed the *same* ``MdpConfig`` share one MDP
+(one ``mdp/<id>/`` directory in the build, one set of traced graphs), while two equal
 but separate configs are two MDPs. The per-manager keyword arguments on
 :meth:`~mjswan.scene.SceneHandle.add_policy` remain and construct an anonymous one.
 """
@@ -58,14 +58,12 @@ class MdpConfig:
 
     events: dict[str, EventTermCfg] | Mapping[str, Any] | None = None
     """Event terms, keyed by name, in any of the four modes. ``None`` takes the scene's
-    events — a task's own, for an :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`
-    scene — so a policy that says nothing about events gets the ones it was trained with."""
+    events (a task's own, for an :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`
+    scene), so a policy that says nothing about events gets the ones it was trained with."""
 
     name: str | None = None
-    """Optional name. Its ``name2id`` is the MDP's id — its ``mdp/<id>/`` directory in the
-    build. Unnamed, a config the ``add_policy`` term-set kwargs built takes the id of the
-    policy it was built for; one handed to several policies is ``mdp_<n>``, numbered per
-    scene in first-use order."""
+    """Optional name; its ``name2id`` is the MDP's id, its ``mdp/<id>/`` directory in the
+    build. Unnamed ids are derived instead: see :meth:`~mjswan.scene.SceneConfig.mdp_id`."""
 
     _adapted: bool = field(default=False, init=False, repr=False, compare=False)
     """Set once the first policy has filled and adapted this config on a scene."""

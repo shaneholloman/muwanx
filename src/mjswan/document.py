@@ -1,10 +1,9 @@
 """The ``.swn`` simulation document: a build's data as one file (ADR 0006 §8).
 
-A build is authored as a directory — ``manifest.json`` over ``<project-id>/<scene-id>/``
-— and that directory is the document. Packaging it is a reversible step over the tree,
-the way ``.docx`` and partitioned Parquet package theirs: a ZIP whose entries are the
-tree's paths, so every tool that understands the directory understands the file once it
-is unpacked, and nothing is described twice.
+A build is authored as a directory, ``manifest.json`` over ``<project-id>/<scene-id>/``,
+and that directory is the document. Packaging it is reversible: a ZIP whose entries are
+the tree's paths, so every tool that understands the directory understands the file once
+it is unpacked, and nothing is described twice.
 
 What goes in is exactly what describes and runs the simulation: the manifest and every
 file under a project directory. The engine (``index.html``, ``assets/*.js``, WASM) and the
@@ -23,6 +22,13 @@ from pathlib import Path, PurePosixPath
 
 DOCUMENT_SUFFIX = ".swn"
 MANIFEST_NAME = "manifest.json"
+
+#: The structure a build writes: what files exist, where they sit, and what the manifest
+#: says about them. Bumped by hand, only when an engine reading the old structure would
+#: misread the new one. Not the mjswan version, which is stamped separately as ``version``
+#: (ADR 0006 §7): a host picks an engine by ``version``, an engine protects itself by
+#: ``format``. Absent means the layout that predates ADR 0006.
+DOCUMENT_FORMAT = 1
 
 #: Already-compressed containers: deflating them again costs time for nothing.
 _STORED_SUFFIXES = frozenset({".mjz", ".npz", ".spz"})
@@ -111,7 +117,7 @@ def write_document(dist_dir: str | Path, target: str | Path | None = None) -> Pa
 
 
 def unpack_document(document: str | Path, target_dir: str | Path) -> Path:
-    """Expand a ``.swn`` into ``target_dir`` — the tree the build wrote — and return it.
+    """Expand a ``.swn`` into ``target_dir``, the tree the build wrote, and return it.
 
     Entries are confined to the target: an archive naming ``../x`` or an absolute path is
     refused rather than written outside it.
@@ -130,13 +136,10 @@ def unpack_document(document: str | Path, target_dir: str | Path) -> Path:
             raise _not_a_document(document, f"no {MANIFEST_NAME}")
         for info in zf.infolist():
             rel = PurePosixPath(info.filename)
-            if rel.is_absolute() or ".." in rel.parts:
-                raise DocumentError(
-                    f"{document} names {info.filename!r}, which would land outside the "
-                    "directory it is unpacked into."
-                )
+            # Resolved against the target, an absolute or `..`-bearing entry lands
+            # outside it, so the one containment check covers both.
             dest = (root / Path(*rel.parts)).resolve()
-            if root != dest and root not in dest.parents:
+            if rel.is_absolute() or (root != dest and root not in dest.parents):
                 raise DocumentError(
                     f"{document} names {info.filename!r}, which would land outside the "
                     "directory it is unpacked into."
@@ -153,7 +156,7 @@ def unpack_document(document: str | Path, target_dir: str | Path) -> Path:
 def as_directory(source: str | Path) -> Iterator[Path]:
     """``source`` itself when it is a built directory; a ``.swn`` unpacked to a temp dir.
 
-    Lets a consumer that walks the tree — ``publish``, ``mjswan info`` — take either
+    Lets a consumer that walks the tree (``publish``, ``mjswan info``) take either
     form with one code path: the archive is a packaging of the tree, not a second
     representation. The temporary directory is removed on exit.
     """
@@ -166,6 +169,7 @@ def as_directory(source: str | Path) -> Iterator[Path]:
 
 
 __all__ = [
+    "DOCUMENT_FORMAT",
     "DOCUMENT_SUFFIX",
     "MANIFEST_NAME",
     "DocumentError",

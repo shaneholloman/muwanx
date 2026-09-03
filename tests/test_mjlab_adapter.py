@@ -276,8 +276,8 @@ class TestAdaptObservations:
 class TestObservationGroupKey:
     """A lone group lands under the default slot, ``actor`` (ADR 0006 §5).
 
-    The dict key is a *slot* name — what the policy's ``in_keys`` table calls the tensor
-    that fills an input — and the default table is ``["actor"]``, mjlab's own name for
+    The dict key is a *slot* name (what the policy's ``in_keys`` table calls the tensor
+    that fills an input), and the default table is ``["actor"]``, mjlab's own name for
     the group its actor network reads. So a single group needs no key from the caller,
     and a dict keyed any other way is the caller's own slot table, passed through.
     """
@@ -356,7 +356,7 @@ class TestObservationGroupKey:
 class TestMjlabGroupDictSelection:
     """An mjlab ``env_cfg.observations`` is keyed by *network*; mjswan's by *slot*.
 
-    Two namespaces that look alike — and since the default slot is called ``actor`` too,
+    Two namespaces that look alike; since the default slot is called ``actor`` too,
     mjlab's own dict needs no renaming, only the other networks' groups dropped. The
     runner's ``obs_groups`` says which keys belong to which network; the adapter touches
     only those and keeps its hands off everything else. Getting that boundary wrong is
@@ -392,7 +392,7 @@ class TestMjlabGroupDictSelection:
             }
 
     def test_slots_the_runner_does_not_know_stay_beside_the_actor_group(self):
-        # Facet: `in_keys=["command", "actor", ...]` — two real inputs, both ours. The
+        # Facet: `in_keys=["command", "actor", ...]`, two real inputs, both ours. The
         # runner knows `actor` and `critic`; `command` is the author's slot, and dropping
         # it would leave the network an input short.
         actor = ObservationGroupCfg(terms={})

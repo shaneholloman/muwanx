@@ -225,7 +225,7 @@ export class mjswanRuntime {
   private readonly referenceActionCommands = new Map<ResolvedActionTerm, string>();
   private scenePlugins: EnginePlugins;
   private policyPlugins: EnginePlugins;
-  /** Every traced graph of the current MDP — observations, terminations, commands, events. */
+  /** Every traced graph of the current MDP: observations, terminations, commands, events. */
   private policyGraphs: OnnxSessionCache;
   /**
    * The compiled values of every `mjModel` field a startup randomization has touched, for
@@ -893,7 +893,7 @@ export class mjswanRuntime {
             `(${this.policyGraphs.size} traced graph(s) in this MDP)`,
         );
         // `mode="startup"` fires once per MDP, before its first reset, as mjlab fires it
-        // at env construction — and over the compiled model, which `restore()` just made
+        // at env construction, and over the compiled model, which `restore()` just made
         // true again.
         await this.eventManager.startup(this.eventContext(), this.modelFieldDefaults ?? undefined);
         this.mujoco.mj_forward(this.mjModel, this.mjData);

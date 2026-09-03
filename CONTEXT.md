@@ -25,8 +25,8 @@ src/mjswan/          Python package source
   trace_env.py         Minimal live envs for tracing (build_single_entity_trace_env)
   utils.py             ZIP-DEFLATE bundling, XML path rewriting, name2id slug + scoped unique ids
   mdp.py               MdpConfig: the five term sets a policy runs against, as one shared unit
-  document.py          The .swn simulation document: list / pack / unpack the built tree
-  _format.py           DOCUMENT_FORMAT, the manifest's layout version
+  document.py          The .swn simulation document: list / pack / unpack the built tree,
+                       and DOCUMENT_FORMAT, the layout version the manifest stamps
   wandb_io.py          W&B checkpoint / motion artifact downloads
   _onnx_build.py       Bridges term cfg dataclasses → compile/ tracer; writes .onnx + JSON
   _graph_io.py         Bundle path a traced graph gets, and the guarded write to it

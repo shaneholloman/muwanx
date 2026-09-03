@@ -48,7 +48,7 @@ async function loadCatalog(base: string): Promise<Catalog> {
 }
 
 /**
- * Resolve a `?project=` / `?scene=` / `?policy=` value against the entries' ids — the
+ * Resolve a `?project=` / `?scene=` / `?policy=` value against the entries' ids, the
  * form `syncUrl` writes and the build names its directories by. The query is sanitized
  * too, so a hand-typed display name still lands; nothing matches on the raw name
  * (ADR 0006 §4).

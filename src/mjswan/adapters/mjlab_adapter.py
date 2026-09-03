@@ -249,16 +249,16 @@ def adapt_observations(
       under :data:`DEFAULT_OBS_GROUP_KEY`;
     * mjlab's whole ``env_cfg.observations`` dict, from which the policy's group is
       selected (see :func:`_select_policy_group`) and the other networks' dropped;
-    * a dict already keyed by slot name — the names the policy's ``in_keys`` table
-      uses — passed through as-is.
+    * a dict already keyed by slot name (the names the policy's ``in_keys`` table
+      uses), passed through as-is.
 
     mjlab groups convert transparently, mjswan ones pass through, and a group named for
     a training-only network (:data:`_TRAINING_ONLY_OBS_GROUPS`) is dropped: silently
     beside an ``actor`` group, since the pair is mjlab's own dict, with a warning
     otherwise.
 
-    *obs_groups* is the task's runner ``rl_cfg.obs_groups`` — which group(s) each
-    network reads — consulted only for the dict form.
+    *obs_groups* is the task's runner ``rl_cfg.obs_groups`` (which group(s) each
+    network reads), consulted only for the dict form.
     """
     if observations is None:
         return None
@@ -275,7 +275,7 @@ def adapt_observations(
                 warnings.warn(
                     f"Dropping observation group {key!r}: mjlab exports only the actor "
                     "network, so no ONNX input consumes it. Pass just the policy's own "
-                    'group — `observations=env_cfg.observations["actor"]`.',
+                    'group: `observations=env_cfg.observations["actor"]`.',
                     category=RuntimeWarning,
                     stacklevel=3,
                 )

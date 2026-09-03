@@ -13,8 +13,8 @@ if (typeof __ORT_CDN_BASE__ !== 'undefined') {
 
 /**
  * The policy's slot tables (ADR 0006 §5). `in_keys[i]` names the tensor that fills the
- * session's i-th input — an observation group, or one the runtime synthesizes (`is_init`,
- * `adapt_hx`, `time_step`) — and `out_keys[i]` names its i-th output. Positional: the
+ * session's i-th input, an observation group or one the runtime synthesizes (`is_init`,
+ * `adapt_hx`, `time_step`); `out_keys[i]` names its i-th output. Positional: the
  * model's own tensor names are read from the session and appear in no config.
  */
 export type OnnxSlotTables = {
@@ -23,8 +23,8 @@ export type OnnxSlotTables = {
 };
 
 /** What a policy that declares no tables gets: one input fed by the `actor` group. */
-export const DEFAULT_IN_KEYS: readonly string[] = ['actor'];
-export const DEFAULT_OUT_KEYS: readonly string[] = ['action'];
+const DEFAULT_IN_KEYS: readonly string[] = ['actor'];
+const DEFAULT_OUT_KEYS: readonly string[] = ['action'];
 
 export class OnnxModule {
   private bytes: ArrayBuffer;
@@ -111,7 +111,7 @@ export class OnnxModule {
 
   /**
    * Settle the input table against the session. A single-input model takes the configured
-   * key as is — the label is free, only the position matters — and so does a table exactly
+   * key as is (the label is free, only the position matters), and so does a table exactly
    * as long as the model's input list, which is what the build guarantees for a document.
    * Anything else is a hand-written config that disagrees with its network; the model's
    * own input names are used, so a tensor supplied under them is still found.

@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import warnings
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -203,7 +202,7 @@ class TestBuildSplatConfigDict:
         d = Builder()._build_splat_config_dict(splat)
         assert "path" not in d
 
-    def test_url_splat_has_url_key(self, monkeypatch):
+    def test_url_splat_has_url_key(self):
         splat = SplatConfig(name="My Splat", url="https://example.com/bg.spz")
         d = Builder()._build_splat_config_dict(splat)
         assert d["url"] == "https://example.com/bg.spz"
@@ -212,56 +211,51 @@ class TestBuildSplatConfigDict:
 # ===========================================================================
 # L1 — splat entries in manifest.json
 # ===========================================================================
-def _build(builder: Builder, out: Path, monkeypatch) -> dict:
-    monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
-    monkeypatch.setattr("mjswan.builder.shutil.copytree", MagicMock())
-    builder._save_web(out)
-    return json.loads((out / "manifest.json").read_text())
-
-
 class TestSaveConfigJsonSplats:
     def _read_scene(self, tmp_path: Path) -> dict:
         manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
         return manifest["projects"][0]["scenes"][0]
 
     def test_no_splats_key_when_scene_has_no_splats(
-        self, tmp_path, minimal_model, monkeypatch
+        self, tmp_path, minimal_model, build_manifest
     ):
         builder = Builder()
         builder.add_project(name="P").add_scene(name="S", model=minimal_model)
-        _build(builder, tmp_path / "out", monkeypatch)
+        build_manifest(builder, tmp_path / "out")
         assert "splats" not in self._read_scene(tmp_path)
 
-    def test_url_splat_appears_in_config(self, tmp_path, minimal_model, monkeypatch):
+    def test_url_splat_appears_in_config(self, tmp_path, minimal_model, build_manifest):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.add_splat("Outdoor", url="https://example.com/bg.spz")
-        _build(builder, tmp_path / "out", monkeypatch)
+        build_manifest(builder, tmp_path / "out")
         splats = self._read_scene(tmp_path)["splats"]
         assert len(splats) == 1
         assert splats[0]["url"] == "https://example.com/bg.spz"
 
-    def test_url_splat_has_no_path_key(self, tmp_path, minimal_model, monkeypatch):
+    def test_url_splat_has_no_path_key(self, tmp_path, minimal_model, build_manifest):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.add_splat("Outdoor", url="https://example.com/bg.spz")
-        _build(builder, tmp_path / "out", monkeypatch)
+        build_manifest(builder, tmp_path / "out")
         assert "path" not in self._read_scene(tmp_path)["splats"][0]
 
-    def test_source_splat_has_path_key(self, tmp_path, minimal_model, monkeypatch):
+    def test_source_splat_has_path_key(self, tmp_path, minimal_model, build_manifest):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.add_splat("Outdoor", source="bg.spz")
-        _build(builder, tmp_path / "out", monkeypatch)
+        build_manifest(builder, tmp_path / "out")
         splat = self._read_scene(tmp_path)["splats"][0]
         assert splat["path"] == f"assets/{name2id('Outdoor')}.spz"
 
-    def test_multiple_splats_all_in_config(self, tmp_path, minimal_model, monkeypatch):
+    def test_multiple_splats_all_in_config(
+        self, tmp_path, minimal_model, build_manifest
+    ):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.add_splat("A", url="https://example.com/a.spz")
         scene.add_splat("B", url="https://example.com/b.spz")
-        _build(builder, tmp_path / "out", monkeypatch)
+        build_manifest(builder, tmp_path / "out")
         splats = self._read_scene(tmp_path)["splats"]
         assert len(splats) == 2
         assert splats[0]["name"] == "A"
@@ -291,35 +285,35 @@ class TestAddSplatSection:
         assert scene._config.splat_section is True
 
     def test_splat_section_key_emitted_when_no_splats(
-        self, tmp_path, minimal_model, monkeypatch
+        self, tmp_path, minimal_model, build_manifest
     ):
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.enable_splat_section()
-        _build(builder, tmp_path / "out", monkeypatch)
+        build_manifest(builder, tmp_path / "out")
         scene_cfg = self._read_scene(tmp_path)
         assert scene_cfg.get("splat_section") is True
 
     def test_splat_section_key_absent_by_default(
-        self, tmp_path, minimal_model, monkeypatch
+        self, tmp_path, minimal_model, build_manifest
     ):
         builder = Builder()
         builder.add_project(name="P").add_scene(name="S", model=minimal_model)
-        _build(builder, tmp_path / "out", monkeypatch)
+        build_manifest(builder, tmp_path / "out")
         scene_cfg = self._read_scene(tmp_path)
-        assert "splatSection" not in scene_cfg
+        assert "splat_section" not in scene_cfg
 
     def test_splat_section_key_absent_when_splats_defined(
-        self, tmp_path, minimal_model, monkeypatch
+        self, tmp_path, minimal_model, build_manifest
     ):
-        """splatSection is redundant when splats are already defined — omit it."""
+        """`splat_section` is redundant when splats are already defined, so omit it."""
         builder = Builder()
         scene = builder.add_project(name="P").add_scene(name="S", model=minimal_model)
         scene.add_splat("Outdoor", url="https://example.com/bg.spz")
         scene.enable_splat_section()
-        _build(builder, tmp_path / "out", monkeypatch)
+        build_manifest(builder, tmp_path / "out")
         scene_cfg = self._read_scene(tmp_path)
-        assert "splatSection" not in scene_cfg
+        assert "splat_section" not in scene_cfg
         assert "splats" in scene_cfg
 
 

@@ -216,9 +216,8 @@ def _add_g1_scene(project) -> None:
         name="Balance",
         config_path="assets/unitree_g1/balance.json",
         terminations=g1_terminations,
-        # One ONNX input, one group: the group is handed over bare and lands under the
-        # default slot. What the network calls its input tensor never matters — the
-        # mapping is positional (ADR 0006 §5).
+        # One ONNX input, one group: handed over bare, it lands under the default slot
+        # (ADR 0006 §5).
         observations=ObservationGroupCfg(
             terms={
                 "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
@@ -259,10 +258,8 @@ def _add_go2_scene(project) -> None:
             damping=0.5,
         )
     }
-    # These networks take four inputs, so each policy declares its slot table: `in_keys[i]`
-    # names what fills the i-th input — one of the two observation groups below, or the
-    # recurrent carry (`is_init`, `adapt_hx`) the runtime supplies itself. The dict keys
-    # are those slot names; the networks' own tensor names never appear (ADR 0006 §5).
+    # Keyed by slot name (see GO2_VELOCITY_IN_KEYS); the networks' own tensor names
+    # never appear (ADR 0006 §5).
     go2_velocity_obs = {
         "actor": ObservationGroupCfg(
             terms={
@@ -300,8 +297,8 @@ def _add_go2_scene(project) -> None:
         actions=go2_actions,
         in_keys=["command", "actor", "is_init", "adapt_hx"],
         out_keys=["command", *GO2_OUT_KEYS],
-        # Genuinely multi-input — a command group beside the proprioceptive one, plus the
-        # recurrent carry — which is what the dict form is for: one group per slot.
+        # Genuinely multi-input (a command group beside the proprioceptive one), which
+        # is what the dict form is for: one group per slot.
         observations={
             "actor": ObservationGroupCfg(
                 terms={

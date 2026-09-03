@@ -308,16 +308,13 @@ describe('ModelFieldDefaults across an MDP switch (ADR 0006 §9)', () => {
     const defaults = new ModelFieldDefaults(mjModel);
     apply(config({ operation: 'scale', axis_ranges: { '0': [3, 3] } }), new SeededRng(1), defaults);
     expect(friction('robot/foot_collision')[0]).toBeCloseTo(compiled * 3, 6);
-    expect(defaults.dirty).toBe(true);
 
     expect(defaults.restore()).toBe(true);
     expect(friction('robot/foot_collision')[0]).toBeCloseTo(compiled, 6);
   });
 
   it('has nothing to restore before anything was touched', () => {
-    const defaults = new ModelFieldDefaults(mjModel);
-    expect(defaults.dirty).toBe(false);
-    expect(defaults.restore()).toBe(false);
+    expect(new ModelFieldDefaults(mjModel).restore()).toBe(false);
   });
 
   it('lets a second startup pass compose against the compiled value, not the first pass', () => {

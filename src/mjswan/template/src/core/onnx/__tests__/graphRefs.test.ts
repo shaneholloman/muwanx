@@ -7,10 +7,12 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { eventGraphRefs, policyGraphRefs } from '../graphRefs';
+import { policyGraphRefs } from '../graphRefs';
 
 describe('policyGraphRefs', () => {
-  it('collects refs from observation groups, terminations and commands', () => {
+  it('collects refs from observations, terminations, commands and events', () => {
+    // Events are one of the sections because they travel inside the MDP (ADR 0006 §3),
+    // and a native event carries no graph to collect.
     expect(
       policyGraphRefs({
         onnx: 'policy/walk.onnx',
@@ -26,9 +28,14 @@ describe('policyGraphRefs', () => {
           time_out: { name: 'time_out', native: 'elapsed_s >= episode_length_s' },
         },
         commands: { twist: { name: 'OnnxCommand', onnx: 'command/twist.onnx' } },
+        events: [
+          { name: 'push_robot', onnx: 'event/push_robot.onnx' },
+          { name: 'randomize_terrain', kind: 'event', mutations: [] },
+        ],
       }),
     ).toEqual([
       'command/twist.onnx',
+      'event/push_robot.onnx',
       'obs/joint_pos.onnx',
       'obs/joint_vel.onnx',
       'term/fell_over.onnx',
@@ -58,23 +65,6 @@ describe('policyGraphRefs', () => {
   it('is empty for a config with no traced terms', () => {
     expect(policyGraphRefs({})).toEqual([]);
     expect(policyGraphRefs({ observations: {}, terminations: {}, commands: {} })).toEqual([]);
-  });
-});
-
-describe('eventGraphRefs', () => {
-  it('collects refs from an event list and ignores native events', () => {
-    expect(
-      eventGraphRefs([
-        { name: 'push_robot', onnx: 'event/push_robot.onnx' },
-        { name: 'randomize_terrain', kind: 'event', mutations: [] },
-        { name: 'reset_joints', onnx: 'event/reset_joints.onnx' },
-      ]),
-    ).toEqual(['event/push_robot.onnx', 'event/reset_joints.onnx']);
-  });
-
-  it('is empty for a scene with no events', () => {
-    expect(eventGraphRefs(undefined)).toEqual([]);
-    expect(eventGraphRefs([])).toEqual([]);
   });
 });
 

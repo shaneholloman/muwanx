@@ -16,10 +16,9 @@ def onnx_ref(kind: str, name: str, scope: str | None = None) -> str:
     """Scene-relative path for a traced term's ``.onnx`` file.
 
     *scope* is the owning MDP's directory, ``mdp/<mdp-id>`` (ADR 0006 §2, §6): a term or
-    group name is unique within an MDP but not within a scene — every MDP names its
-    observation group the same way — so unscoped, two MDPs in one scene would write to
-    the same file. The path is what the manifest refers to the graph by, resolved against
-    the scene directory, so the ref string and the location on disk are one thing.
+    group name is unique within an MDP but not within a scene (every MDP names its
+    observation group the same way), so unscoped, two MDPs in one scene would write to
+    the same file.
     """
     ref = f"{kind}/{name}.onnx"
     return ref if scope is None else f"{scope}/{ref}"
@@ -30,7 +29,7 @@ def write_onnx(out_dir: Path, ref: str, onnx_bytes: bytes) -> None:
 
     A build wipes its output first, so an existing file is always this build's: identical
     bytes are one term traced twice and pass through, different bytes mean two owners
-    resolved to one path. Left alone that is silent — the last write wins, and every
+    resolved to one path. Left alone that is silent: the last write wins, and every
     config still naming the first loads the wrong graph without any width to catch it.
     """
     path = out_dir / ref

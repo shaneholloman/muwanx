@@ -126,21 +126,15 @@ export class EventManager {
    * Fire every `mode="startup"` term once, in config order and after the model-field
    * randomizations, so `add`/`scale` see the compiled default.
    *
-   * `defaults` is the scene's snapshot of compiled values (ADR 0006 §9): the runtime keeps
-   * one for the life of the model and restores it before an MDP switch, so the second MDP's
-   * `add`/`scale` compose against what was compiled, not against what the first MDP wrote.
-   * Omitted, a fresh snapshot is taken — correct for the first and only startup pass.
+   * `defaults` is the model-lifetime snapshot the runtime restores before an MDP switch
+   * (see {@link ModelFieldDefaults}); omitted, a fresh one is taken, which is right for
+   * a single startup pass.
    */
   async startup(context: EventContext, defaults?: ModelFieldDefaults): Promise<void> {
     this.applyModelFieldTerms(context, defaults);
     for (const { term, trigger } of this.startupTerms) {
       if (trigger.take()) await term.fire(context);
     }
-  }
-
-  /** Whether this manager carries a model-field randomization at all. */
-  get hasModelFieldTerms(): boolean {
-    return this.modelFieldTerms.length > 0;
   }
 
   /** Once, before the startup terms: `add`/`scale` are relative to the compiled default. */

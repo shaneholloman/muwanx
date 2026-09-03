@@ -27,8 +27,8 @@ from rich.progress import (
 
 from . import __version__
 from ._build_client import ClientBuilder, install_spa
-from ._format import DOCUMENT_FORMAT
 from .app import MjswanApp
+from .document import DOCUMENT_FORMAT
 from .envs.mdp.actions.actions import (
     MuscleActivationActionCfg,
     validate_muscle_actuators,
@@ -207,12 +207,10 @@ class _SceneSteps:
 def _strip_slot_tables(sidecar: dict, config_src: Path) -> dict:
     """Drop a sidecar's ``onnx`` block and slot tables; those are declared in Python now.
 
-    ``in_keys`` / ``out_keys`` (top-level or under ``onnx.meta``) used to ride in from
-    here. A single-input policy never needed them — its one input takes its one group —
-    and a multi-input one declares them on ``add_policy``, where the build checks them
-    against the network (ADR 0006 §5). Found here they are ignored with a warning rather
-    than obeyed, so a stale table cannot quietly win over the code. ``onnx.path`` named
-    the network's old location and means nothing to the build either.
+    ``in_keys`` / ``out_keys`` (top-level or under ``onnx.meta``) belong on ``add_policy``,
+    where the build checks them against the network (ADR 0006 §5). Found here they are
+    ignored with a warning rather than obeyed, so a stale table cannot quietly win over
+    the code. ``onnx.path`` named the network's old location and means nothing either.
     """
     onnx_block = sidecar.get("onnx")
     meta = (onnx_block.get("meta") or {}) if isinstance(onnx_block, dict) else {}
@@ -220,7 +218,7 @@ def _strip_slot_tables(sidecar: dict, config_src: Path) -> dict:
     if found:
         warnings.warn(
             f"{config_src.name} carries {found}; slot tables in a config_path sidecar "
-            "are ignored. Declare them on add_policy(in_keys=..., out_keys=...) — a "
+            "are ignored. Declare them on add_policy(in_keys=..., out_keys=...); a "
             "single-input policy needs neither (ADR 0006 §5).",
             category=RuntimeWarning,
             stacklevel=2,
@@ -237,7 +235,7 @@ def _input_slots(policy, obs_keys: list[str]) -> list[str]:
     (``add_policy`` refused a multi-input policy without a table) and its one
     observation group fills it, whatever the group is called; with several groups the
     default slot must be one of them. Every slot must then name a group that exists or a
-    tensor the runtime supplies — anything else would surface at playback as a missing
+    tensor the runtime supplies; anything else would surface at playback as a missing
     input, with the policy silently inert.
     """
     keys: list[str]
@@ -406,12 +404,10 @@ class Builder:
             scene.add_policy_wandb(run_path, task_id=task_id)
         return project
 
-    def add_project(
-        self, name: str, *, default: bool = False, **removed: Any
-    ) -> ProjectHandle:
+    def add_project(self, name: str, *, default: bool = False) -> ProjectHandle:
         """Add a new project to the builder.
 
-        The project's id — its directory in the build and its ``?project=`` value — is
+        The project's id (its directory in the build and its ``?project=`` value) is
         ``name2id(name)``, made unique within the document: a second project that
         sanitizes to the same id is stored as ``<id>_1`` with a warning (ADR 0006 §4).
 
@@ -423,16 +419,6 @@ class Builder:
         Returns:
             ProjectHandle for adding scenes and further configuration.
         """
-        if removed:
-            if "id" in removed:
-                raise TypeError(
-                    "add_project(id=...) was removed: a project's id is always "
-                    "name2id(name), so the directory and the ?project= value can never "
-                    "disagree. Rename the project instead."
-                )
-            raise TypeError(
-                f"add_project() got unexpected keyword(s): {sorted(removed)}"
-            )
         if default:
             taken = next((p for p in self._projects if p.default), None)
             if taken is not None:
@@ -544,8 +530,8 @@ class Builder:
         """Trace one MDP's five term sets into ``<scene>/mdp/<mdp_id>/`` and return its entry.
 
         ``owners`` are the policies that run against it, in order. The first one supplies
-        the per-policy context a trace needs — its joint names fix the native widths, its
-        sidecar's ``actions`` block carries the authored PD gains — and the rest must agree
+        the per-policy context a trace needs (its joint names fix the native widths, its
+        sidecar's ``actions`` block carries the authored PD gains) and the rest must agree
         with it: they were trained against one MDP, so a disagreement is a config mistake,
         not a second MDP.
         """
@@ -692,7 +678,7 @@ class Builder:
             entry["default_joint_pos"] = policy.default_joint_pos
         if policy.encoder_bias:
             entry["encoder_bias"] = policy.encoder_bias
-        # Not `if policy.clip_actions:` — 0.0 is a legal bound, not "unset".
+        # Not `if policy.clip_actions:`: 0.0 is a legal bound, not "unset".
         if policy.clip_actions is not None:
             entry["clip_actions"] = float(policy.clip_actions)
         if getattr(policy, "initial_qpos", None):
@@ -743,8 +729,8 @@ class Builder:
         """Write the one descriptor of the document, ``manifest.json``, at its root.
 
         Every key is ``snake_case``; a path resolves against the directory of the level
-        that declares it — the scene directory for everything under a scene entry, the
-        document root for the top-level ``plugins`` (ADR 0006, manifest rules 1–2).
+        that declares it: the scene directory for everything under a scene entry, the
+        document root for the top-level ``plugins`` (ADR 0006, manifest rules 1 and 2).
         """
         uses_custom_js = _build_uses_custom_js()
         manifest = {

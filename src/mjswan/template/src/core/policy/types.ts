@@ -74,7 +74,7 @@ export type PolicyConfig = {
   clip_actions?: number;
   /**
    * The ONNX input slot table (ADR 0006 §5): `in_keys[i]` names the tensor that fills the
-   * network's i-th input — an observation group, or one the runtime synthesizes. Absent
+   * network's i-th input, an observation group or one the runtime synthesizes. Absent
    * for the common single-input policy, whose one input takes the `actor` group.
    */
   in_keys?: string[];
@@ -94,7 +94,7 @@ export type PolicyConfig = {
   observations?: Record<string, ObservationGroupConfig>;
   actions?: Record<string, ActionConfigEntry>;
   terminations?: Record<string, TerminationConfigEntry>;
-  /** The MDP's event terms — switched with the policy, not held by the scene (ADR 0006 §3). */
+  /** The MDP's event terms, switched with the policy rather than held by the scene (ADR 0006 §3). */
   events?: EventConfig[];
   [key: string]: unknown;
 };

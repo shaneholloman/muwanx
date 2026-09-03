@@ -1,8 +1,8 @@
 /**
- * `mjswan/manifest` — parse a build's `manifest.json` + a byte source into a typed
+ * `mjswan/manifest`: parse a build's `manifest.json` + a byte source into a typed
  * catalog of loadable scenes/policies/splats (ADR 0004 §1, §9; ADR 0006). Framework-free;
  * shared by the in-repo React app and mjswan Cloud. The engine itself knows nothing
- * about the manifest — the app owns the catalog and calls engine verbs.
+ * about the manifest; the app owns the catalog and calls engine verbs.
  *
  * The manifest is the one descriptor of a document: every key `snake_case`, every path
  * under a scene entry relative to `<project-id>/<scene-id>/`, the top-level `plugins`
@@ -169,11 +169,9 @@ export interface Catalog {
 }
 
 /**
- * The id a name sanitizes to — the same function as Python's `name2id`, character for
- * character: lowercase, every run of anything outside `[a-z0-9]` collapsed to one `_`,
- * leading and trailing `_` stripped. The pair is pinned by `name2id_cases.json`, which
- * both test suites read, because the two used to disagree on apostrophes, parentheses
- * and accents and only a raw-name fallback hid it (ADR 0006 §4).
+ * The id a name sanitizes to: Python's `name2id`, character for character. The pair is
+ * pinned by `name2id_cases.json`, which both test suites read; a case they disagree on
+ * is a link that opens the wrong scene (ADR 0006 §4).
  */
 export function sanitizeName(name: string): string {
   return name
@@ -187,7 +185,7 @@ export const MAX_DOCUMENT_FORMAT = 1;
 
 /**
  * Refuse a document this reader cannot read: one without a `format` (the layout that
- * predates it) or one newer than it knows. The check reads `format` only — `version` is
+ * predates it) or one newer than it knows. The check reads `format` only; `version` is
  * provenance a host may pick an engine by, never something the engine errors on.
  */
 function checkFormat(parsed: Manifest): void {
@@ -209,7 +207,7 @@ function checkFormat(parsed: Manifest): void {
   }
 }
 
-/** `<project-id>/<scene-id>/` — the base every path under a scene entry resolves against. */
+/** `<project-id>/<scene-id>/`: the base every path under a scene entry resolves against. */
 function sceneDir(project: ManifestProject, scene: ManifestScene): string {
   return `${project.id}/${scene.id}/`;
 }
@@ -272,8 +270,8 @@ function buildSplat(dir: string, splat: ManifestSplat, source: ByteSource): Spla
 
 /**
  * Byte sources for a config's traced term graphs, keyed by the path the config refers
- * to them by (ADR 0005 §4) — scene-relative, which is what the runtime looks a session
- * up by — while the source is asked for the document-relative path.
+ * to them by (ADR 0005 §4): scene-relative, which is what the runtime looks a session
+ * up by, while the source is asked for the document-relative path.
  */
 function graphBytes(refs: string[], dir: string, source: ByteSource): Record<string, Bytes> {
   const graphs: Record<string, Bytes> = {};
@@ -282,8 +280,8 @@ function graphBytes(refs: string[], dir: string, source: ByteSource): Record<str
 }
 
 /**
- * The engine's policy config: the policy entry's own fields — the slot tables among
- * them — plus the five term sets of its MDP.
+ * The engine's policy config: the policy entry's own fields (the slot tables among
+ * them) plus the five term sets of its MDP.
  */
 function policyConfig(scene: ManifestScene, policy: ManifestPolicy): Record<string, unknown> {
   const mdp = scene.mdps.find((m) => m.id === policy.mdp);
@@ -323,8 +321,6 @@ function buildPolicy(
 
 function toSceneEntry(project: ManifestProject, scene: ManifestScene, source: ByteSource): SceneEntry {
   const dir = sceneDir(project, scene);
-  const defaultPolicy = (): ManifestPolicy | undefined =>
-    scene.policies.find((p) => p.default) ?? scene.policies[0];
 
   const policies: PolicyEntry[] = scene.policies.map((p) => ({
     id: p.id,
@@ -351,7 +347,10 @@ function toSceneEntry(project: ManifestProject, scene: ManifestScene, source: By
     splats,
     buildScene: async (opts) => {
       const policyId = opts?.policy;
-      const policy = policyId == null ? defaultPolicy() : scene.policies.find((p) => p.id === policyId);
+      const policy =
+        policyId == null
+          ? (scene.policies.find((p) => p.default) ?? scene.policies[0])
+          : scene.policies.find((p) => p.id === policyId);
       const splatId = opts?.splat;
       const splat = splatId == null ? undefined : scene.splats?.find((s) => s.id === splatId);
       // Events travel with the policy, inside its MDP (ADR 0006 §3); the scene carries

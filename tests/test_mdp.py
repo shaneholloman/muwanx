@@ -1,9 +1,9 @@
-"""`MdpConfig` — the unit a policy runs against (ADR 0006 §3).
+"""`MdpConfig`: the unit a policy runs against (ADR 0006 §3).
 
 Layer: L1. What is pinned is ownership and identity: the five term sets travel as one
 object, two policies handed the same object share one MDP, and the id an MDP gets is a
 function of its name, of the policy the sugar built it for, or of first-use order on its
-scene — never of its content.
+scene, never of its content.
 """
 
 from __future__ import annotations

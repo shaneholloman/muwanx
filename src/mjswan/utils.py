@@ -399,8 +399,8 @@ def assign_id(
 ) -> str:
     """``name2id(name)``, made unique among ``taken``; warns when it had to be renamed.
 
-    ``kind`` names the level in the warning ("scene", "policy", …). An empty result —
-    a name with no ASCII letter or digit in it — is refused, since it would have no
+    ``kind`` names the level in the warning ("scene", "policy", …). An empty result
+    (a name with no ASCII letter or digit in it) is refused, since it would have no
     directory and no URL.
     """
     base = name2id(name)

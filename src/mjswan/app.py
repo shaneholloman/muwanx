@@ -36,7 +36,7 @@ class MjswanApp:
     def from_document(cls, source: str | Path) -> "MjswanApp":
         """The app for a built directory, or for a ``.swn`` document.
 
-        A directory is already an app — the engine beside the expanded tree — and is
+        A directory is already an app (the engine beside the expanded tree) and is
         served where it sits. A document is only the tree (ADR 0006 §8), so the app is
         assembled: it is unpacked into a temporary directory, the packaged engine is laid
         over it, and that directory is removed when the process exits. The engine is
@@ -56,7 +56,7 @@ class MjswanApp:
             return cls(source.resolve())
 
         # Custom-JS terms compile to a `plugins.js` that lives with the engine, not in
-        # the document, so it cannot be served from one — the manifest would point at a
+        # the document, so it cannot be served from one: the manifest would point at a
         # module that is not there and the scene would fail to load.
         if read_manifest(source).get("uses_custom_js") is True:
             raise DocumentError(
@@ -85,8 +85,8 @@ class MjswanApp:
     def save_document(self, path: str | Path | None = None) -> Path:
         """Write the simulation as one ``.swn`` file and return its path (ADR 0006 §8).
 
-        The document is the build's data — ``manifest.json`` and every project directory
-        — packaged as a ZIP of the same tree. It carries no engine: hand it to someone,
+        The document is the build's data (``manifest.json`` and every project directory)
+        packaged as a ZIP of the same tree. It carries no engine: hand it to someone,
         open it in a viewer, or ``publish()`` it. ``path`` defaults to the build
         directory's name with ``.swn``, beside it.
         """
