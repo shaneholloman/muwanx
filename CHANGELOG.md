@@ -33,22 +33,19 @@ velocity-command shortcuts were removed outright, see Removed.
 - **Thumbstick locomotion in VR.** The camera and the tracked hands now hang off an XR
   rig, which is what a session moves: the left stick slides the viewer along its heading,
   and the right stick turns it about the head for as long as it is held, at a rate the
-  deflection scales. Body tracking drives the rig
-  too, so a scene that follows a walking robot finally follows it in a headset as well —
-  the head pose used to overwrite the camera every frame, leaving the viewer behind. The
-  rig returns to the origin when the session ends, and the desktop camera comes back to
-  the offset it had. The rig's height comes from a `mj_ray` cast straight down under the
-  head, so the viewer stands on the ground at their own height and a generated `Rough`
-  terrain no longer buries the view: z = 0 is a generator's base plane, not its surface.
-  Body tracking does not carry a viewer at all in a session — you arrive beside the tracked
-  body, where the viewer config points the desktop camera, and move yourself from there, so
-  neither the robot's climbing nor an episode reset's teleport to a new spawn patch moves
-  you. A desktop chase camera still follows both, as it did.
+  deflection scales. The rig returns to the origin when the session ends, and the desktop
+  camera comes back to the offset it had. Its height comes from a `mj_ray` cast straight
+  down under the head, so the viewer stands on the ground at their own height and a
+  generated `Rough` terrain no longer buries the view: z = 0 is a generator's base plane,
+  not its surface. Body tracking does not carry a viewer in a session: you arrive beside
+  the tracked body, where the viewer config points the desktop camera, and move yourself
+  from there, so neither the robot's climbing nor an episode reset's teleport to a new
+  spawn patch moves you. A desktop chase camera still follows both, as it did.
 - **Passthrough AR.** A device that supports `immersive-ar` gets a **Start AR** button
   beside **Enter VR**, and in a see-through session the skybox and the ground planes stop
   being drawn, so the room shows behind the scene. three.js already clears the framebuffer
   transparent for an `alpha-blend` blend mode; what covered the room was mjswan's own
-  drawing — a `CubeTexture` background is rendered as a box mesh, and MuJoCo's infinite
+  drawing: a `CubeTexture` background is rendered as a box mesh, and MuJoCo's infinite
   plane is a full-screen quad. The button is mjswan's rather than three's `ARButton`, which
   pins the session to the `local` reference space and would leave the floor at eye height.
 - Debug visualisation for command terms, mirroring mjlab's `debug_vis`: `default_viz()`

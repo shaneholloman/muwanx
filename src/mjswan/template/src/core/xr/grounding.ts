@@ -2,11 +2,9 @@
  * Stands the XR viewer on the ground under it, rather than on the plane z = 0, which is a
  * terrain generator's base plane rather than its surface.
  *
- * A head under the surface does not go black: MuJoCo's meshes are front-faced, so the
- * ground disappears and the scene shows through it. The vertical therefore comes from a
- * single `mj_ray` cast straight down under the head, and the horizontal is left to
- * locomotion. How far above that surface the eyes end up is the headset's to report: the
- * rig carries the viewer's floor, not their height.
+ * One `mj_ray` cast straight down under the head places the rig's floor. How far above it
+ * the eyes end up is the headset's to report: the rig carries the viewer's floor, not
+ * their height.
  */
 import * as THREE from 'three';
 
@@ -19,8 +17,7 @@ type MainModule = import('mujoco').MainModule;
 
 /**
  * Group 0 only, the mask mjlab's height scan uses to miss the robot's own legs. A scene
- * that leaves everything in group 0 can have a ray land on the robot instead; the rate
- * limit below bounds what that costs, and it corrects itself as the viewer moves.
+ * that leaves everything there can have a ray land on the robot; the rate limit bounds it.
  */
 const TERRAIN_GROUP = geomGroupMask([0]);
 
@@ -33,7 +30,7 @@ const RAY_START_ABOVE = 20;
 /** Metres a second the floor may travel. A step edge would otherwise be a teleport. */
 const CLIMB_SPEED = 3;
 
-/** The head is never allowed closer to the ground than this, whatever the rate limit says. */
+/** The head is never allowed closer to the ground than this. */
 const MIN_HEAD_CLEARANCE = 0.15;
 
 const head = new THREE.Vector3();

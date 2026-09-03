@@ -22,7 +22,7 @@ const rightward = new THREE.Vector3();
 const head = new THREE.Vector3();
 const rotation = new THREE.Quaternion();
 
-/** `xr-standard` puts the thumbstick on axes 2/3, leaving 0/1 to a touchpad if there is one. */
+/** `xr-standard` puts the thumbstick on axes 2/3. */
 function thumbstick(gamepad: Gamepad): [number, number] {
   const axes = gamepad.axes;
   const [x, y] = axes.length >= 4 ? [axes[2], axes[3]] : [axes[0], axes[1]];
@@ -33,7 +33,7 @@ function deadzone(value: number): number {
   return Math.abs(value) < DEADZONE ? 0 : value;
 }
 
-/** Once per rendered XR frame. A session whose controllers report no gamepad is a no-op. */
+/** Once per rendered XR frame. */
 export function updateXrLocomotion(
   rig: THREE.Object3D,
   camera: THREE.Camera,

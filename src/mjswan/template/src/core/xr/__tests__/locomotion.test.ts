@@ -5,7 +5,7 @@ import * as THREE from 'three';
 
 import { updateXrLocomotion } from '../locomotion';
 
-/** Enough of an `XRSession` for `update`: the input sources it reads gamepads off. */
+/** Enough of an `XRSession`: the input sources it reads gamepads off. */
 function session(sources: Array<{ handedness: string; axes: number[] }>): XRSession {
   return {
     inputSources: sources.map((source) => ({
@@ -18,19 +18,19 @@ function session(sources: Array<{ handedness: string; axes: number[] }>): XRSess
 const left = (x: number, y: number) => session([{ handedness: 'left', axes: [0, 0, x, y] }]);
 const right = (x: number) => session([{ handedness: 'right', axes: [0, 0, x, 0] }]);
 
-/** The module's own speeds, in m/s and deg/s, and a frame short enough to dodge its clamp. */
+/** The module's own speeds, in m/s and deg/s. */
 const MOVE_SPEED = 1.5;
 const TURN_SPEED = 90;
 const FRAME = 0.05;
 const STEP = MOVE_SPEED * FRAME;
-/** What a full-deflection stick turns through in one `drive`, in radians. */
+/** What a full-deflection stick turns through in one `move`, in radians. */
 const SWEEP = ((TURN_SPEED * FRAME) / 180) * Math.PI;
 
 /** A head 1.6 m up and off the play-area centre, facing -Z as a fresh camera does. */
 function rigged(): {
   rig: THREE.Group;
   camera: THREE.PerspectiveCamera;
-  /** One frame's worth of input, bound to this rig. The frame time defaults to `FRAME`. */
+  /** One frame's worth of input, bound to this rig. */
   move: (input: XRSession | null, seconds?: number) => void;
 } {
   const rig = new THREE.Group();
@@ -98,7 +98,6 @@ describe('updateXrLocomotion sliding', () => {
 });
 
 describe('updateXrLocomotion turning', () => {
-  /** The reason turns pivot on the head: the viewer must not be swung through the scene. */
   it('leaves the head where it stands', () => {
     const { rig, camera, move } = rigged();
     rig.position.set(2, 0, 3);
@@ -130,7 +129,6 @@ describe('updateXrLocomotion turning', () => {
     expect(other.camera.getWorldDirection(new THREE.Vector3()).x).toBeCloseTo(-Math.sin(SWEEP), 6);
   });
 
-  /** The point of holding rather than snapping: it does not stop after one step. */
   it('keeps turning for as long as the stick is held', () => {
     const { rig, move } = rigged();
     const held = right(1);

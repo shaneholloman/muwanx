@@ -145,9 +145,8 @@ export function updateCameraFromData(
   controls: OrbitControls,
   state: ViewerState,
   /**
-   * True while an XR session is presenting. A viewer standing in the scene is not carried
-   * around by the body it is watching, so only the orbit target keeps tracking — which is
-   * what leaves the desktop view pointing at the body again on the way out.
+   * A viewer standing in the scene is not carried around by the body it is watching, so
+   * only the orbit target tracks: the desktop view still points at the body on the way out.
    */
   presenting = false
 ): void {

@@ -51,7 +51,6 @@ describe('updateCameraFromData on the desktop', () => {
 });
 
 describe('updateCameraFromData while a session is presenting', () => {
-  /** A viewer standing in the scene is not carried around by the body it is watching. */
   it('leaves the viewpoint alone, however far the body walks', () => {
     const { camera, controls, state } = tracking();
     updateCameraFromData(at(0, 0, 0), camera, controls, state, true);

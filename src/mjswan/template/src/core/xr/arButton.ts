@@ -1,6 +1,6 @@
 /**
- * A "START AR" button, alongside three's `VRButton` rather than in place of it: a Quest
- * supports both modes, and VR stays what the bundled app opens in.
+ * A "START AR" button, beside three's `VRButton` rather than in place of it: a Quest
+ * supports both modes.
  *
  * three ships an `ARButton`, but it pins the session to the `local` reference space, whose
  * origin is wherever the head started, which on a headset leaves the scene's floor at eye
@@ -14,10 +14,7 @@ const STYLE =
   'border-radius:4px;background:rgba(0,0,0,0.1);color:#fff;font:normal 13px sans-serif;' +
   'text-align:center;opacity:0.5;outline:none;z-index:999;cursor:pointer';
 
-/**
- * A button that enters `immersive-ar`, or `null` where the device cannot. Unpositioned:
- * the caller places it, since it shares the bottom of the screen with the VR button.
- */
+/** Enters `immersive-ar`, or `null` where the device cannot. The caller positions it. */
 export async function createArButton(
   renderer: THREE.WebGLRenderer,
   sessionInit: XRSessionInit = {}
@@ -35,8 +32,7 @@ export async function createArButton(
     return null;
   }
 
-  // `requestReferenceSpace` only resolves for a space asked for up front; `local` is the
-  // one an immersive session always has.
+  // A reference space only resolves if the session asked for it up front.
   const options: XRSessionInit = {
     ...sessionInit,
     optionalFeatures: ['local-floor', ...(sessionInit.optionalFeatures ?? [])],

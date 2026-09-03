@@ -63,7 +63,6 @@ describe('Passthrough', () => {
     expect(scene.background).toBe(skybox);
   });
 
-
   it('leaves a scene alone when a session it never entered ends', () => {
     const { scene, skybox, floor } = loaded();
     new Passthrough(scene).exit();

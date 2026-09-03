@@ -6,7 +6,7 @@ import { updateRigGrounding } from '../grounding';
 
 const CLIMB_SPEED = 3;
 const FRAME = 0.05;
-/** The module's own margin: the head is never allowed nearer the ground than this. */
+/** The module's own margin. */
 const MIN_HEAD_CLEARANCE = 0.15;
 
 type MjModel = import('mujoco').MjModel;
@@ -43,13 +43,13 @@ function mujocoWith(height: (x: number, y: number) => number | null): MainModule
 const MODEL = {} as MjModel;
 const DATA = {} as MjData;
 
-/** A rig with the head 1.5 m up: a headset floor calibration that is not 1.7. */
+/** A rig with the head 1.5 m up, not a height anything in the module defaults to. */
 function rigged(headHeight = 1.5): {
   rig: THREE.Group;
   camera: THREE.PerspectiveCamera;
   /** One frame of grounding, bound to this rig. */
   ground: (mujoco: MainModule, m?: MjModel | null, d?: MjData | null) => void;
-  /** The head's world height, which is what the module is really placing. */
+  /** The head's world height. */
   headY: () => number;
 } {
   const rig = new THREE.Group();
@@ -88,7 +88,6 @@ function settle(
 }
 
 describe('updateRigGrounding', () => {
-  /** The viewer's height in the scene is their own, so only the floor is placed. */
   it('puts the floor on the ground and leaves the headset its own height', () => {
     for (const headHeight of [1.5, 1.7, 1.9]) {
       const { rig, ground, headY } = rigged(headHeight);
@@ -108,7 +107,6 @@ describe('updateRigGrounding', () => {
     expect(pit.headY()).toBeCloseTo(-0.6 + 1.5, 6);
   });
 
-  /** Head movement is 1:1 because the module never corrects the eye height at all. */
   it('lets the viewer crouch instead of cancelling it', () => {
     const { rig, camera, ground, headY } = rigged();
     const mujoco = mujocoWith(() => 0);
@@ -122,7 +120,7 @@ describe('updateRigGrounding', () => {
     expect(headY()).toBeCloseTo(standing - 0.5, 6);
   });
 
-  /** A rise the head still clears, so the rate limit is what decides — not the clamp below. */
+  /** A rise the head still clears, so the rate limit decides and not the clamp below. */
   it('limits how fast the floor may travel', () => {
     const { rig, ground } = rigged();
     settle(ground, mujocoWith(() => 0), rig);
@@ -138,7 +136,6 @@ describe('updateRigGrounding', () => {
     expect(rig.position.y).toBeCloseTo(0.5, 6);
   });
 
-  /** The rate limit must not leave the head inside the ground while it catches up. */
   it('lifts the head clear of the ground at once', () => {
     const { rig, ground, headY } = rigged();
     // Standing in a hollow, then the ground under the viewer jumps well above the head.

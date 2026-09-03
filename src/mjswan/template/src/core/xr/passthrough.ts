@@ -51,7 +51,7 @@ export class Passthrough {
     this.setPlanes(false);
   }
 
-  /** Tagged by the scene loader, which knows which geoms are planes. */
+  /** Tagged by the scene loader. */
   private setPlanes(visible: boolean): void {
     this.scene.traverse((object) => {
       if (object.userData.isGroundPlane === true) {

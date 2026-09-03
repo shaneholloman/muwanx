@@ -228,14 +228,14 @@ export class mjswanRuntime {
   private disposed = false;
   private readonly passthrough: Passthrough;
   private handMocap: HandMocap | null;
-  /** Parent of the camera and hands: what locomotion and grounding move. Identity outside a session. */
+  /** Parent of the camera and hands: what XR locomotion moves. Identity outside a session. */
   private readonly xrRig: THREE.Group;
   private readonly xrClock = new THREE.Clock(false);
   /** three has not written a head pose yet on a session's first frame. */
   private xrFirstFrame = true;
   /** Only an opaque session stands the viewer on the terrain; passthrough keeps the room's floor. */
   private groundsRig = false;
-  /** Camera-to-target offset from before a session, which owns the camera pose while it runs. */
+  /** Camera-to-target offset from before a session. */
   private preXrCameraOffset: THREE.Vector3 | null;
   private splatMesh: SplatMesh | null;
   private colliderMesh: THREE.Group | null;
@@ -314,8 +314,6 @@ export class mjswanRuntime {
     this.camera = new THREE.PerspectiveCamera(45, width / height, 0.001, 1000);
     this.camera.name = 'PerspectiveCamera';
     this.camera.position.set(2.0, 1.7, 1.7);
-    // three.js writes the XR head pose relative to the camera's parent, so this Group is
-    // where a session's movement goes; see `XrLocomotion`.
     this.xrRig = new THREE.Group();
     this.xrRig.name = 'XR Rig';
     this.xrRig.add(this.camera);
@@ -340,8 +338,7 @@ export class mjswanRuntime {
       this.handMocap = new HandMocap(hands);
     }
 
-    // Asked for in both modes: a Quest leaves hands untracked without it, and three
-    // requests it for neither.
+    // Asked for in both modes: a Quest leaves hands untracked without it.
     const sessionInit: XRSessionInit = handTracking ? { optionalFeatures: ['hand-tracking'] } : {};
 
     this.vrButton = null;
@@ -1611,9 +1608,8 @@ export class mjswanRuntime {
   }
 
   /**
-   * Right of the VR button's own spot, or centred when there is none. Only the AR button
-   * moves: `VRButton` re-centres itself when its support check resolves, which lands after
-   * this runs, so anything set on it here would be overwritten.
+   * Right of the VR button, or centred when there is none. Only the AR button moves:
+   * `VRButton` re-centres itself when its own check resolves, after this runs.
    */
   private layoutArButton(): void {
     if (!this.arButton) {
@@ -1635,9 +1631,8 @@ export class mjswanRuntime {
     }
     this.groundsRig = !passthrough;
     if (this.groundsRig) {
-      // Stand where the desktop camera was looking from, which the scene's viewer config
-      // placed near the tracked body. The world origin is a terrain generator's base
-      // plane and a spawn is a drawn patch, so neither is anywhere to arrive.
+      // Where the viewer config points the desktop camera, beside the tracked body: the
+      // world origin is a terrain generator's base plane, not a place to stand.
       this.xrRig.position.set(this.camera.position.x, 0, this.camera.position.z);
     }
   };
@@ -1666,7 +1661,6 @@ export class mjswanRuntime {
       updateCameraFromData(this.mjData, this.camera, this.controls, this.cameraState, presenting);
     }
     if (presenting) {
-      // Clamped, or the first frame back from a slept tab teleports whatever it drives.
       const seconds = Math.min(this.xrClock.getDelta(), MAX_XR_FRAME_SECONDS);
       if (this.xrFirstFrame) {
         this.xrFirstFrame = false;
