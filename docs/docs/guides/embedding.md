@@ -129,7 +129,8 @@ an open palm, and pick one up.
 
 What you see is three.js's own hand model — one sphere per WebXR joint, at the radius the
 headset reports. What the physics sees is a capsule per bone, compiled in `group="3"` so it
-is never drawn; the two track the same joints, so they coincide.
+is never drawn and sized each frame from the two joints it spans, so its ends sit on them
+whatever the wearer's hand measures.
 
 A bone enters the model according to what it has to do. The palm's two edges and the five
 fingertips carry load, so each is a mocap body welded to a dynamic twin: MuJoCo takes

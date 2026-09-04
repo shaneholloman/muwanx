@@ -4,8 +4,9 @@
  *
  * A hand enters as capsules, one per bone between two adjacent WebXR joints. A capsule
  * is a sphere swept along a cylinder, so a finger is continuous rather than a row of
- * balls with notches between them, and its length is fixed because the bone between two
- * adjacent joints does not change length when the finger bends.
+ * balls with notches between them. Each one is sized from the two joints it spans, so
+ * its ends sit on them: WebXR reports no bone lengths, and a nominal adult hand is the
+ * wrong length for most wearers.
  *
  * The bones are normally compiled in `group="3"`, which the scene builder skips, so they
  * are invisible: the hand on screen is three.js's own joint-sphere model, which is what
@@ -40,14 +41,14 @@ type Segment = {
   /** Also the segment's name: every joint is the far end of at most one bone. */
   to: XRHandJoint;
   radius: number;
-  /** Nominal bone length, metres. The geom is rigid, and WebXR reports no bone lengths. */
+  /** Compiled default length, metres. Tracking replaces it with the measured span. */
   length: number;
   role: 'grip' | 'wall';
 };
 
 const FINGERS = ['index', 'middle', 'ring', 'pinky'] as const;
 
-/** Adult-hand proximal / intermediate / distal bone lengths, metres. */
+/** Adult-hand proximal / intermediate / distal bone lengths, metres, as a starting size. */
 const FINGER_BONES: Record<(typeof FINGERS)[number], readonly [number, number, number]> = {
   index: [0.04, 0.024, 0.019],
   middle: [0.045, 0.027, 0.02],
@@ -61,8 +62,13 @@ export const HAND_SEGMENTS: readonly Segment[] = [
   // middle would be a cylinder and anything round would roll straight off it; two make
   // the shallow V a real palm has, which an object can sit in. The first is also the
   // frame a grabbed object is held in.
-  { from: 'wrist', to: 'index-finger-metacarpal', radius: 0.02, length: 0.095, role: 'grip' },
-  { from: 'wrist', to: 'pinky-finger-metacarpal', radius: 0.02, length: 0.088, role: 'grip' },
+  //
+  // They end at the knuckles, not at `*-finger-metacarpal`: that joint is the *base* of
+  // the metacarpal bone, a couple of centimetres from the wrist, so aiming at it read a
+  // 95 mm capsule off a 15 mm span — the direction was mostly tracking noise, and 40 mm
+  // of palm hung behind the wrist.
+  { from: 'wrist', to: 'index-finger-phalanx-proximal', radius: 0.02, length: 0.095, role: 'grip' },
+  { from: 'wrist', to: 'pinky-finger-phalanx-proximal', radius: 0.02, length: 0.088, role: 'grip' },
   { from: 'thumb-metacarpal', to: 'thumb-phalanx-proximal', radius: 0.014, length: 0.046, role: 'wall' },
   { from: 'thumb-phalanx-proximal', to: 'thumb-phalanx-distal', radius: 0.012, length: 0.032, role: 'wall' },
   { from: 'thumb-phalanx-distal', to: 'thumb-tip', radius: 0.011, length: 0.026, role: 'grip' },
@@ -96,7 +102,7 @@ export const HAND_SEGMENTS: readonly Segment[] = [
 
 /** Grip mass, kg: how hard a fingertip can shove something heavy. */
 const GRIP_MASS = 0.05;
-/** The palm is what a whole arm leans through. */
+/** The palm is what a whole arm leans through. Its two bones are the ones off the wrist. */
 const PALM_MASS = 0.15;
 
 /**
@@ -117,14 +123,23 @@ const WELD = 'solref="0.02 1" solimp="0.95 0.99 0.001"';
 /**
  * Debug: draw the bones alongside three.js's hand model, to see where the physics
  * actually is. `group="3"` is what the scene builder skips, so a group it draws plus an
- * alpha is the whole switch. Set back to `false` to hide them again.
+ * alpha is the whole switch. White like the joint spheres, so a bone off its joints
+ * shows up as a shape that does not line up rather than as a second colour. Set back to
+ * `false` to hide them again.
  */
 const DEBUG_DRAW_BONES = true;
-const GEOM_VISIBILITY = DEBUG_DRAW_BONES ? 'group="2" rgba="0.85 0.35 0.2 0.3"' : 'group="3"';
+const GEOM_VISIBILITY = DEBUG_DRAW_BONES ? 'group="2" rgba="1 1 1 0.1"' : 'group="3"';
 
 /** Where an untracked hand waits: above any scene, and outside the floor plane, which
  * is solid all the way down. */
 const PARKED_Z = 100;
+
+/**
+ * Below this the two joints are effectively on top of each other: `normalize` gives back
+ * a zero vector, `quatFromZ` reads that as no rotation, and the bone snaps to world +z.
+ * The shortest real bone is 18 mm, so anything under this is a bad read, not a pose.
+ */
+const MIN_SPAN = 0.005;
 
 /** Spread along the parking row, so parked bones do not contact each other. */
 const PARKED_SPACING = 0.05;
@@ -179,7 +194,7 @@ export function injectHandMocapXml(xml: string): string {
         );
         continue;
       }
-      const mass = segment.to.endsWith('-metacarpal') ? PALM_MASS : GRIP_MASS;
+      const mass = segment.from === 'wrist' ? PALM_MASS : GRIP_MASS;
       bodies.push(`    <body name="${bodyName(hand, segment, 'target')}" mocap="true" pos="${pos}"/>`);
       bodies.push(
         `    <body name="${bodyName(hand, segment, 'body')}" pos="${pos}">\n` +
@@ -221,6 +236,8 @@ export function injectHandMocapFile(mujoco: MainModule, path: string): void {
 type BoundSegment = {
   segment: Segment;
   bodyId: number;
+  /** The capsule, so its half-length can follow the wearer's own bone. */
+  geomAdr: number;
   /** Both -1 for a wall, which is driven straight through its own mocap slot. */
   qposAdr: number;
   qvelAdr: number;
@@ -288,6 +305,7 @@ export class HandMocap {
         segments.push({
           segment,
           bodyId,
+          geomAdr: mjModel.body_geomadr[bodyId],
           qposAdr: isGrip ? mjModel.jnt_qposadr[jntAdr] : -1,
           qvelAdr: isGrip ? mjModel.jnt_dofadr[jntAdr] : -1,
           mocapId: mjModel.body_mocapid[targetId],
@@ -332,8 +350,16 @@ export class HandMocap {
         to.getWorldPosition(this.to);
         const a = threeToMjcCoordinate(this.from);
         const b = threeToMjcCoordinate(this.to);
+        const delta = b.clone().sub(a);
+        const span = delta.length();
+        // One bad frame would otherwise fling the bone off to world +z; holding last
+        // frame's pose is invisible at the rate these are written.
+        if (span < MIN_SPAN) continue;
+        // The bone table's length is only the compiled default. A capsule sized from the
+        // joints in front of it spans them exactly, on whichever hand is wearing it.
+        mjModel.geom_size[bound.geomAdr * 3 + 1] = span / 2;
         const pos = a.clone().add(b).multiplyScalar(0.5);
-        const quat = quatFromZ(b.clone().sub(a).normalize());
+        const quat = quatFromZ(delta.divideScalar(span));
         this.writeTarget(mjData, bound, pos, quat);
         if (!bound.tracked) {
           this.writeBody(mjData, bound, pos, quat);

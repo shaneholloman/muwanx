@@ -30,7 +30,8 @@ velocity-command shortcuts were removed outright, see Removed.
   true })`, or `?hands=1` on the bundled app). The hand you see is three.js's own
   joint-sphere model, one sphere per WebXR joint at the radius the runtime reports. The
   hand the physics sees is a capsule per bone, compiled in `group="3"` so it is never
-  drawn. The palm's two edges and the five fingertips carry load, so each is a mocap target welded
+  drawn and sized each frame from the two joints it spans, so its ends sit on them on
+  whichever hand is wearing it. The palm's two edges and the five fingertips carry load, so each is a mocap target welded
   to a dynamic twin; the ten bones between them only ever push, so they stay plain mocap
   and cost no degrees of freedom. A headset can bat a scene's objects around, rest one on
   an open palm, and pick one up — a 2 kg box, lifted by friction alone. A grab is armed by

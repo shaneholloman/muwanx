@@ -47,12 +47,22 @@ describe('HAND_SEGMENTS', () => {
     expect(new Set(ends).size).toBe(ends.length);
   });
 
+  // `*-finger-metacarpal` is the base of the metacarpal, by the wrist — aiming the palm
+  // at it read the direction off a 15 mm span and hung 40 mm of capsule behind the wrist.
+  it('spans the palm from the wrist to the knuckles', () => {
+    for (const palm of HAND_SEGMENTS.filter((s) => s.from === 'wrist')) {
+      expect(palm.to).toMatch(/-finger-phalanx-proximal$/);
+      expect(palm.length).toBeGreaterThan(0.08);
+    }
+    expect(HAND_SEGMENTS.some((s) => s.to.endsWith('-finger-metacarpal'))).toBe(false);
+  });
+
   // Only the load-bearing bones cost degrees of freedom; the rest are near free.
   it('keeps the palm and the five fingertips as the only grips', () => {
     const grips = HAND_SEGMENTS.filter((s) => s.role === 'grip');
     expect(grips.map((s) => s.to)).toEqual([
-      'index-finger-metacarpal',
-      'pinky-finger-metacarpal',
+      'index-finger-phalanx-proximal',
+      'pinky-finger-phalanx-proximal',
       'thumb-tip',
       'index-finger-tip',
       'middle-finger-tip',
@@ -75,12 +85,17 @@ describe('injectHandMocapXml', () => {
     expect(xml.match(/<weld /g)).toHaveLength(grips + 2);
     expect(xml.match(/type="capsule"/g)).toHaveLength(grips + walls);
     expect(xml).toContain('name="mjswan_xr0_thumb-tip_body"');
+    // The palm carries an arm's worth of lean; a fingertip only has to pinch.
+    expect(xml).toContain(`name="mjswan_xr0_index-finger-phalanx-proximal_body"`);
+    expect(xml.match(/mass="0.15"/g)).toHaveLength(4);
+    expect(xml.match(/mass="0.05"/g)).toHaveLength(10);
     expect(xml).toContain('name="mjswan_xr1_index-finger-phalanx-intermediate_body"');
     expect(xml).toContain('name="mjswan_xr1_grab"');
     // Every bone sits in one group, and the scene builder draws nothing at `group >= 3`.
     // DEBUG_DRAW_BONES picks which: hidden behind three.js's hand model, or drawn over it.
     const hidden = xml.match(/group="3"/g)?.length ?? 0;
-    const drawn = xml.match(/group="2" rgba="[\d. ]+ 0\.3"/g)?.length ?? 0;
+    // White, like three.js's joint spheres, so only the shape says whether a bone is off.
+    const drawn = xml.match(/group="2" rgba="1 1 1 0\.\d+"/g)?.length ?? 0;
     expect(hidden + drawn).toBe(grips + walls);
     expect(hidden === 0 || drawn === 0).toBe(true);
   });
@@ -213,14 +228,14 @@ describe('HandMocap against the real WASM', () => {
     const step = (z: number) => {
       // The palm's two edges lie flat on the -y face, splayed toward the knuckles as
       // they are on a real hand; their capsule surfaces have to reach the box.
-      const [edgeA, edgeB] = [bone('index-finger-metacarpal'), bone('pinky-finger-metacarpal')];
+      const [edgeA, edgeB] = [bone('index-finger-phalanx-proximal'), bone('pinky-finger-phalanx-proximal')];
       const palmY = -(CUBE_HALF + edgeA.radius - squeeze);
       const splay = 0.2;
       hand.set('wrist', [-0.045, palmY, z]);
       const knuckle = (b: typeof edgeA, side: number) =>
         [-0.045 + b.length * Math.cos(splay), palmY, z + side * b.length * Math.sin(splay)] as const;
-      hand.set('index-finger-metacarpal', knuckle(edgeA, 1));
-      hand.set('pinky-finger-metacarpal', knuckle(edgeB, -1));
+      hand.set('index-finger-phalanx-proximal', knuckle(edgeA, 1));
+      hand.set('pinky-finger-phalanx-proximal', knuckle(edgeB, -1));
       // Fingertips run along x on the +y face, stacked up the box.
       for (const [i, finger] of fingers.entries()) {
         const tip = bone(`${finger}-tip`);
@@ -274,6 +289,65 @@ describe('HandMocap against the real WASM', () => {
     const pinched = clampAndLift(2.0);
     expect(pinched.weldHeld).toBe(1);
     expect(pinched.weldReleased).toBe(0);
+  });
+
+  /** A model with one scripted hand bound to it, parked. */
+  function setup() {
+    const xml = injectHandMocapXml(cubeScene(0.15));
+    const mjModel = (
+      mujoco as unknown as { MjModel: { from_xml_string(s: string): MjModel } }
+    ).MjModel.from_xml_string(xml);
+    const mjData = new (mujoco as unknown as { MjData: new (m: MjModel) => MjData }).MjData(mjModel);
+    const hand = new FakeHand();
+    const mocap = new HandMocap([hand as unknown as THREE.XRHandSpace]);
+    mocap.bind(mujoco, mjModel);
+    mocap.park(mjData);
+    const bodyOf = (to: string) =>
+      mujoco.mj_name2id(mjModel, mujoco.mjtObj.mjOBJ_BODY.value, `mjswan_xr0_${to}_body`);
+    return { mjModel, mjData, hand, mocap, bodyOf };
+  }
+
+  // The bone table's length is a nominal adult hand. A wearer's is not, and a capsule
+  // that keeps the nominal one has its ends somewhere other than on the joints.
+  it.each([
+    ['index-finger-tip', 'index-finger-phalanx-distal', 0.011],
+    ['index-finger-phalanx-proximal', 'wrist', 0.081],
+  ])('sizes the %s capsule from the joints in front of it', (to, from, span) => {
+    const { mjModel, mjData, hand, mocap, bodyOf } = setup();
+    const seg = HAND_SEGMENTS.find((s) => s.to === to)!;
+    expect(span).not.toBeCloseTo(seg.length, 3);
+
+    hand.set(from as string, [0, 0, 1]);
+    hand.set(to as string, [0, 0, 1 + (span as number)]);
+    mocap.update(mjModel, mjData);
+    mujoco.mj_forward(mjModel, mjData);
+
+    const id = bodyOf(to as string);
+    const half = mjModel.geom_size[mjModel.body_geomadr[id] * 3 + 1];
+    expect(half).toBeCloseTo((span as number) / 2, 6);
+    // The capsule is centred on the body and runs along its local +z, so with the ends
+    // at `centre ± half` they land on the two joints it was measured from.
+    const centre = mjData.xpos[id * 3 + 2];
+    expect(centre - half).toBeCloseTo(1, 5);
+    expect(centre + half).toBeCloseTo(1 + (span as number), 5);
+  });
+
+  // One frame where two joints read as the same point used to snap the bone to world +z.
+  it('holds the last pose when two joints collapse onto each other', () => {
+    const { mjModel, mjData, hand, mocap, bodyOf } = setup();
+    hand.set('index-finger-phalanx-distal', [0, 0, 1]);
+    hand.set('index-finger-tip', [0.019, 0, 1]);
+    mocap.update(mjModel, mjData);
+    mujoco.mj_forward(mjModel, mjData);
+    const id = bodyOf('index-finger-tip');
+    const aimed = [0, 1, 2, 3].map((i) => mjData.xquat[id * 4 + i]);
+    // Aimed along +x, which is a half turn away from the +z a lost bone falls back to.
+    expect(Math.abs(mjData.xmat[id * 9 + 2])).toBeGreaterThan(0.99);
+
+    hand.set('index-finger-tip', [0, 0, 1]);
+    mocap.update(mjModel, mjData);
+    mujoco.mj_forward(mjModel, mjData);
+    expect([0, 1, 2, 3].map((i) => mjData.xquat[id * 4 + i])).toEqual(aimed);
   });
 
   it('never arms the weld from contact alone', () => {
