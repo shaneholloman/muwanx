@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 import type { MainModule, MjData, MjModel } from 'mujoco';
 import {
   getPosition,
@@ -332,7 +333,11 @@ export class mjswanRuntime {
     this.handMocap = null;
     if (handTracking) {
       const hands = [0, 1].map((i) => this.renderer.xr.getHand(i));
+      // Spheres, not the `mesh` profile: that one fetches a glTF from a CDN, and a built
+      // mjswan app is a self-contained static site.
+      const handModels = new XRHandModelFactory();
       for (const hand of hands) {
+        hand.add(handModels.createHandModel(hand, 'spheres'));
         this.xrRig.add(hand);
       }
       this.handMocap = new HandMocap(hands);
@@ -595,11 +600,6 @@ export class mjswanRuntime {
       // written before injection zero-pads the appended free joints: without this the
       // fingertips spawn at the world origin, inside the scene.
       this.handMocap?.park(this.mjData);
-      for (const bodyId of this.handMocap?.tipBodyIds() ?? []) {
-        if (this.bodies[bodyId]) {
-          this.bodies[bodyId].userData.xrHand = true;
-        }
-      }
 
       this.timestep = this.mjModel.opt.timestep || 0.001;
       // Never inferred: a wrong control rate runs the policy off-speed silently.
@@ -783,12 +783,7 @@ export class mjswanRuntime {
     if (!this.mujocoRoot) {
       return;
     }
-    const box = new THREE.Box3();
-    for (const child of this.mujocoRoot.children) {
-      if (!child.userData.xrHand) {
-        box.expandByObject(child);
-      }
-    }
+    const box = new THREE.Box3().setFromObject(this.mujocoRoot);
     if (box.isEmpty()) {
       return;
     }
@@ -1367,7 +1362,7 @@ export class mjswanRuntime {
     }
     // Viewer-only: mouse-drag forces and tracked hands, not part of the MDP.
     this.applyDragForces();
-    this.handMocap?.update(this.mjData);
+    this.handMocap?.update(this.mjModel, this.mjData);
 
     this.refreshActionReferences();
     stepPhysics(
