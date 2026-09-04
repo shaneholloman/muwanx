@@ -58,9 +58,10 @@ mjswan_app/
   model_*.onnx      converted checkpoints
   policy_meta.json  checkpoint order + metadata
   README.md         source URL, prerequisites, run command
+  dist/             the build: engine + simulation document (written by main.py)
 ```
 
-Run it from the repo root with `python -m mjswan_app.main`.
+Run it from the repo root with `python -m mjswan_app.main`. `mjswan info mjswan_app/dist` reads back what the build wrote — projects, scenes, MDPs, policies — and `app.save_document()` packs the document alone as `dist.swn`, one file that `mjswan serve`, `mjswan info` and `mjswan publish` all accept.
 
 ## What it will not write
 
