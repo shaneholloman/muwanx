@@ -7,9 +7,10 @@
  * balls with notches between them, and its length is fixed because the bone between two
  * adjacent joints does not change length when the finger bends.
  *
- * The bones are compiled in `group="3"`, which the scene builder skips, so they are
- * invisible: the hand on screen is three.js's own joint-sphere model, which is what makes
- * it read as a hand. Physics and rendering split cleanly, with no double image.
+ * The bones are normally compiled in `group="3"`, which the scene builder skips, so they
+ * are invisible: the hand on screen is three.js's own joint-sphere model, which is what
+ * makes it read as a hand. Physics and rendering split cleanly, with no double image.
+ * `DEBUG_DRAW_BONES` puts them in a drawn group instead, to check where the physics is.
  *
  * How a bone enters depends on what it has to do:
  *
@@ -113,6 +114,14 @@ const WALL_CONTACT = 'condim="4" friction="1.5 0.02 0.001"';
  */
 const WELD = 'solref="0.02 1" solimp="0.95 0.99 0.001"';
 
+/**
+ * Debug: draw the bones alongside three.js's hand model, to see where the physics
+ * actually is. `group="3"` is what the scene builder skips, so a group it draws plus an
+ * alpha is the whole switch. Set back to `false` to hide them again.
+ */
+const DEBUG_DRAW_BONES = true;
+const GEOM_VISIBILITY = DEBUG_DRAW_BONES ? 'group="2" rgba="0.85 0.35 0.2 0.3"' : 'group="3"';
+
 /** Where an untracked hand waits: above any scene, and outside the floor plane, which
  * is solid all the way down. */
 const PARKED_Z = 100;
@@ -123,9 +132,6 @@ const PARKED_SPACING = 0.05;
 const HAND_COUNT = 2;
 
 const IDENTITY_QUAT: Quat = [1, 0, 0, 0];
-
-/** Squeezed, not merely touched: two of the hand's own geoms pushing against each other. */
-const OPPOSING = -0.5;
 
 function bodyName(hand: number, segment: Segment, kind: 'target' | 'body'): string {
   return `mjswan_xr${hand}_${segment.to}_${kind}`;
@@ -164,9 +170,7 @@ export function injectHandMocapXml(xml: string): string {
       const { x, y, z } = parkedPosition(hand, index);
       const pos = `${x} ${y} ${z}`;
       const size = `size="${segment.radius} ${segment.length / 2}"`;
-      // `group="3"` is what the scene builder skips, so the physics shape is invisible
-      // and three.js's own hand model is the only hand on screen.
-      const geom = `<geom type="capsule" ${size} group="3"`;
+      const geom = `<geom type="capsule" ${size} ${GEOM_VISIBILITY}`;
       if (segment.role === 'wall') {
         bodies.push(
           `    <body name="${bodyName(hand, segment, 'body')}" mocap="true" pos="${pos}">\n` +
@@ -242,8 +246,25 @@ export class HandMocap {
   private readonly from = new THREE.Vector3();
   private readonly to = new THREE.Vector3();
 
+  /** Per hand, whether three.js says the thumb and index tips are currently pinched. */
+  private readonly pinching: boolean[];
+
   constructor(hands: THREE.XRHandSpace[]) {
     this.hands = hands;
+    this.pinching = hands.map(() => false);
+    for (const [hand, space] of hands.entries()) {
+      space.addEventListener('pinchstart', () => {
+        this.pinching[hand] = true;
+      });
+      space.addEventListener('pinchend', () => {
+        this.pinching[hand] = false;
+      });
+    }
+  }
+
+  /** Every body a bone occupies, so the viewer can keep parked hands out of its bounds. */
+  bodyIds(): number[] {
+    return this.bound.flatMap((hand) => hand.segments.map((s) => s.bodyId));
   }
 
   bind(mujoco: MainModule, mjModel: MjModel): void {
@@ -361,65 +382,56 @@ export class HandMocap {
   }
 
   /**
-   * Start and stop grabs from MuJoCo's own contacts rather than from a pinch gesture.
-   * three.js only fires `pinchstart` when the thumb and index *tips* are within 15 mm of
-   * each other, which cannot happen while a hand is holding anything thicker than a
-   * card; contacts say what is actually being squeezed, at any thickness and any number
-   * of fingers.
+   * Start and stop grabs from three.js's pinch events. `pinchstart` fires when the thumb
+   * and index tips close to within 15 mm, which is a deliberate gesture rather than
+   * something a hand does by brushing past, and on a headset it proved steadier than
+   * inferring the grab from MuJoCo's contacts. Contacts still choose *what* is grabbed:
+   * the body the hand has the most geoms on when the pinch starts.
    */
   private settleGrabs(mjModel: MjModel, mjData: MjData): void {
-    const squeezed = this.squeezedBodies(mjModel, mjData);
+    const touched = this.touchedBodies(mjModel, mjData);
     for (const [hand, boundHand] of this.bound.entries()) {
       if (boundHand.weldId < 0) continue;
-      const target = squeezed.get(hand) ?? null;
-      if (target === null) {
+      if (!this.pinching[hand]) {
         if (boundHand.grabbed !== null) this.release(mjData, boundHand);
         continue;
       }
+      const target = touched.get(hand);
       // The weld holds the object in the palm's frame, so a parked palm would drag it
       // out of the scene.
-      if (boundHand.grabbed !== null || !boundHand.palm?.tracked) continue;
+      if (boundHand.grabbed !== null || target === undefined || !boundHand.palm?.tracked) continue;
       this.grab(mjModel, mjData, boundHand, boundHand.palm.bodyId, target);
     }
   }
 
-  /** Per hand, the body most of its geoms are squeezing: touched from opposing sides. */
-  private squeezedBodies(mjModel: MjModel, mjData: MjData): Map<number, number> {
-    type Touch = { hand: number; body: number; geoms: Set<number>; normals: number[][] };
+  /** Per hand, the body it has the most geoms touching. */
+  private touchedBodies(mjModel: MjModel, mjData: MjData): Map<number, number> {
+    type Touch = { hand: number; body: number; geoms: Set<number> };
     const touches = new Map<string, Touch>();
     for (let c = 0; c < mjData.ncon; c++) {
       const contact = mjData.contact.get(c);
       if (!contact) continue;
       const geom1: number = contact.geom1;
       const geom2: number = contact.geom2;
+      // An embind handle, not a view: it has to be released or the WASM heap grows.
+      contact.delete();
       const hand1 = this.handOfGeom.get(geom1);
       const hand2 = this.handOfGeom.get(geom2);
       const handFirst = hand1 !== undefined;
-      // The contact frame's first row is the normal, pointing from geom1 into geom2.
-      const frame = contact.frame as ArrayLike<number>;
-      const normal = [0, 1, 2].map((i) => (handFirst ? -frame[i] : frame[i]));
-      // An embind handle, not a view: it has to be released or the WASM heap grows.
-      contact.delete();
       // Hand against hand, or neither: a grab needs exactly one side to be the hand.
       if (handFirst === (hand2 !== undefined)) continue;
       const hand = hand1 ?? (hand2 as number);
       const body: number = mjModel.geom_bodyid[handFirst ? geom2 : geom1];
       if (body === 0) continue;
       const key = `${hand}:${body}`;
-      const entry: Touch = touches.get(key) ?? { hand, body, geoms: new Set(), normals: [] };
+      const entry: Touch = touches.get(key) ?? { hand, body, geoms: new Set() };
       entry.geoms.add(handFirst ? geom1 : geom2);
-      entry.normals.push(normal);
       touches.set(key, entry);
     }
 
     const best = new Map<number, number>();
     const bestGeoms = new Map<number, number>();
-    for (const { hand, body, geoms, normals } of touches.values()) {
-      if (geoms.size < 2) continue;
-      const opposed = normals.some((a) =>
-        normals.some((b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2] < OPPOSING),
-      );
-      if (!opposed) continue;
+    for (const { hand, body, geoms } of touches.values()) {
       if (geoms.size <= (bestGeoms.get(hand) ?? 0)) continue;
       bestGeoms.set(hand, geoms.size);
       best.set(hand, body);
@@ -428,7 +440,7 @@ export class HandMocap {
   }
 
   /**
-   * Weld the squeezed body to the palm at the pose it is already in, so activating the
+   * Weld the pinched body to the palm at the pose it is already in, so activating the
    * constraint holds it rather than snapping it. `eq_data` for a weld is
    * `[anchor(3), relpose pos(3), relpose quat(4), torquescale(1)]`, and its relpose is
    * body2 expressed in body1's frame — the opposite of the obvious reading.

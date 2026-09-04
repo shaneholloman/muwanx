@@ -77,9 +77,12 @@ describe('injectHandMocapXml', () => {
     expect(xml).toContain('name="mjswan_xr0_thumb-tip_body"');
     expect(xml).toContain('name="mjswan_xr1_index-finger-phalanx-intermediate_body"');
     expect(xml).toContain('name="mjswan_xr1_grab"');
-    // Hidden from the scene builder, which draws nothing at `group >= 3`: three.js's own
-    // hand model is what the viewer sees.
-    expect(xml.match(/group="3"/g)).toHaveLength(grips + walls);
+    // Every bone sits in one group, and the scene builder draws nothing at `group >= 3`.
+    // DEBUG_DRAW_BONES picks which: hidden behind three.js's hand model, or drawn over it.
+    const hidden = xml.match(/group="3"/g)?.length ?? 0;
+    const drawn = xml.match(/group="2" rgba="[\d. ]+ 0\.3"/g)?.length ?? 0;
+    expect(hidden + drawn).toBe(grips + walls);
+    expect(hidden === 0 || drawn === 0).toBe(true);
   });
 
   // Two dials that want opposite things, so a later edit cannot quietly conflate them.
@@ -142,6 +145,16 @@ describe('quatFromZ', () => {
  */
 class FakeHand {
   readonly joints: Record<string, { visible: boolean; getWorldPosition(v: THREE.Vector3): THREE.Vector3 }> = {};
+  private readonly listeners: Record<string, (() => void)[]> = {};
+
+  addEventListener(type: string, handler: () => void): void {
+    (this.listeners[type] ??= []).push(handler);
+  }
+
+  /** Fire three.js's pinch events, which is what starts and stops a grab. */
+  pinch(on: boolean): void {
+    for (const handler of this.listeners[on ? 'pinchstart' : 'pinchend'] ?? []) handler();
+  }
 
   set(joint: string, mjc: readonly [number, number, number]): void {
     const three = new THREE.Vector3(mjc[0], mjc[2], -mjc[1]);
@@ -176,7 +189,7 @@ describe('HandMocap against the real WASM', () => {
    * `squeeze` is how far past the surface the two sides are driven; `oneSided` drops the
    * fingers, so nothing opposes the palm and the box has only friction to hang from.
    */
-  function clampAndLift(mass: number, { oneSided = false } = {}) {
+  function clampAndLift(mass: number, { oneSided = false, pinch = true } = {}) {
     const xml = injectHandMocapXml(cubeScene(mass));
     const mjModel = (
       mujoco as unknown as { MjModel: { from_xml_string(s: string): MjModel } }
@@ -223,12 +236,21 @@ describe('HandMocap against the real WASM', () => {
 
     const base = CUBE_HALF + 0.001;
     for (let i = 0; i < 12; i++) step(base);
+    // Pinched once the hand is already on the box, which is the order a real one goes in.
+    if (pinch) hand.pinch(true);
+    step(base);
     const before = mjData.xpos[cubeId * 3 + 2];
     for (let i = 1; i <= 50; i++) step(base + i * 0.005);
     const lifted = mjData.xpos[cubeId * 3 + 2] - before;
     // Half a second at the top: a grip that is merely slipping slowly shows up here.
     for (let i = 0; i < 25; i++) step(base + 0.25);
-    return { lifted, held: mjData.xpos[cubeId * 3 + 2] - before };
+    const held = mjData.xpos[cubeId * 3 + 2] - before;
+
+    const grabId = mujoco.mj_name2id(mjModel, mujoco.mjtObj.mjOBJ_EQUALITY.value, 'mjswan_xr0_grab');
+    const weldHeld = mjData.eq_active[grabId];
+    hand.pinch(false);
+    step(base + 0.25);
+    return { lifted, held, weldHeld, weldReleased: mjData.eq_active[grabId] };
   }
 
   // The whole point of the dynamic twin. A plain mocap hand scores 0 here, at any mass.
@@ -244,5 +266,18 @@ describe('HandMocap against the real WASM', () => {
   it('drops a box nothing is squeezing', () => {
     const { held } = clampAndLift(0.6, { oneSided: true });
     expect(held).toBeLessThan(0.01);
+  });
+
+  // The gesture, not the contact, is what arms the weld. Friction carries this box
+  // either way, so the weld's own flag is the only thing that says which path ran.
+  it('arms the grab weld on pinchstart and drops it on pinchend', () => {
+    const pinched = clampAndLift(2.0);
+    expect(pinched.weldHeld).toBe(1);
+    expect(pinched.weldReleased).toBe(0);
+  });
+
+  it('never arms the weld from contact alone', () => {
+    const { weldHeld } = clampAndLift(2.0, { pinch: false });
+    expect(weldHeld).toBe(0);
   });
 });

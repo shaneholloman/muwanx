@@ -600,6 +600,13 @@ export class mjswanRuntime {
       // written before injection zero-pads the appended free joints: without this the
       // fingertips spawn at the world origin, inside the scene.
       this.handMocap?.park(this.mjData);
+      // Tagged so `frameCamera` can leave them out: with DEBUG_DRAW_BONES on the bones
+      // are drawn, and a parked hand waits 100 m above the scene.
+      for (const bodyId of this.handMocap?.bodyIds() ?? []) {
+        if (this.bodies[bodyId]) {
+          this.bodies[bodyId].userData.xrHand = true;
+        }
+      }
 
       this.timestep = this.mjModel.opt.timestep || 0.001;
       // Never inferred: a wrong control rate runs the policy off-speed silently.
@@ -783,7 +790,12 @@ export class mjswanRuntime {
     if (!this.mujocoRoot) {
       return;
     }
-    const box = new THREE.Box3().setFromObject(this.mujocoRoot);
+    const box = new THREE.Box3();
+    for (const child of this.mujocoRoot.children) {
+      if (!child.userData.xrHand) {
+        box.expandByObject(child);
+      }
+    }
     if (box.isEmpty()) {
       return;
     }

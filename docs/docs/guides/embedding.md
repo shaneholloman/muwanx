@@ -135,9 +135,9 @@ A bone enters the model according to what it has to do. The palm's two edges and
 fingertips carry load, so each is a mocap body welded to a dynamic twin: MuJoCo takes
 contact velocity from body velocity, and a body that is teleported every step has none, so
 a bare mocap bone can push something but never hold it. The ten bones in between only ever
-push, so they stay plain mocap — no degrees of freedom, and almost no cost. Grabs are read
-from the contacts themselves: any object two of the hand's own geoms are squeezing from
-opposing sides is held, at any thickness and with any number of fingers.
+push, so they stay plain mocap — no degrees of freedom, and almost no cost. A grab starts
+on three.js's `pinchstart` and ends on `pinchend`; the contacts under the hand at that
+moment choose which object the pinch takes hold of.
 
 It is opt-in because both halves cost something: every scene the build loads gains the
 hand bodies, at about 1.6x per physics step, and the headset must grant the
