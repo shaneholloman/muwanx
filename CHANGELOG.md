@@ -241,15 +241,13 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   reflection.
 - **A scene's policies no longer overwrite each other's traced graphs.** A graph's
   bundle path was built from its kind and name alone (`obs/policy.onnx`) under the
-  *scene* directory, while its contents are per-policy — so a second policy in the same
+  *scene* directory, while its contents are per-MDP, so a second policy in the same
   scene wrote over the first, and every earlier policy's config went on pointing at it.
   Nothing caught it at either end: the build overwrote silently, and the runtime pads or
   truncates a mismatched vector to the `size` the config declares, so a policy loading a
-  sibling's graph merely behaved oddly. Each policy's graphs now live under its own
-  directory (`<policy-id>/obs/policy.onnx`), and a write that would replace a *different*
-  graph at one path fails the build rather than shipping it. Scene-scoped event graphs
-  keep their unprefixed `event/<name>.onnx`. Only the bundle layout changed; the config
-  refers to graphs by path exactly as before, and the frontend is untouched.
+  sibling's graph merely behaved oddly. Graphs now live under their MDP's directory
+  (`mdp/<mdp-id>/obs/actor.onnx`, see Added), and a write that would replace a
+  *different* graph at one path fails the build rather than shipping it.
 - **The control panel is mjviser's, control for control.** Two viewers onto the same
   mjlab task should not look like two products, so the panel now renders what mjlab's
   viser GUI renders: command groups nested in a `Commands` folder, one row per control

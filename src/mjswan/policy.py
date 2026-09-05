@@ -145,7 +145,9 @@ class PolicyConfig:
     # Views onto `mdp`, so a reader that wants one term set need not know where it lives.
 
     @property
-    def observations(self) -> dict[str, ObservationGroupCfg] | None:
+    def observations(
+        self,
+    ) -> dict[str, ObservationGroupCfg] | Mapping[str, Any] | Any | None:
         """The MDP's observation groups, keyed by the name the policy's slot table uses."""
         return self.mdp.observations
 
@@ -160,12 +162,12 @@ class PolicyConfig:
         return self.mdp.terminations
 
     @property
-    def commands(self) -> dict[str, CommandTermConfig]:
+    def commands(self) -> dict[str, CommandTermConfig] | Mapping[str, Any]:
         """The MDP's command terms, keyed by their policy-visible names (``{}`` if none)."""
         return self.mdp.commands or {}
 
     @property
-    def events(self) -> dict[str, EventTermCfg] | None:
+    def events(self) -> dict[str, EventTermCfg] | Mapping[str, Any] | None:
         """The MDP's event terms, keyed by name."""
         return self.mdp.events
 
