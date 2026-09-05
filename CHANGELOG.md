@@ -27,9 +27,10 @@ velocity-command shortcuts were removed outright, see Removed.
 - Seeded PRNG behind every term's randomness (`createEngine({ termSeed })`, reported
   back as `MjswanEngineState.termSeed`), so a recorded session replays.
 - **WebXR hand tracking as bodies in the simulation** (`createEngine({ handTracking:
-  true })`, or `?hands=1` on the bundled app). Six mocap spheres a hand, each welded to
-  a dynamic twin that owns the contact, so a headset can push a scene's objects around
-  and pick them up. Opt-in: roughly a third more per physics step, in every scene.
+  true })`, or `?hands=1` on the bundled app). A headset can bat a scene's objects around,
+  rest one on an open palm, and pinch to pick one up: a 2 kg box, lifted by friction
+  alone. Opt-in: the bodies are added to every scene the build loads, at about 1.6x per
+  physics step.
 - **Thumbstick locomotion in VR.** The camera and the tracked hands now hang off an XR
   rig, which is what a session moves: the left stick slides the viewer along its heading,
   and the right stick turns it about the head for as long as it is held, at a rate the

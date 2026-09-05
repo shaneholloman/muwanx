@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 import type { MainModule, MjData, MjModel } from 'mujoco';
 import {
   getPosition,
@@ -332,7 +333,11 @@ export class mjswanRuntime {
     this.handMocap = null;
     if (handTracking) {
       const hands = [0, 1].map((i) => this.renderer.xr.getHand(i));
+      // Spheres, not the `mesh` profile: that one fetches a glTF from a CDN, and a built
+      // mjswan app is self-contained.
+      const handModels = new XRHandModelFactory();
       for (const hand of hands) {
+        hand.add(handModels.createHandModel(hand, 'spheres'));
         this.xrRig.add(hand);
       }
       this.handMocap = new HandMocap(hands);
@@ -595,7 +600,9 @@ export class mjswanRuntime {
       // written before injection zero-pads the appended free joints: without this the
       // fingertips spawn at the world origin, inside the scene.
       this.handMocap?.park(this.mjData);
-      for (const bodyId of this.handMocap?.tipBodyIds() ?? []) {
+      // Tagged so `frameCamera` can leave them out: a parked hand waits 100 m up, and
+      // with DEBUG_DRAW_BONES on it is drawn there.
+      for (const bodyId of this.handMocap?.bodyIds() ?? []) {
         if (this.bodies[bodyId]) {
           this.bodies[bodyId].userData.xrHand = true;
         }
@@ -1367,7 +1374,7 @@ export class mjswanRuntime {
     }
     // Viewer-only: mouse-drag forces and tracked hands, not part of the MDP.
     this.applyDragForces();
-    this.handMocap?.update(this.mjData);
+    this.handMocap?.update(this.mjModel, this.mjData);
 
     this.refreshActionReferences();
     stepPhysics(
@@ -1589,6 +1596,38 @@ export class mjswanRuntime {
     return dynamic;
   }
 
+  /**
+   * A hand bone is resized every frame, but `CapsuleGeometry` is built once at load, so
+   * the drawn capsule has to be remade to keep its ends on the joints. A no-op unless
+   * `handMocap.ts`'s debug switch is drawing the bones: with it off they have no mesh.
+   */
+  private resizeHandBoneMeshes(): void {
+    if (!this.mjModel || !this.bodies) {
+      return;
+    }
+    for (const bodyId of this.handMocap?.bodyIds() ?? []) {
+      const mesh = this.bodies[bodyId]?.children[0] as THREE.Mesh | undefined;
+      const geomId = mesh?.userData.geomId as number | undefined;
+      if (!mesh || geomId === undefined) {
+        continue;
+      }
+      const half = this.mjModel.geom_size[geomId * 3 + 1];
+      // Half a millimetre is under what a headset resolves, and it keeps tracking noise
+      // from rebuilding every geometry every frame.
+      if (Math.abs(half - ((mesh.userData.drawnHalf as number) ?? 0)) < 0.0005) {
+        continue;
+      }
+      mesh.userData.drawnHalf = half;
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.CapsuleGeometry(
+        this.mjModel.geom_size[geomId * 3],
+        half * 2.0,
+        20,
+        20
+      );
+    }
+  }
+
   private syncStaticBodiesFromData(): void {
     if (!this.mjModel || !this.mjData || !this.bodies) {
       return;
@@ -1692,6 +1731,7 @@ export class mjswanRuntime {
         }
       }
 
+      this.resizeHandBoneMeshes();
       updateLightsFromData(this.mujoco, this.mjData, this.lights);
 
       if (this.mujocoRoot && this.mujocoRoot.cylinders) {
