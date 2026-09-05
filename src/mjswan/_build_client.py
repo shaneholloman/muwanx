@@ -356,7 +356,7 @@ class ClientBuilder:
             "source": self._source_fingerprint(),
         }
 
-    # Derived files, excluded from the fingerprint: regenerated identically each build.
+    # Derived file, excluded from the fingerprint: regenerated identically each build.
     _GENERATED_TS = frozenset(
         {
             "src/core/engine/viewer_config_defaults.ts",
@@ -367,7 +367,7 @@ class ClientBuilder:
         """SHA-256 over the frontend build inputs (app source + config + declared deps).
 
         Invalidates the cache whenever the app codebase changes. Excludes derived
-        outputs (node_modules / dist / .nodeenv), the auto-generated stubs above,
+        outputs (node_modules / dist / .nodeenv), the generated file above,
         and package-lock.json (npm may rewrite it); package.json's ``version`` is
         normalized out since it is already a separate part of the key.
         """
