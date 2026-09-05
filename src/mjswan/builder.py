@@ -37,7 +37,7 @@ from .policy import DEFAULT_IN_KEYS, DEFAULT_OUT_KEYS, RUNTIME_INPUT_SLOTS
 from .project import ProjectConfig, ProjectHandle
 from .scene import SceneConfig
 from .splat import SplatConfig
-from .utils import assign_id, collect_spec_assets, name2id, to_zip_deflated
+from .utils import assign_id, collect_spec_assets, name2id, to_zip_deflated, unique_id
 
 
 def _build_uses_custom_js() -> bool:
@@ -107,13 +107,9 @@ def _write_scene_motions(scene: SceneConfig, scene_dir: Path) -> dict[str, str]:
             key = _motion_key(motion)
             if key in files:
                 continue
-            stem = name2id(motion.name)
+            stem = unique_id(name2id(motion.name), used)
+            used.add(stem)
             filename = f"{stem}.npz"
-            suffix = 0
-            while filename in used:
-                suffix += 1
-                filename = f"{stem}_{suffix}.npz"
-            used.add(filename)
             files[key] = filename
 
             target = scene_dir / filename
@@ -205,12 +201,11 @@ class _SceneSteps:
 
 
 def _strip_slot_tables(sidecar: dict, config_src: Path) -> dict:
-    """Drop a sidecar's ``onnx`` block and slot tables; those are declared in Python now.
+    """Drop a sidecar's ``onnx`` block and slot tables; those are declared in Python.
 
     ``in_keys`` / ``out_keys`` (top-level or under ``onnx.meta``) belong on ``add_policy``,
     where the build checks them against the network (ADR 0006 §5). Found here they are
-    ignored with a warning rather than obeyed, so a stale table cannot quietly win over
-    the code. ``onnx.path`` named the network's old location and means nothing either.
+    ignored with a warning, so a stale table cannot quietly win over the code.
     """
     onnx_block = sidecar.get("onnx")
     meta = (onnx_block.get("meta") or {}) if isinstance(onnx_block, dict) else {}
@@ -231,12 +226,11 @@ def _strip_slot_tables(sidecar: dict, config_src: Path) -> dict:
 def _input_slots(policy, obs_keys: list[str]) -> list[str]:
     """The policy's effective ``in_keys``, checked against its MDP's observation groups.
 
-    Declared, it is taken as declared. Otherwise the network has one input
-    (``add_policy`` refused a multi-input policy without a table) and its one
-    observation group fills it, whatever the group is called; with several groups the
-    default slot must be one of them. Every slot must then name a group that exists or a
-    tensor the runtime supplies; anything else would surface at playback as a missing
-    input, with the policy silently inert.
+    Undeclared, the network has one input (``add_policy`` refuses a multi-input policy
+    without a table) and its one observation group fills it, whatever the group is
+    called; with several groups the default slot must be one of them. Every slot must
+    then name a group that exists or a tensor the runtime supplies, since anything else
+    surfaces only at playback, as a missing input with the policy silently inert.
     """
     keys: list[str]
     if policy.in_keys is not None:
@@ -496,8 +490,8 @@ class Builder:
     def _load_sidecar(self, policy) -> dict:
         """The policy's authored ``config_path`` JSON, or ``{}``.
 
-        A missing file warns and reads as empty, as before: the policy still ships, with
-        whatever the Python side declared.
+        A missing file warns and reads as empty: the policy still ships, with whatever
+        the Python side declared.
         """
         config_path = getattr(policy, "config_path", None)
         if not config_path:
@@ -529,11 +523,10 @@ class Builder:
     ) -> dict:
         """Trace one MDP's five term sets into ``<scene>/mdp/<mdp_id>/`` and return its entry.
 
-        ``owners`` are the policies that run against it, in order. The first one supplies
-        the per-policy context a trace needs (its joint names fix the native widths, its
-        sidecar's ``actions`` block carries the authored PD gains) and the rest must agree
-        with it: they were trained against one MDP, so a disagreement is a config mistake,
-        not a second MDP.
+        ``owners`` are the policies that run against it, in order. The first supplies the
+        per-policy context a trace needs: its joint names fix the native widths, its
+        sidecar's ``actions`` block carries the authored PD gains. The rest must agree
+        with it, a disagreement being a config mistake rather than a second MDP.
         """
         from ._onnx_build import (
             policy_native_sizes,
@@ -649,11 +642,10 @@ class Builder:
     ) -> dict:
         """One policy's manifest entry: the checkpoint's own metadata plus its MDP ref.
 
-        The sidecar's keys pass through except the MDP sections (merged by
-        :meth:`_serialize_mdp`); its slot tables were dropped on load. Python-side fields
-        win over it. ``obs_keys`` are the MDP entry's observation groups, which the slot
-        table is checked against (ADR 0006 §5); a table equal to the runtime's default is
-        omitted, so the common single-input policy carries none.
+        The sidecar's keys pass through except the MDP sections, which
+        :meth:`_serialize_mdp` merges; Python-side fields win over it. ``obs_keys`` are
+        the MDP entry's observation groups, which the slot table is checked against. A
+        table equal to the runtime's default is omitted (ADR 0006 §5).
         """
         entry: dict = {
             "id": policy.id,
@@ -781,8 +773,7 @@ class Builder:
     def _check_defaults(self) -> None:
         """Refuse two siblings both marked default (ADR 0006, manifest rule 3).
 
-        A flag that two entries may both set is a silent pick; the build says so
-        instead. None set is fine: the first in document order is then the default.
+        None set is fine: the first in document order is then the default.
         """
         defaults = [p.name for p in self._projects if p.default]
         if len(defaults) > 1:

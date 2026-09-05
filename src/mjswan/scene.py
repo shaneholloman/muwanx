@@ -32,7 +32,7 @@ from .mdp import MdpConfig
 from .motion import MotionConfig
 from .policy import PolicyConfig, PolicyHandle
 from .splat import SplatConfig, SplatHandle
-from .utils import assign_id, name2id
+from .utils import assign_id, name2id, unique_id
 from .viewer import ViewerConfig
 
 if TYPE_CHECKING:
@@ -243,17 +243,16 @@ class SceneConfig:
     events: dict[str, Any] | None = None
     """The scene's event terms (mjswan or mjlab ``EventTermCfg``), adapted.
 
-    The default a policy's MDP takes when it says nothing about events: a task's own,
-    for an :meth:`ProjectHandle.add_scene_mjlab` scene (ADR 0006 §3). Serialized lazily
-    at build time so ONNX tracing has the scene's live env and output directory."""
+    The default a policy's MDP takes when it says nothing about events (ADR 0006 §3).
+    Serialized at build time, when ONNX tracing has the live env and output directory."""
 
     events_explicit: bool = field(default=False, repr=False, compare=False)
     """Whether :attr:`events` were set by the author rather than inherited from a task's
-    env config; decides whether dropping them on a policy-less scene is worth a warning."""
+    env config; only an author's are worth warning about when no policy carries them."""
 
     mdps: list[MdpConfig] = field(default_factory=list, repr=False, compare=False)
     """Every distinct :class:`MdpConfig` a policy on this scene uses, in first-use order.
-    Build-time bookkeeping: index *n* here is what makes an unnamed config ``mdp_<n>``."""
+    Index *n* here is what makes an unnamed config ``mdp_<n>``."""
 
     mdp_ids: list[str] = field(default_factory=list, repr=False, compare=False)
     """The id of each entry in :attr:`mdps`, unique within the scene."""
@@ -326,13 +325,13 @@ class SceneConfig:
         """The id of ``mdp`` on this scene, registering it on first use.
 
         By object identity, not equality (ADR 0006 §3): the same config on two policies
-        is one MDP, two equal configs are two. A named config takes ``name2id(name)``.
-        An MDP the term-set sugar built for one policy takes that policy's id
-        (``policy_id``), so ``mdp/locomotion/`` sits beside ``policy/locomotion.onnx``
-        and a scene's MDP directories read as its policies do. Only a config handed to
-        several policies by hand (what ``add_policy_wandb`` does for a run's
-        checkpoints) falls back to ``mdp_<n>``, with *n* its first-use index on this
-        scene: per scene, so adding a scene in front of this one moves none of its ids.
+        is one MDP, two equal configs are two.
+
+        A named config takes ``name2id(name)``. One the term-set sugar built for a single
+        policy takes that policy's id, so ``mdp/locomotion/`` sits beside
+        ``policy/locomotion.onnx``. Only a config shared by hand falls back to
+        ``mdp_<n>``, numbered by first use within this scene, so adding a scene in front
+        of this one moves none of its ids.
         """
         for known, ident in zip(self.mdps, self.mdp_ids):
             if known is mdp:
@@ -341,9 +340,8 @@ class SceneConfig:
         if source is not None:
             ident = assign_id(source, set(self.mdp_ids), kind="mdp", stacklevel=4)
         else:
-            ident = f"mdp_{len(self.mdps)}"
-            if ident in self.mdp_ids:  # a named one already took this spelling
-                ident = assign_id(ident, set(self.mdp_ids), kind="mdp", stacklevel=4)
+            # No warning on a rename here: the author never chose this spelling.
+            ident = unique_id(f"mdp_{len(self.mdps)}", self.mdp_ids)
         self.mdps.append(mdp)
         self.mdp_ids.append(ident)
         return ident
@@ -364,13 +362,12 @@ def _check_slot_tables(
 ) -> tuple[list[str] | None, list[str | list[str]] | None]:
     """Check a policy's slot tables against its network and return them as lists.
 
-    ``in_keys[i]`` fills the *i*-th input and ``out_keys[i]`` names the *i*-th output,
-    so each table must be exactly as long as what it indexes. A network with several
-    inputs must declare ``in_keys``: nothing else records where the runtime-synthesized
-    tensors sit relative to the observation groups, and without it the policy would fail
-    at playback with a missing input rather than here (ADR 0006 §5). Several *outputs*
-    cannot be refused the same way, since one of them may well be the action; which one
-    is unknowable here, so the default (the first) is announced.
+    ``in_keys[i]`` fills the *i*-th input and ``out_keys[i]`` names the *i*-th output, so
+    each table must be exactly as long as what it indexes. A network with several inputs
+    must declare ``in_keys``: nothing else records where the runtime-synthesized tensors
+    sit relative to the observation groups (ADR 0006 §5). Several *outputs* cannot be
+    refused the same way, since which one is the action is unknowable here, so the
+    default (the first) is announced instead.
     """
     inputs, outputs = _onnx_io_names(model)
     if in_keys is None:
@@ -471,19 +468,19 @@ class SceneHandle:
         term set still reads as "this policy has none".
 
         Events default differently from the other four: a per-policy ``env_cfg`` supplies
-        its own, but otherwise they come from the *scene's* events (already adapted, and
-        with the terrain-spawn patch applied), not from the env config again.
+        its own, but otherwise they come from the scene's, which carry the terrain-spawn
+        patch.
 
-        :meth:`add_policy_wandb` needs the resolved ``commands`` too — it scans them for
-        the tracking term to know which motion clip to fetch — hence a shared helper.
+        Shared with :meth:`add_policy_wandb`, which needs the resolved ``commands`` to
+        find the tracking term that names the motion clip to fetch.
         """
+        # Returned unadapted, like the other four: `_resolve_mdp` adapts all five.
         if events is None:
-            if env_cfg is not None:
-                from .adapters.mjlab_adapter import adapt_events
-
-                events = adapt_events(getattr(env_cfg, "events", None))
-            else:
-                events = self._config.events
+            events = (
+                getattr(env_cfg, "events", None)
+                if env_cfg is not None
+                else self._config.events
+            )
         source_cfg = self._resolve_env_cfg(env_cfg)
         if source_cfg is None:
             return observations, commands, actions, terminations, events
@@ -507,9 +504,9 @@ class SceneHandle:
     ) -> None:
         """Fill ``mdp``'s unset fields and adapt its mjlab types, in place, once.
 
-        Runs on the first policy to use the config; later policies find ``_adapted`` set
-        and share the result. Action scales and PD gains are resolved against the first
-        policy's joint names: the checkpoints of one run share them.
+        Runs on the first policy to use the config; later ones find ``_adapted`` set and
+        share the result, including action scales and PD gains resolved against the first
+        policy's joint names, which the checkpoints of one run share.
         """
         if mdp._adapted:
             return
@@ -616,10 +613,9 @@ class SceneHandle:
             events: Event term configurations, in any of the four modes.
             in_keys: The network's input slot table: ``in_keys[i]`` names what fills its
                 *i*-th input, an observation group or a tensor the runtime synthesizes
-                (``is_init``, ``adapt_hx``, ``time_step``). The network's own input names
-                never matter; the mapping is positional. Required when the network has
-                more than one input; a single-input network takes its one observation
-                group and needs none. Checked here against the model's input count.
+                (``is_init``, ``adapt_hx``, ``time_step``). The mapping is positional, so
+                the network's own input names never matter. Required when the network has
+                more than one input; a single-input one takes its one observation group.
             out_keys: The output slot table, ``out_keys[i]`` naming the *i*-th output.
                 ``action`` is the one the runtime drives the actuators from; a recurrent
                 policy also carries ``["next", "adapt_hx"]``. Defaults to ``["action"]``.
@@ -677,7 +673,7 @@ class SceneHandle:
                 f"Policy {name!r} was given mdp= and also {sorted(given)}. An MdpConfig "
                 "carries all five term sets; pass either it or the term sets, not both."
             )
-        # An MDP the sugar builds belongs to this policy alone, so it is named after it;
+        # An MDP built here belongs to this policy alone, so it takes the policy's id;
         # one passed in may be shared, and is numbered unless it carries a name.
         sugar_built = mdp is None
         if mdp is None:
@@ -1147,8 +1143,8 @@ class SceneHandle:
 
         Accepts mjswan or mjlab ``EventTermCfg`` instances in any of the four modes.
         ONNX tracing happens at build time, as for observations and terminations. Events
-        belong to an MDP (ADR 0006 §3): a policy that passes none takes these, so a scene
-        with events and no policy has nowhere to put them and says so at build time.
+        belong to an MDP (ADR 0006 §3), so a scene with events and no policy has nowhere
+        to put them, and the build says so.
 
         Args:
             events: Dict mapping event names to ``EventTermCfg`` instances.

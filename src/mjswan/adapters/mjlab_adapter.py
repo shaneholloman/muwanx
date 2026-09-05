@@ -55,6 +55,7 @@ from ..managers.observation_manager import (
 from ..managers.termination_manager import (
     TerminationTermCfg as MjswanTerminationTermCfg,
 )
+from ..policy import DEFAULT_IN_KEYS
 
 
 def _is_from_mjlab(obj: Any) -> bool:
@@ -168,16 +169,15 @@ def _adapt_obs_group(group: Any) -> MjswanObservationGroupCfg:
 #: so these have no input to feed and are dropped rather than traced and bundled.
 _TRAINING_ONLY_OBS_GROUPS = frozenset({"critic"})
 
-#: The slot a single observation group lands under, and the one the runtime feeds when a
-#: policy declares no ``in_keys`` (``OnnxModule`` defaults to ``['actor']``). It is mjlab's
-#: own name for the group its actor network reads, so the common case needs no key at all
-#: (ADR 0006 §5). Python and TypeScript change this together, or every policy without an
-#: ``in_keys`` table goes silently inert.
-DEFAULT_OBS_GROUP_KEY = "actor"
+#: The slot a single observation group lands under, derived so it cannot drift from the
+#: runtime's default ``in_keys``. It is mjlab's own name for the group its actor network
+#: reads, so the common case needs no key at all (ADR 0006 §5). The TypeScript runtime
+#: holds the same default, pinned to Python by ``default_slots.json``.
+DEFAULT_OBS_GROUP_KEY = DEFAULT_IN_KEYS[0]
 
-#: mjlab's name for the network whose group the exported policy reads, as the runner's
-#: ``obs_groups`` keys it. The same word as the default slot, by design, but a different
-#: namespace: this one is looked up in ``rl_cfg.obs_groups``, the other in ``in_keys``.
+#: mjlab's name for the network whose group the exported policy reads. The same word as
+#: the default slot, by design, but a different namespace: this one is looked up in
+#: ``rl_cfg.obs_groups``, the other in ``in_keys``.
 _MJLAB_ACTOR_NETWORK = "actor"
 
 
@@ -197,16 +197,14 @@ def _select_policy_group(
 
     mjlab keys ``env_cfg.observations`` by *network* (``"actor"``, ``"critic"``); mjswan
     keys it by *slot*, the name the policy's ``in_keys`` table uses. The default slot is
-    also called ``actor``, so mjlab's own dict needs no renaming, only the other networks'
-    groups dropped. A task whose runner names the actor's group something else
-    (``rl_cfg.obs_groups == {"actor": ("proprio",), "critic": ("privileged",)}``) has
-    that group moved under the default slot.
+    also called ``actor``, so mjlab's own dict needs no renaming, only the other
+    networks' groups dropped. A runner that names the actor's group something else
+    (``obs_groups == {"actor": ("proprio",), ...}``) has that group moved to the default
+    slot.
 
     Only groups the runner attributes to a network are touched. A key it does not know
     (``"command_"`` on a multi-input policy) is a slot the author added and stays, and a
     dict sharing no key with the actor's is not the task's dict and is left alone.
-    Without a runner nothing here is known, and :func:`adapt_observations` drops only the
-    training-only names.
     """
     if not observations:
         return observations
@@ -257,8 +255,7 @@ def adapt_observations(
     beside an ``actor`` group, since the pair is mjlab's own dict, with a warning
     otherwise.
 
-    *obs_groups* is the task's runner ``rl_cfg.obs_groups`` (which group(s) each
-    network reads), consulted only for the dict form.
+    *obs_groups* is the runner's ``rl_cfg.obs_groups``, consulted only for the dict form.
     """
     if observations is None:
         return None

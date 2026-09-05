@@ -9,14 +9,17 @@ with the same attributes that the adapter inspects, placed in a fake
 
 from __future__ import annotations
 
+import json
 import sys
 import warnings
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
 
 from mjswan.adapters.mjlab_adapter import (
+    DEFAULT_OBS_GROUP_KEY,
     adapt_actions,
     adapt_commands,
     adapt_observations,
@@ -29,6 +32,7 @@ from mjswan.envs.mdp.observations import ObservationBinding
 from mjswan.envs.mdp.terminations import TerminationBinding
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjswan.managers.termination_manager import TerminationTermCfg
+from mjswan.policy import DEFAULT_IN_KEYS, DEFAULT_OUT_KEYS
 
 # ---------------------------------------------------------------------------
 # Fake mjlab types — classes whose __module__ starts with "mjlab"
@@ -271,6 +275,31 @@ class TestAdaptObservations:
         assert result is not None
         assert callable(result["policy"].terms["ang"].func)
         assert callable(result["adapt_hx"].terms["grav"].func)
+
+
+class TestDefaultSlotTables:
+    """The default slot table is one fact; three places would have to agree on it.
+
+    The builder writes no ``in_keys`` when a policy's table equals the default, so the
+    runtime supplies it instead. Should the two sides disagree, every such policy looks
+    for an input nothing feeds and goes inert at playback, with nothing raised at build
+    time. ``DEFAULT_OBS_GROUP_KEY`` is derived from ``DEFAULT_IN_KEYS``; the TypeScript
+    runtime reads ``default_slots.json``, which these pin the Python side to.
+    """
+
+    SHARED = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "src/mjswan/template/src/core/policy/default_slots.json"
+        ).read_text()
+    )
+
+    def test_python_defaults_match_the_shared_table(self):
+        assert list(DEFAULT_IN_KEYS) == self.SHARED["in_keys"]
+        assert list(DEFAULT_OUT_KEYS) == self.SHARED["out_keys"]
+
+    def test_the_lone_group_slot_is_the_first_default_input(self):
+        assert DEFAULT_OBS_GROUP_KEY == DEFAULT_IN_KEYS[0]
 
 
 class TestObservationGroupKey:

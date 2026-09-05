@@ -383,93 +383,73 @@ def publish_dist(
     base = resolve_api_base(api_base)
     notify = on_progress or (lambda _msg: None)
 
-    # A document uploads exactly the file set its directory would: the archive is a
-    # packaging of the tree, so the server never needs to know it existed (ADR 0006 §8).
+    # A document uploads exactly the file set its directory would, so the server never
+    # needs to know it existed (ADR 0006 §8). The upload runs inside the context: a
+    # document's tree is a temporary directory, and `plan.files` point into it.
     try:
         with as_directory(Path(dist_dir)) as tree:
-            return _publish_tree(
-                tree,
-                title=title,
-                description=description,
-                tags=tags,
-                token=token,
-                base=base,
-                transport=transport,
-                notify=notify,
+            plan = plan_publish(tree)
+            resolved_token = resolve_token(token)
+
+            resolved_title = title or _default_title(plan.config)
+
+            body: dict = {
+                "title": resolved_title,
+                "manifest": plan.manifest(),
+                "config": plan.config,
+            }
+            if description is not None:
+                body["description"] = description
+            if tags:
+                body["tags"] = tags
+
+            notify(f"Requesting upload session for {len(plan.files)} file(s)…")
+            session_resp = transport.post_json(
+                f"{base}/api/simulations/upload-session", body, resolved_token
+            )
+            _raise_for_status(session_resp, "upload-session")
+            session = _parse_json(session_resp, "upload-session")
+
+            upload_id = session.get("upload_id")
+            if not upload_id:
+                raise PublishError("upload-session response missing upload_id.")
+            uploads = {u["path"]: u["url"] for u in session.get("uploads", [])}
+
+            by_path = {f.upload_path: f for f in plan.files}
+            for path, url in uploads.items():
+                f = by_path.get(path)
+                if f is None:
+                    raise PublishError(
+                        f"Server requested upload for unknown file: {path}", file=path
+                    )
+                _check_presigned_url(url, path)
+                notify(f"Uploading {path} ({f.size} bytes)…")
+                put_resp = transport.put_bytes(
+                    url, f.source.read_bytes(), _content_type_for(path)
+                )
+                if put_resp.status not in (200, 201, 204):
+                    raise PublishError(
+                        f"Upload failed for {path}: HTTP {put_resp.status}", file=path
+                    )
+
+            notify("Committing…")
+            commit_resp = transport.post_json(
+                f"{base}/api/simulations/commit",
+                {"upload_id": upload_id},
+                resolved_token,
+            )
+            _raise_for_status(commit_resp, "commit")
+            commit = _parse_json(commit_resp, "commit")
+            sim_id = commit.get("id")
+            if not sim_id:
+                raise PublishError("commit response missing id.")
+
+            return PublishResult(
+                id=sim_id, sim_id=session.get("sim_id", sim_id), upload_id=upload_id
             )
     except DocumentError as exc:
         # Only `unpack_document` raises this; the upload itself speaks PublishError.
         raise PublishError(str(exc), file=Path(dist_dir).name) from exc
-
-
-def _publish_tree(
-    dist_dir: Path,
-    *,
-    title: str | None,
-    description: str | None,
-    tags: list[str] | None,
-    token: str | None,
-    base: str,
-    transport: HttpTransport,
-    notify: Callable[[str], None],
-) -> PublishResult:
-    plan = plan_publish(dist_dir)
-    resolved_token = resolve_token(token)
-
-    resolved_title = title or _default_title(plan.config)
-
-    body: dict = {
-        "title": resolved_title,
-        "manifest": plan.manifest(),
-        "config": plan.config,
-    }
-    if description is not None:
-        body["description"] = description
-    if tags:
-        body["tags"] = tags
-
-    notify(f"Requesting upload session for {len(plan.files)} file(s)…")
-    session_resp = transport.post_json(
-        f"{base}/api/simulations/upload-session", body, resolved_token
-    )
-    _raise_for_status(session_resp, "upload-session")
-    session = _parse_json(session_resp, "upload-session")
-
-    upload_id = session.get("upload_id")
-    if not upload_id:
-        raise PublishError("upload-session response missing upload_id.")
-    uploads = {u["path"]: u["url"] for u in session.get("uploads", [])}
-
-    by_path = {f.upload_path: f for f in plan.files}
-    for path, url in uploads.items():
-        f = by_path.get(path)
-        if f is None:
-            raise PublishError(
-                f"Server requested upload for unknown file: {path}", file=path
-            )
-        _check_presigned_url(url, path)
-        notify(f"Uploading {path} ({f.size} bytes)…")
-        put_resp = transport.put_bytes(
-            url, f.source.read_bytes(), _content_type_for(path)
-        )
-        if put_resp.status not in (200, 201, 204):
-            raise PublishError(
-                f"Upload failed for {path}: HTTP {put_resp.status}", file=path
-            )
-
-    notify("Committing…")
-    commit_resp = transport.post_json(
-        f"{base}/api/simulations/commit", {"upload_id": upload_id}, resolved_token
-    )
-    _raise_for_status(commit_resp, "commit")
-    commit = _parse_json(commit_resp, "commit")
-    sim_id = commit.get("id")
-    if not sim_id:
-        raise PublishError("commit response missing id.")
-
-    return PublishResult(
-        id=sim_id, sim_id=session.get("sim_id", sim_id), upload_id=upload_id
-    )
 
 
 def _check_presigned_url(url: str, path: str) -> None:

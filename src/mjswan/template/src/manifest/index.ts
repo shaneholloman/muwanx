@@ -6,8 +6,7 @@
  *
  * The manifest is the one descriptor of a document: every key `snake_case`, every path
  * under a scene entry relative to `<project-id>/<scene-id>/`, the top-level `plugins`
- * relative to the document root. A build may hold several projects; the one marked
- * `default` comes first, else the first in document order.
+ * relative to the document root.
  */
 import type { Bytes } from '../core/utils/bytes';
 import type { ViewerConfig } from '../core/engine/viewer_config';
@@ -110,8 +109,8 @@ export interface ManifestProject {
 export interface Manifest {
   /**
    * Document format (ADR 0006 §7): the structure of the build, bumped only for a break an
-   * older reader would misread. Distinct from `version`, which names the mjswan release
-   * that wrote the document and is never a gate here.
+   * older reader would misread. Distinct from `version`, the mjswan release, which is
+   * never a gate here.
    */
   format: number;
   version: string;
@@ -120,8 +119,6 @@ export interface Manifest {
   plugins?: string;
   projects: ManifestProject[];
 }
-/** @deprecated The pre-ADR-0006 name; the shape it named is no longer read. */
-export type AppConfig = Manifest;
 
 // ── catalog (what the app holds) ─────────────────────────────────────────────
 export interface PolicyEntry {
@@ -169,9 +166,9 @@ export interface Catalog {
 }
 
 /**
- * The id a name sanitizes to: Python's `name2id`, character for character. The pair is
- * pinned by `name2id_cases.json`, which both test suites read; a case they disagree on
- * is a link that opens the wrong scene (ADR 0006 §4).
+ * The id a name sanitizes to: Python's `name2id`, character for character, pinned by
+ * `name2id_cases.json`, which both test suites read. A case they disagree on is a link
+ * that opens the wrong scene (ADR 0006 §4).
  */
 export function sanitizeName(name: string): string {
   return name
@@ -184,9 +181,8 @@ export function sanitizeName(name: string): string {
 export const MAX_DOCUMENT_FORMAT = 1;
 
 /**
- * Refuse a document this reader cannot read: one without a `format` (the layout that
- * predates it) or one newer than it knows. The check reads `format` only; `version` is
- * provenance a host may pick an engine by, never something the engine errors on.
+ * Refuse a document this reader cannot read: one without a `format`, or one newer than it
+ * knows. `version` is provenance a host may pick an engine by, never a gate here.
  */
 function checkFormat(parsed: Manifest): void {
   const format = parsed.format;
@@ -205,11 +201,6 @@ function checkFormat(parsed: Manifest): void {
         `but this engine reads up to format ${MAX_DOCUMENT_FORMAT}. Update the engine.`,
     );
   }
-}
-
-/** `<project-id>/<scene-id>/`: the base every path under a scene entry resolves against. */
-function sceneDir(project: ManifestProject, scene: ManifestScene): string {
-  return `${project.id}/${scene.id}/`;
 }
 
 function inScene(dir: string, rel: string): string {
@@ -269,9 +260,9 @@ function buildSplat(dir: string, splat: ManifestSplat, source: ByteSource): Spla
 }
 
 /**
- * Byte sources for a config's traced term graphs, keyed by the path the config refers
- * to them by (ADR 0005 §4): scene-relative, which is what the runtime looks a session
- * up by, while the source is asked for the document-relative path.
+ * Byte sources for a config's traced term graphs, keyed scene-relative, which is how the
+ * runtime looks a session up (ADR 0005 §4). The source is asked for the document-relative
+ * path instead.
  */
 function graphBytes(refs: string[], dir: string, source: ByteSource): Record<string, Bytes> {
   const graphs: Record<string, Bytes> = {};
@@ -279,10 +270,7 @@ function graphBytes(refs: string[], dir: string, source: ByteSource): Record<str
   return graphs;
 }
 
-/**
- * The engine's policy config: the policy entry's own fields (the slot tables among
- * them) plus the five term sets of its MDP.
- */
+/** The engine's policy config: the policy entry's own fields plus its MDP's term sets. */
 function policyConfig(scene: ManifestScene, policy: ManifestPolicy): Record<string, unknown> {
   const mdp = scene.mdps.find((m) => m.id === policy.mdp);
   if (!mdp) {
@@ -320,7 +308,8 @@ function buildPolicy(
 }
 
 function toSceneEntry(project: ManifestProject, scene: ManifestScene, source: ByteSource): SceneEntry {
-  const dir = sceneDir(project, scene);
+  // `<project-id>/<scene-id>/`: the base every path under a scene entry resolves against.
+  const dir = `${project.id}/${scene.id}/`;
 
   const policies: PolicyEntry[] = scene.policies.map((p) => ({
     id: p.id,
@@ -353,8 +342,8 @@ function toSceneEntry(project: ManifestProject, scene: ManifestScene, source: By
           : scene.policies.find((p) => p.id === policyId);
       const splatId = opts?.splat;
       const splat = splatId == null ? undefined : scene.splats?.find((s) => s.id === splatId);
-      // Events travel with the policy, inside its MDP (ADR 0006 §3); the scene carries
-      // only what every MDP on it may draw from.
+      // Events travel with the policy, inside its MDP (ADR 0006 §3), so the scene carries
+      // only `terrainData`, which every MDP on it may draw from.
       return {
         model: source(inScene(dir, scene.scene)),
         policy: policy ? buildPolicy(dir, scene, policy, source) : null,

@@ -1,0 +1,4 @@
+{
+  "in_keys": ["actor"],
+  "out_keys": ["action"]
+}

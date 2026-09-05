@@ -1,14 +1,12 @@
 """The ``.swn`` simulation document: a build's data as one file (ADR 0006 §8).
 
-A build is authored as a directory, ``manifest.json`` over ``<project-id>/<scene-id>/``,
-and that directory is the document. Packaging it is reversible: a ZIP whose entries are
-the tree's paths, so every tool that understands the directory understands the file once
-it is unpacked, and nothing is described twice.
+A build is a directory, ``manifest.json`` over ``<project-id>/<scene-id>/``, and that
+directory is the document. Packaging it is a ZIP whose entries are the tree's paths, so
+unpacking one gives back exactly what a build wrote and nothing is described twice.
 
-What goes in is exactly what describes and runs the simulation: the manifest and every
-file under a project directory. The engine (``index.html``, ``assets/*.js``, WASM) and the
-author's custom-term module do not: an app is the engine plus the expanded tree, and
-mjswan Cloud supplies its own engine.
+In go the manifest and every file under a project directory. The engine
+(``index.html``, ``assets/*.js``, WASM) and the author's custom-term module do not: an
+app is the engine plus the expanded tree, and mjswan Cloud supplies its own engine.
 """
 
 from __future__ import annotations
@@ -25,9 +23,8 @@ MANIFEST_NAME = "manifest.json"
 
 #: The structure a build writes: what files exist, where they sit, and what the manifest
 #: says about them. Bumped by hand, only when an engine reading the old structure would
-#: misread the new one. Not the mjswan version, which is stamped separately as ``version``
-#: (ADR 0006 §7): a host picks an engine by ``version``, an engine protects itself by
-#: ``format``. Absent means the layout that predates ADR 0006.
+#: misread the new one. Distinct from ``version``, the mjswan release: a host picks an
+#: engine by ``version``, an engine protects itself by ``format`` (ADR 0006 §7).
 DOCUMENT_FORMAT = 1
 
 #: Already-compressed containers: deflating them again costs time for nothing.
@@ -52,8 +49,8 @@ def read_manifest(source: str | Path) -> dict:
     """The manifest of a built directory or a ``.swn`` document."""
     source = Path(source)
     if is_document(source):
-        # Same refusals as unpacking one: a caller that only wants the manifest still
-        # learns that the file is not a document, rather than a zipfile error.
+        # Same refusals as unpacking one, so a caller that wants only the manifest gets
+        # "not a document" rather than a zipfile error.
         try:
             with zipfile.ZipFile(source) as zf:
                 return json.loads(zf.read(MANIFEST_NAME))
@@ -67,17 +64,16 @@ def read_manifest(source: str | Path) -> dict:
 def document_files(dist_dir: str | Path) -> list[Path]:
     """The files a document consists of, relative to ``dist_dir``, manifest first.
 
-    Everything under a project directory belongs to the document; nothing else in the
-    build does. The project directories are read off the manifest rather than guessed
-    from what else is on disk, so the SPA's own ``assets/`` can never be mistaken for one.
+    Everything under a project directory belongs to the document, nothing else does. The
+    project directories come from the manifest rather than from what is on disk, so the
+    SPA's own ``assets/`` can never be mistaken for one.
     """
     dist_dir = Path(dist_dir)
-    manifest_path = dist_dir / MANIFEST_NAME
-    if not manifest_path.is_file():
+    if not (dist_dir / MANIFEST_NAME).is_file():
         raise FileNotFoundError(
             f"No {MANIFEST_NAME} in {dist_dir}; pass the directory builder.build() wrote."
         )
-    manifest = json.loads(manifest_path.read_text())
+    manifest = read_manifest(dist_dir)
     files = [Path(MANIFEST_NAME)]
     for project in manifest.get("projects", []):
         project_dir = dist_dir / project["id"]
@@ -96,7 +92,7 @@ def write_document(dist_dir: str | Path, target: str | Path | None = None) -> Pa
 
     ``target`` defaults to the directory's own name with the ``.swn`` suffix, beside it.
     The manifest is the first entry, so a reader that stops after one file has the one
-    that describes the rest; the others follow in sorted order for a reproducible archive.
+    that describes the rest; the others are sorted, for a reproducible archive.
     """
     dist_dir = Path(dist_dir)
     if target is None:
@@ -125,7 +121,6 @@ def unpack_document(document: str | Path, target_dir: str | Path) -> Path:
     document = Path(document)
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    root = target_dir.resolve()
     try:
         zf = zipfile.ZipFile(document)
     except zipfile.BadZipFile as exc:
@@ -134,21 +129,17 @@ def unpack_document(document: str | Path, target_dir: str | Path) -> Path:
         names = zf.namelist()
         if MANIFEST_NAME not in names:
             raise _not_a_document(document, f"no {MANIFEST_NAME}")
-        for info in zf.infolist():
-            rel = PurePosixPath(info.filename)
-            # Resolved against the target, an absolute or `..`-bearing entry lands
-            # outside it, so the one containment check covers both.
-            dest = (root / Path(*rel.parts)).resolve()
-            if rel.is_absolute() or (root != dest and root not in dest.parents):
+        # `extractall` confines entries itself, by dropping the parts that would escape.
+        # Checked first anyway: an entry that needs dropping means a tampered document,
+        # better refused than unpacked as a silently mangled tree.
+        for name in names:
+            rel = PurePosixPath(name)
+            if rel.is_absolute() or ".." in rel.parts:
                 raise DocumentError(
-                    f"{document} names {info.filename!r}, which would land outside the "
+                    f"{document} names {name!r}, which would land outside the "
                     "directory it is unpacked into."
                 )
-            if info.is_dir():
-                dest.mkdir(parents=True, exist_ok=True)
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(zf.read(info))
+        zf.extractall(target_dir)
     return target_dir
 
 
@@ -156,9 +147,8 @@ def unpack_document(document: str | Path, target_dir: str | Path) -> Path:
 def as_directory(source: str | Path) -> Iterator[Path]:
     """``source`` itself when it is a built directory; a ``.swn`` unpacked to a temp dir.
 
-    Lets a consumer that walks the tree (``publish``, ``mjswan info``) take either
-    form with one code path: the archive is a packaging of the tree, not a second
-    representation. The temporary directory is removed on exit.
+    Lets a consumer that walks the tree (``publish``, ``mjswan info``) take either form
+    with one code path. The temporary directory is removed on exit.
     """
     source = Path(source)
     if is_document(source):
