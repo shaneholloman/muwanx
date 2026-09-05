@@ -30,6 +30,7 @@ from mjswan.envs.mdp.actions import JointEffortActionCfg, JointPositionActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjswan.managers.termination_manager import TerminationTermCfg
 from mjswan.utils import name2id
+from mjswan.viewer import ViewerConfig
 
 
 def _entry(
@@ -175,6 +176,34 @@ class TestSceneAndPolicyIds:
 # ===========================================================================
 # L1 — GTM ID handling
 # ===========================================================================
+class TestSceneCamera:
+    """Every scene carries a resolved `camera`, so the browser never invents a view."""
+
+    def test_a_scene_with_no_viewer_still_gets_the_defaults(
+        self, tmp_path, minimal_model, build_manifest
+    ):
+        project = Builder().add_project(name="P")
+        project.add_scene(name="S", model=minimal_model)
+        manifest = build_manifest(project._builder, tmp_path / "out")
+
+        camera = manifest["projects"][0]["scenes"][0]["camera"]
+        assert camera == ViewerConfig().to_dict()
+        # `fovy=None` means 45 to Python; the document has to say so itself.
+        assert camera["fovy"] == 45.0
+        # AUTO is what makes the view follow the robot rather than watch it leave.
+        assert camera["origin_type"] == "AUTO"
+
+    def test_an_explicit_viewer_wins(self, tmp_path, minimal_model, build_manifest):
+        project = Builder().add_project(name="P")
+        project.add_scene(name="S", model=minimal_model).set_viewer(
+            ViewerConfig(distance=9.0, fovy=60.0)
+        )
+        manifest = build_manifest(project._builder, tmp_path / "out")
+
+        camera = manifest["projects"][0]["scenes"][0]["camera"]
+        assert (camera["distance"], camera["fovy"]) == (9.0, 60.0)
+
+
 class TestBuilderGtmId:
     def test_defaults_to_none(self):
         assert Builder()._gtm_id is None
@@ -184,26 +213,8 @@ class TestBuilderGtmId:
 
 
 class TestClientBuilderCustomTerms:
-    """Custom terms are runtime plugins now (ADR 0004 §10): the engine gets empty
-    Custom* stubs, and author TS is collected for esbuild into a standalone ESM."""
-
-    def test_generate_empty_custom_stubs_writes_empty_registries(self, tmp_path):
-        project_dir = tmp_path / "template"
-        for sub in ("observation", "command", "termination", "event"):
-            (project_dir / "src" / "core" / sub).mkdir(parents=True)
-
-        ClientBuilder(project_dir).generate_empty_custom_stubs()
-
-        core = project_dir / "src" / "core"
-        obs = (core / "observation" / "custom_observations.ts").read_text()
-        evt = (core / "event" / "custom_events.ts").read_text()
-        assert "CustomObservations" in obs and "= {};" in obs
-        assert "CustomCommands" in (core / "command" / "custom_commands.ts").read_text()
-        assert (
-            "CustomTerminations"
-            in (core / "termination" / "custom_terminations.ts").read_text()
-        )
-        assert "CustomEvents" in evt and "= {};" in evt
+    """Custom terms are runtime plugins (ADR 0004 §10): author TS is collected for
+    esbuild into a standalone ESM the engine loads at runtime."""
 
     def test_collect_custom_terms_gathers_ts_src_by_kind(self, tmp_path, monkeypatch):
         src = tmp_path / "FooTerm.ts"

@@ -38,6 +38,7 @@ from .project import ProjectConfig, ProjectHandle
 from .scene import SceneConfig
 from .splat import SplatConfig
 from .utils import assign_id, collect_spec_assets, name2id, to_zip_deflated, unique_id
+from .viewer import ViewerConfig
 
 
 def _build_uses_custom_js() -> bool:
@@ -695,11 +696,7 @@ class Builder:
             "name": scene.name,
             "scene": scene.scene_filename,
             **({"control_dt": _require_control_dt(scene)} if scene.policies else {}),
-            **(
-                {"camera": scene.viewer.to_dict()}
-                if scene.viewer and scene.viewer.to_dict()
-                else {}
-            ),
+            "camera": (scene.viewer or ViewerConfig()).to_dict(),
             **({"terrain_data": scene.terrain_data} if scene.terrain_data else {}),
             **(
                 {"splat_section": True}

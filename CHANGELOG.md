@@ -140,6 +140,15 @@ velocity-command shortcuts were removed outright, see Removed.
 
 ### Changed
 
+- **Every scene carries a `camera`, and the view follows the robot by default.** The
+  build used to omit the block for a scene that never called `set_viewer`, and the
+  browser filled the gap from defaults generated out of the Python dataclass. The two
+  did not agree: a missing block left tracking off, so the camera watched the robot walk
+  out of frame, while an explicit `ViewerConfig()` with the same values tracked it. The
+  build now resolves the whole block for every scene, `fovy` included, and the browser
+  reads what the document says. A scene that set no viewer therefore tracks the first
+  non-world body, as one that set the defaults by hand always did.
+
 - **The default observation slot is `actor`** (was `policy`), mjlab's own name for the
   group its actor network reads, in Python (`DEFAULT_OBS_GROUP_KEY`) and the engine
   together. A lone observation group lands there and needs no `in_keys`; the common fused
@@ -226,6 +235,18 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   env and let the build trace it. `scripts/verify_dsl_migration.py` goes with it.
 - `PolicyHandle.add_velocity_command` / `add_command_velocity`, both with no alias. Pass
   `commands={"velocity": mjswan.velocity_command(...)}` to `add_policy()` instead.
+- **`viewer_config_defaults.ts` and its generator.** The defaults were code-generated
+  from Python's `ViewerConfig` on every build to keep the two in step. The document now
+  carries the resolved values instead, so the browser has nothing to keep in step: the
+  small view it falls back on is ordinary source, reached only by a manifest mjswan did
+  not write, which also logs a warning. Nothing is generated into the template any more,
+  so a fresh checkout builds and tests with no Python step in front of it.
+- **The generated `custom_*.ts` registries**, and the `Observations` / `Terminations` /
+  `Events` modules that held nothing else. A `ts_src` term is collected into the standalone
+  `plugins.js` and reaches the engine as `EnginePlugins` (ADR 0004 §10), so nothing had
+  written those files since; the build stamped four empty registries out and the runtime
+  spread four empty objects into the maps the plugins already filled. The comments claiming
+  the registries held `ts_src` terms described the design they replaced.
 
 ### Fixed
 
@@ -374,3 +395,14 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   state field written without being read has no `prev_<field>`; ORT rejects either, taking
   the whole scene down with `invalid input '...'`. Feeds are now filtered to the session's
   own input names.
+- **Switching project pins the project it switched to.** The URL was written at each
+  call site from React state. The write that followed a project change is the one for the
+  scene that change loads, and it still held the *previous* project in its closure, so it
+  put the old one back. `?project=old&scene=new_projects_scene` is a view that cannot be
+  reopened: the reload resolves the old project, fails to find that scene in it, and lands
+  on the default. The address bar is now a projection of the live selection, written in
+  one place from all of it, so a selection that moves two things at once records both.
+  Clearing a policy clears `?policy` for the same reason, where the merge used to read
+  the cleared `null` as "unchanged" and leave the old name behind, and the parameters
+  are normalized on load rather than at the first interaction, so the address bar is
+  copyable as soon as the scene is up.

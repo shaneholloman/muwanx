@@ -8,11 +8,10 @@ import { signalReady, signalError } from './core/utils/readySignal';
 import { createEngine } from './engine';
 import type { EnginePlugins, MjswanEngine, MjswanEngineState, SceneInput } from './engine';
 import { parseManifest, sanitizeName, type Catalog, type ProjectCatalog, type ByteSource } from './manifest';
+import { applyUrlState, PANEL_PARAM, POLICY_PARAM, PROJECT_PARAM, REF_PARAM, SCENE_PARAM } from './urlState';
 import './App.css';
 
-const PANEL_QUERY_PARAM = 'panel';
-const REF_QUERY_PARAM = 'ref';
-const HANDS_QUERY_PARAM = 'hands';
+const HANDS_PARAM = 'hands';
 
 function paramFlag(param: string): boolean {
   return new URLSearchParams(window.location.search).get(param) !== '0';
@@ -71,8 +70,8 @@ function AppContent() {
   const [policyName, setPolicyName] = useState<string | null>(null);
   const [motionName, setMotionName] = useState<string | null>(null);
   const [splatName, setSplatName] = useState<string | null>(null);
-  const [showReference, setShowReference] = useState(() => paramFlag(REF_QUERY_PARAM));
-  const [panelVisible, setPanelVisible] = useState(() => paramFlag(PANEL_QUERY_PARAM));
+  const [showReference, setShowReference] = useState(() => paramFlag(REF_PARAM));
+  const [panelVisible, setPanelVisible] = useState(() => paramFlag(PANEL_PARAM));
   const [engineState, setEngineState] = useState<MjswanEngineState | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -104,10 +103,10 @@ function AppContent() {
           pluginsRef.current = (await import(/* @vite-ignore */ url)) as EnginePlugins;
         }
         const params = new URLSearchParams(window.location.search);
-        const project = pickById(cat.projects, params.get('project'), cat.projects[0]);
-        const scene = pickById(project?.scenes ?? [], params.get('scene'), project?.scenes[0]);
+        const project = pickById(cat.projects, params.get(PROJECT_PARAM), cat.projects[0]);
+        const scene = pickById(project?.scenes ?? [], params.get(SCENE_PARAM), project?.scenes[0]);
         const policy = scene
-          ? pickById(scene.policies, params.get('policy'), scene.policies.find((p) => p.default) ?? scene.policies[0])
+          ? pickById(scene.policies, params.get(POLICY_PARAM), scene.policies.find((p) => p.default) ?? scene.policies[0])
           : undefined;
         const motion = policy?.motions.find((m) => m.default) ?? policy?.motions[0];
         setCatalog(cat);
@@ -145,7 +144,7 @@ function AppContent() {
       showLoading('Loading MuJoCo…');
       const engine = await createEngine(container, {
         multithreaded: __MUJOCO_MT__,
-        handTracking: paramEnabled(HANDS_QUERY_PARAM),
+        handTracking: paramEnabled(HANDS_PARAM),
       });
       if (disposed) {
         engine.dispose();
@@ -193,31 +192,24 @@ function AppContent() {
     }
   }, [engineState, showLoading, hideLoading]);
 
-  const syncUrl = useCallback(
-    (next: { project?: string | null; scene?: string | null; policy?: string | null; panel?: boolean; ref?: boolean }) => {
-      const params = new URLSearchParams(window.location.search);
-      // URL values are ids, but the UI state holds display names, so look each id up.
-      const idOf = <T extends { id: string; name: string }>(items: T[] | undefined, name: string | null | undefined) =>
-        items?.find((i) => i.name === name)?.id ?? null;
-      const setOrDelete = (key: string, value: string | null | undefined, keep: boolean) =>
-        value != null && keep ? params.set(key, value) : params.delete(key);
-      // Only pin ?project once more than one exists (single-project builds stay clean).
-      const projName = next.project ?? projectName;
-      const proj = catalog?.projects.find((p) => p.name === projName);
-      setOrDelete('project', proj?.id ?? null, (catalog?.projects.length ?? 0) > 1);
-      const sceneId = idOf(proj?.scenes, next.scene ?? sceneName);
-      setOrDelete('scene', sceneId, true);
-      const sceneOfPolicy = proj?.scenes.find((s) => s.id === sceneId);
-      setOrDelete('policy', idOf(sceneOfPolicy?.policies, next.policy ?? policyName), true);
-      params.delete(PANEL_QUERY_PARAM);
-      if (!(next.panel ?? panelVisible)) params.set(PANEL_QUERY_PARAM, '0');
-      params.delete(REF_QUERY_PARAM);
-      if (!(next.ref ?? showReference)) params.set(REF_QUERY_PARAM, '0');
-      const search = params.toString();
-      window.history.replaceState({}, '', `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`);
-    },
-    [projectName, sceneName, policyName, panelVisible, showReference, catalog],
-  );
+  // ── mirror the live selection into the address bar ────────────────────────
+  // Not a write per call site: each one pins whatever its own closure still holds.
+  useEffect(() => {
+    if (!catalog) return;
+    // URL values are ids, but the UI state holds display names, so look each one up.
+    const proj = catalog.projects.find((p) => p.name === projectName);
+    const scene = proj?.scenes.find((s) => s.name === sceneName);
+    const search = applyUrlState(window.location.search, {
+      // Pin ?project only once more than one exists (single-project builds stay clean).
+      project: catalog.projects.length > 1 ? (proj?.id ?? null) : null,
+      scene: scene?.id ?? null,
+      policy: scene?.policies.find((p) => p.name === policyName)?.id ?? null,
+      panel: panelVisible,
+      ref: showReference,
+    });
+    const url = `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`;
+    window.history.replaceState({}, '', url);
+  }, [catalog, projectName, sceneName, policyName, panelVisible, showReference]);
 
   const loadScene = useCallback(async (scene: ProjectCatalog['scenes'][number]) => {
     const engine = engineRef.current;
@@ -229,7 +221,6 @@ function AppContent() {
     setPolicyName(policy?.name ?? null);
     setMotionName(motion?.name ?? null);
     setSplatName(splat?.name ?? null);
-    syncUrl({ scene: scene.name, policy: policy?.name ?? null });
     showLoading(`Loading scene "${scene.name}"…`);
     try {
       await engine.loadScene(
@@ -242,7 +233,7 @@ function AppContent() {
     } finally {
       hideLoading();
     }
-  }, [showReference, syncUrl, showLoading, hideLoading, withPlugins]);
+  }, [showReference, showLoading, hideLoading, withPlugins]);
 
   const handleSceneChange = useCallback(async (value: string | null) => {
     const scene = project?.scenes.find((s) => s.name === value);
@@ -253,9 +244,8 @@ function AppContent() {
     const next = catalog?.projects.find((p) => p.name === value);
     if (!next) return;
     setProjectName(next.name);
-    syncUrl({ project: next.name });
     if (next.scenes[0]) await loadScene(next.scenes[0]);
-  }, [catalog, syncUrl, loadScene]);
+  }, [catalog, loadScene]);
 
   const handlePolicyChange = useCallback(async (value: string | null) => {
     const engine = engineRef.current;
@@ -263,7 +253,6 @@ function AppContent() {
     setPolicyName(value);
     const motion = policy?.motions.find((m) => m.default) ?? policy?.motions[0];
     setMotionName(motion?.name ?? null);
-    syncUrl({ policy: value });
     if (!engine) return;
     showLoading(value ? `Loading policy "${value}"…` : 'Clearing policy…');
     try {
@@ -277,7 +266,7 @@ function AppContent() {
     } finally {
       hideLoading();
     }
-  }, [sceneEntry, showReference, syncUrl, showLoading, hideLoading]);
+  }, [sceneEntry, showReference, showLoading, hideLoading]);
 
   const handleMotionChange = useCallback(async (value: string | null) => {
     const engine = engineRef.current;
@@ -313,13 +302,11 @@ function AppContent() {
   const handleShowReferenceChange = useCallback((value: boolean) => {
     setShowReference(value);
     engineRef.current?.setReferenceVisible(value);
-    syncUrl({ ref: value });
-  }, [syncUrl]);
+  }, []);
 
   const handlePanelVisibleChange = useCallback((visible: boolean) => {
     setPanelVisible(visible);
-    syncUrl({ panel: visible });
-  }, [syncUrl]);
+  }, []);
 
   const options = useCallback(
     <T extends { name: string }>(items: T[]) => items.map((i) => ({ value: i.name, label: i.name })),

@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { MjData, MjModel } from 'mujoco';
 import { mjcToThreeCoordinate } from '../scene/coordinate';
-import { VIEWER_CONFIG_DEFAULTS } from './viewer_config_defaults';
 
 export type ViewerConfig = {
   /** Look-at point in MuJoCo coordinates [x forward, y left, z up]. */
@@ -30,6 +29,19 @@ export type ViewerConfig = {
   /** Viewer canvas width in pixels. */
   width?: number;
 };
+
+/**
+ * Fallback view for a document that carries no `camera`. The build writes a complete
+ * one for every scene, so nothing mjswan produces lands here; a hand-written or
+ * third-party manifest can, and gets a usable view rather than a black screen.
+ */
+const FALLBACK_VIEW = {
+  lookat: [0, 0, 0] as [number, number, number],
+  distance: 4.0,
+  elevation: -30.0,
+  azimuth: 45.0,
+  fovy: 45,
+} as const;
 
 export type ViewerState = {
   /** Body index to track each frame, or null. */
@@ -81,12 +93,19 @@ export function applyViewerConfig(
   const state: ViewerState = { trackBodyId: null, prevBodyPos: null };
   controls.enabled = true;
 
-  const lookat = config?.lookat ?? VIEWER_CONFIG_DEFAULTS.lookat;
-  const distance = config?.distance ?? VIEWER_CONFIG_DEFAULTS.distance;
-  const elevation = config?.elevation ?? VIEWER_CONFIG_DEFAULTS.elevation;
-  const azimuth = config?.azimuth ?? VIEWER_CONFIG_DEFAULTS.azimuth;
+  if (!config) {
+    console.warn(
+      '[Camera] this scene carries no `camera`; falling back to the built-in view. ' +
+        'A manifest written by mjswan always carries one.'
+    );
+  }
 
-  camera.fov = config?.fovy ?? VIEWER_CONFIG_DEFAULTS.fovy;
+  const lookat = config?.lookat ?? FALLBACK_VIEW.lookat;
+  const distance = config?.distance ?? FALLBACK_VIEW.distance;
+  const elevation = config?.elevation ?? FALLBACK_VIEW.elevation;
+  const azimuth = config?.azimuth ?? FALLBACK_VIEW.azimuth;
+
+  camera.fov = config?.fovy ?? FALLBACK_VIEW.fovy;
   camera.updateProjectionMatrix();
   camera.position.copy(computeCameraPosition(lookat, distance, elevation, azimuth));
   controls.target.copy(mjcToThreeCoordinate(lookat));

@@ -1,4 +1,3 @@
-import { CustomCommands } from './custom_commands';
 import { TrackingCommand } from './TrackingCommand';
 import { OnnxCommand, type OnnxCommandConfig } from './OnnxCommand';
 import {
@@ -131,7 +130,6 @@ export class CommandManager {
     this.context = context;
     const registry: Record<string, CommandTermConstructor> = {
       ...BuiltinCommandTerms,
-      ...CustomCommands,
       ...pluginCommands,
     };
 
