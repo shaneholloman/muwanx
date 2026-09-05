@@ -29,9 +29,7 @@ jobs:
       # The engine imports five stubs that only the Python build writes, so a
       # fresh checkout cannot compile the template without generating them.
       - name: Generate the build-time stubs
-        run: |
-          uv pip install --system -e .
-          python -c "from pathlib import Path; from mjswan._build_client import ClientBuilder; b = ClientBuilder(Path('src/mjswan/template')); b.generate_empty_custom_stubs(); b.generate_viewer_config_defaults()"
+        run: uv run --python 3.12 python -c "from pathlib import Path; from mjswan._build_client import ClientBuilder; b = ClientBuilder(Path('src/mjswan/template')); b.generate_empty_custom_stubs(); b.generate_viewer_config_defaults()"
 
       - name: Run eslint
         run: |
