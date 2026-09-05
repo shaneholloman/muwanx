@@ -1,7 +1,4 @@
-/**
- * Query-parameter view state — the address bar mirrors the live selection, so a
- * copied link reopens the same view (docs: guides/embedding.md).
- */
+/** Query-parameter view state, so a copied link reopens the same view (guides/embedding.md). */
 
 export const PROJECT_PARAM = 'project';
 export const SCENE_PARAM = 'scene';
@@ -10,7 +7,7 @@ export const PANEL_PARAM = 'panel';
 export const REF_PARAM = 'ref';
 
 export interface UrlState {
-  /** Display name of the active entry, or null to leave the parameter off. */
+  /** Id of the active entry, or null to leave the parameter off. */
   project: string | null;
   scene: string | null;
   policy: string | null;

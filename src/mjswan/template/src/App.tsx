@@ -193,8 +193,7 @@ function AppContent() {
   }, [engineState, showLoading, hideLoading]);
 
   // ── mirror the live selection into the address bar ────────────────────────
-  // Derived from state, not written per call site: switching project moves project
-  // and scene at once, and a per-site write pins whichever its closure still holds.
+  // Not a write per call site: each one pins whatever its own closure still holds.
   useEffect(() => {
     if (!catalog) return;
     // URL values are ids, but the UI state holds display names, so look each one up.

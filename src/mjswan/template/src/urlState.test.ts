@@ -16,8 +16,7 @@ describe('applyUrlState', () => {
   });
 
   it('replaces a stale selection wholesale', () => {
-    // Switching project moves project, scene and policy at once; none of the
-    // previous project's values may survive into the new URL.
+    // The bug: a project switch left the previous project pinned.
     const search = '?project=demo_one&scene=cartpole&policy=balance';
     expect(applyUrlState(search, SELECTED)).toBe('project=demo_two&scene=humanoid&policy=walk');
   });
