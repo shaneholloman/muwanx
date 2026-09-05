@@ -87,12 +87,12 @@ and chrome you mean rather than the first thing in the build:
 
 | Parameter | Effect |
 |---|---|
-| `project` | Select a project by display name or slug. |
-| `scene` | Select a scene by display name or slug. |
-| `policy` | Select a policy by display name or slug. Defaults to the one marked `default=True`. |
+| `project` | Select a project by id — its sanitized name, `newton_s_cradle` for `"Newton's Cradle"`. The display name works too; it is sanitized the same way. Defaults to the project marked `default=True`. |
+| `scene` | Select a scene by id. |
+| `policy` | Select a policy by id. Defaults to the one marked `default=True`. |
 | `panel` | `panel=0` starts with the control panel hidden. Useful in a small iframe. |
 | `ref` | `ref=0` starts with the motion-tracking reference ghost hidden. |
-| `config` | Load a `config.json` from another URL entirely, relative to the page. |
+| `manifest` | Load a `manifest.json` from another URL entirely, relative to the page. |
 | `hands` | `hands=1` puts WebXR-tracked hands in the simulation, see below. |
 
 `panel` and `ref` are booleans read as "off only when exactly `0`", and the app writes the
@@ -124,16 +124,16 @@ keeps you on top of a slope instead of inside it.
 
 `hands=1`, or `createEngine(element, { handTracking: true })` when you drive the engine
 yourself, makes a headset's tracked hands part of the physics rather than a pair of
-floating models. On **Enter VR**, six spheres per hand (the wrist and the five fingertips)
-follow the WebXR joint poses inside the simulation, so a Quest 3 can bat a scene's objects
-around, and pinch and lift them. Each sphere is a mocap body welded to a dynamic twin,
-and that weld is what makes grasping work rather than only batting.
+floating models. On **Enter VR**, a Quest 3 can bat a scene's objects around, rest one on
+an open palm, and pick one up: pinch to grab, release to drop. What you see is three.js's
+own hand model, and the physics under it is sized to the wearer's hand rather than to a
+nominal adult one.
 
 It is opt-in because both halves cost something: every scene the build loads gains the
-hand bodies, which is roughly a third more work per physics step, and the headset must
-grant the `hand-tracking` feature — **Meta Quest** is the recommended one, since its
-browser ships WebXR hand tracking with nothing to install. Ordinary desktop and mobile
-viewing is unaffected: untracked hands sit parked far below the scene.
+hand bodies, roughly 1.6x the physics cost, and the headset must grant the
+`hand-tracking` feature — **Meta Quest** is the recommended one, since its browser ships
+WebXR hand tracking with nothing to install. Ordinary desktop and mobile viewing is
+unaffected: untracked hands sit parked far above the scene.
 
 ### Passthrough AR
 
@@ -219,7 +219,7 @@ const bytes = (path: string) => async () =>
 
 const engine = await createEngine(document.getElementById('viewer')!);
 const catalog = parseManifest(
-  await (await fetch(new URL('assets/config.json', base))).text(),
+  await (await fetch(new URL('manifest.json', base))).text(),
   bytes,
 );
 

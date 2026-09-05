@@ -13,11 +13,11 @@ mjswan --help
 | Subcommand | Purpose |
 |---|---|
 | [`mjswan view`](#mjswan-view) | Build and launch a viewer for a MuJoCo XML / MJCF file |
-| [`mjswan serve`](#mjswan-serve) | Serve a pre-built `dist/` directory |
+| [`mjswan serve`](#mjswan-serve) | Serve a pre-built `dist/` directory, or a `.swn` document |
 | [`mjswan new`](#mjswan-new) | Scaffold a new project from a template |
 | [`mjswan demo`](#mjswan-demo) | Run a built-in demo |
-| [`mjswan info`](#mjswan-info) | Show a tree of projects / scenes / policies and asset sizes |
-| [`mjswan publish`](#mjswan-publish) | Upload a built `dist/` to mjswan Cloud |
+| [`mjswan info`](#mjswan-info) | Show a tree of projects / scenes / MDPs / policies and asset sizes, for a `dist/` or a `.swn` |
+| [`mjswan publish`](#mjswan-publish) | Upload a built `dist/` or a `.swn` to mjswan Cloud |
 | [`mjswan login`](#mjswan-login-whoami-logout) | Sign in to mjswan Cloud via GitHub |
 | [`mjswan whoami`](#mjswan-login-whoami-logout) | Show the signed-in account |
 | [`mjswan logout`](#mjswan-login-whoami-logout) | Remove the stored session |
@@ -45,14 +45,19 @@ The build is written to a temporary directory and discarded when the server exit
 ## `mjswan serve`
 
 ```bash
-mjswan serve <dist-dir> [--port 8080] [--host localhost] [--no-open] [--height 600]
+mjswan serve <dist-dir | document.swn> [--port 8080] [--host localhost] [--no-open] [--height 600]
 ```
 
 Serve a pre-built `dist/` directory with the COOP/COEP headers set. Use this to re-launch an app you previously built with `builder.build()`.
 
+A `.swn` works too. A document holds the simulation but no engine, so mjswan expands it into a
+temporary directory, lays the packaged engine over it and serves that; the directory goes away when
+the command exits. A document built with custom-JS MDP terms is refused, since their runtime module
+ships with the engine rather than in the document — serve its built directory instead.
+
 | Option | Default | Description |
 |---|---|---|
-| `<dist-dir>` | — | Path to a built mjswan `dist/` directory. |
+| `<dist-dir \| document.swn>` | — | A built mjswan `dist/` directory, or a `.swn` document. |
 | `--port` | `8080` | HTTP server port. |
 | `--host` | `localhost` | HTTP bind address. |
 | `--no-open` | `false` | Do not open the browser automatically. |
@@ -98,36 +103,41 @@ Use `mjswan demo --list` to enumerate them.
 ## `mjswan info`
 
 ```bash
-mjswan info <dist-dir>
+mjswan info <dist-dir | document.swn>
 ```
 
-Print a tree summary of a built `dist/` directory: projects, scenes (with `.mjz`/`.mjb` size), and policies (with `.onnx` size). Useful for spotting which assets are pushing your build toward the GitHub Pages 1 GB limit.
+Print a tree summary of a built `dist/` directory or a `.swn` document: projects, scenes
+(with `.mjz`/`.mjb` size), each scene's MDPs (with their traced graph count) and policies
+(with `.onnx` size). Useful for spotting which assets are pushing your build toward the
+GitHub Pages 1 GB limit.
 
 Example output:
 
 ```
-mjswan app — dist  v0.8.2
-└── My Robots  [main]
-    └── G1  scene.mjz  (3.2 MB)
-        └── Policy: Locomotion  (1.1 MB)
+mjswan app — dist  v0.9.3, format 1
+└── My Robots  [my_robots]
+    └── G1  g1/scene.mjz  (3.2 MB)
+        ├── MDP: mdp_0  3 graph(s)
+        └── Policy: Locomotion  mdp=mdp_0  (1.1 MB)
 Total scene+policy assets: 4.3 MB
 ```
 
 ## `mjswan publish`
 
 ```bash
-mjswan publish <dist-dir> [--title TITLE] [--description TEXT] [--tag TAG]... \
-                          [--token TOKEN] [--api-base URL]
+mjswan publish <dist-dir | document.swn> [--title TITLE] [--description TEXT] [--tag TAG]... \
+                                         [--token TOKEN] [--api-base URL]
 ```
 
-Upload a built `dist/` directory's data files to [mjswan Cloud](../guides/publishing.md)
-and print the resulting simulation URL. Only data files travel — `config.json`, the
-scene/policy/motion/splat assets and traced graphs — never the compiled JavaScript, since
-Cloud renders them with its own copy of the engine.
+Upload a built `dist/` directory's data files, or a `.swn` document, to
+[mjswan Cloud](../guides/publishing.md) and print the resulting simulation URL. Only the
+simulation document travels — `manifest.json`, the scene/policy/motion/splat assets and
+traced graphs — never the compiled JavaScript, since Cloud renders them with its own copy
+of the engine. A `.swn` uploads exactly the file set its directory would.
 
 | Option | Default | Description |
 |---|---|---|
-| `<dist-dir>` | — | Path to a built mjswan `dist/` directory. |
+| `<dist-dir>` | — | A built mjswan `dist/` directory, or a `.swn` written by `app.save_document()`. |
 | `--title` | first project's name | Simulation title. |
 | `--description` | — | Optional description. |
 | `--tag` | — | Tag to attach. Repeatable. |

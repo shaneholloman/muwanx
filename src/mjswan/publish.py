@@ -1,24 +1,24 @@
 """Publish a built mjswan ``dist/`` to mjswan Cloud (v2).
 
-This module extracts the **data files** from a local build (config.json plus
-scene/policy/motion/splat assets — never HTML/JS/WASM) and uploads them to
-mjswan Cloud using the three-step presigned-upload protocol described in
+This module extracts the **data files** from a local build (manifest.json plus
+scene/policy/motion/splat assets and traced MDP graphs; never HTML/JS/WASM) and uploads
+them to mjswan Cloud using the three-step presigned-upload protocol described in
 mjswan-cloud ADR 0001 §6:
 
 1. ``POST {base}/api/simulations/upload-session`` with a file manifest and the
-   parsed ``config.json`` → presigned ``PUT`` URLs.
+   parsed ``manifest.json`` → presigned ``PUT`` URLs.
 2. ``PUT`` each file's bytes to its presigned URL.
 3. ``POST {base}/api/simulations/commit`` with the ``upload_id`` → the sim id.
 
 The platform renders only **declarative** builds (no author-supplied code), so
-``publish`` refuses any build whose ``config.json`` reports
+``publish`` refuses any build whose ``manifest.json`` reports
 ``uses_custom_js: true`` — a fast, local UX gate that prevents a guaranteed
 server-side rejection and the broken render it would otherwise produce. See
 mjswan ADR 0003 for the declarative/custom-JS split and the ``uses_custom_js``
 marker.
 
 The upload root layout mirrors the build's ``dist/`` tree minus everything but
-data files, with the manifest ``config.json`` hoisted to the upload root so the
+data files, with ``manifest.json`` at the upload root, where the
 engine's ``mount(element, configUrl)`` can resolve every other asset relative to
 ``configUrl``'s directory.
 """
@@ -217,19 +217,14 @@ class PublishPlan:
 
 
 def _find_config(dist_dir: Path) -> Path:
-    """Locate the build's manifest ``config.json``.
-
-    The builder writes it to ``<dist>/assets/config.json``; fall back to a
-    top-level ``config.json`` so a flattened upload tree also works.
-    """
-    candidates = [dist_dir / "assets" / "config.json", dist_dir / "config.json"]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
+    """Locate the build's ``manifest.json``, the one descriptor at the document root."""
+    candidate = dist_dir / "manifest.json"
+    if candidate.is_file():
+        return candidate
     raise PublishError(
-        f"No config.json found in {dist_dir} "
-        "(looked in assets/config.json and config.json). "
-        "Pass the directory produced by builder.build()."
+        f"No manifest.json found in {dist_dir}. Pass the directory produced by "
+        "builder.build(). A build with assets/config.json predates document format 1; "
+        "rebuild it with this mjswan."
     )
 
 
@@ -248,7 +243,7 @@ def plan_publish(dist_dir: Path) -> PublishPlan:
     try:
         config = json.loads(config_path.read_text())
     except json.JSONDecodeError as exc:
-        raise PublishError(f"Invalid config.json: {exc}")
+        raise PublishError(f"Invalid manifest.json: {exc}")
 
     if config.get("uses_custom_js") is True:
         raise PublishError(
@@ -256,29 +251,20 @@ def plan_publish(dist_dir: Path) -> PublishPlan:
             "cannot be published to mjswan Cloud, which renders only declarative "
             "builds. Re-author the custom terms declaratively, or request the "
             "missing capability as an engine built-in. See mjswan ADR 0003.",
-            file="config.json",
+            file="manifest.json",
         )
 
     plan = PublishPlan(dist_dir=dist_dir, config=config)
 
-    # The manifest config.json is hoisted to the upload root as "config.json"
-    # so mount(configUrl) resolves every other asset relative to configUrl's
-    # directory.
-    plan.files.append(
-        _DistFile(
-            upload_path="config.json",
-            source=config_path,
-            size=config_path.stat().st_size,
-        )
-    )
-
+    # `manifest.json` already sits at the root, where every path under a scene entry
+    # resolves against `<project-id>/<scene-id>/`; nothing to hoist (ADR 0006 §8).
     for path in sorted(dist_dir.rglob("*")):
         if not path.is_file():
             continue
-        if path == config_path:
-            continue  # already added at the upload root
         if path.suffix.lower() not in DATA_EXTENSIONS:
             continue
+        if path.parent == dist_dir / "assets":
+            continue  # the SPA's own directory: bundle metadata, not the document
         rel = path.relative_to(dist_dir).as_posix()
         _check_safe_path(rel)
         size = path.stat().st_size
@@ -371,10 +357,11 @@ def publish_dist(
     transport: HttpTransport | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> PublishResult:
-    """Publish a built ``dist/`` directory to mjswan Cloud.
+    """Publish a built ``dist/`` directory, or a ``.swn`` document, to mjswan Cloud.
 
     Args:
-        dist_dir: Path to a directory produced by ``builder.build()``.
+        dist_dir: A directory produced by ``builder.build()``, or a ``.swn`` written by
+            ``MjswanApp.save_document()``, which uploads the same file set.
         title: Simulation title. Defaults to the first project's name.
         description: Optional description.
         tags: Optional list of tags.
@@ -390,67 +377,79 @@ def publish_dist(
     Raises:
         PublishError: on any client-side validation failure or server rejection.
     """
+    from .document import DocumentError, as_directory
+
     transport = transport or HttpTransport()
     base = resolve_api_base(api_base)
     notify = on_progress or (lambda _msg: None)
 
-    plan = plan_publish(Path(dist_dir))
-    resolved_token = resolve_token(token)
+    # A document uploads exactly the file set its directory would, so the server never
+    # needs to know it existed (ADR 0006 §8). The upload runs inside the context: a
+    # document's tree is a temporary directory, and `plan.files` point into it.
+    try:
+        with as_directory(Path(dist_dir)) as tree:
+            plan = plan_publish(tree)
+            resolved_token = resolve_token(token)
 
-    resolved_title = title or _default_title(plan.config)
+            resolved_title = title or _default_title(plan.config)
 
-    body: dict = {
-        "title": resolved_title,
-        "manifest": plan.manifest(),
-        "config": plan.config,
-    }
-    if description is not None:
-        body["description"] = description
-    if tags:
-        body["tags"] = tags
+            body: dict = {
+                "title": resolved_title,
+                "manifest": plan.manifest(),
+                "config": plan.config,
+            }
+            if description is not None:
+                body["description"] = description
+            if tags:
+                body["tags"] = tags
 
-    notify(f"Requesting upload session for {len(plan.files)} file(s)…")
-    session_resp = transport.post_json(
-        f"{base}/api/simulations/upload-session", body, resolved_token
-    )
-    _raise_for_status(session_resp, "upload-session")
-    session = _parse_json(session_resp, "upload-session")
-
-    upload_id = session.get("upload_id")
-    if not upload_id:
-        raise PublishError("upload-session response missing upload_id.")
-    uploads = {u["path"]: u["url"] for u in session.get("uploads", [])}
-
-    by_path = {f.upload_path: f for f in plan.files}
-    for path, url in uploads.items():
-        f = by_path.get(path)
-        if f is None:
-            raise PublishError(
-                f"Server requested upload for unknown file: {path}", file=path
+            notify(f"Requesting upload session for {len(plan.files)} file(s)…")
+            session_resp = transport.post_json(
+                f"{base}/api/simulations/upload-session", body, resolved_token
             )
-        _check_presigned_url(url, path)
-        notify(f"Uploading {path} ({f.size} bytes)…")
-        put_resp = transport.put_bytes(
-            url, f.source.read_bytes(), _content_type_for(path)
-        )
-        if put_resp.status not in (200, 201, 204):
-            raise PublishError(
-                f"Upload failed for {path}: HTTP {put_resp.status}", file=path
+            _raise_for_status(session_resp, "upload-session")
+            session = _parse_json(session_resp, "upload-session")
+
+            upload_id = session.get("upload_id")
+            if not upload_id:
+                raise PublishError("upload-session response missing upload_id.")
+            uploads = {u["path"]: u["url"] for u in session.get("uploads", [])}
+
+            by_path = {f.upload_path: f for f in plan.files}
+            for path, url in uploads.items():
+                f = by_path.get(path)
+                if f is None:
+                    raise PublishError(
+                        f"Server requested upload for unknown file: {path}", file=path
+                    )
+                _check_presigned_url(url, path)
+                notify(f"Uploading {path} ({f.size} bytes)…")
+                put_resp = transport.put_bytes(
+                    url, f.source.read_bytes(), _content_type_for(path)
+                )
+                if put_resp.status not in (200, 201, 204):
+                    raise PublishError(
+                        f"Upload failed for {path}: HTTP {put_resp.status}", file=path
+                    )
+
+            notify("Committing…")
+            commit_resp = transport.post_json(
+                f"{base}/api/simulations/commit",
+                {"upload_id": upload_id},
+                resolved_token,
             )
+            _raise_for_status(commit_resp, "commit")
+            commit = _parse_json(commit_resp, "commit")
+            sim_id = commit.get("id")
+            if not sim_id:
+                raise PublishError("commit response missing id.")
 
-    notify("Committing…")
-    commit_resp = transport.post_json(
-        f"{base}/api/simulations/commit", {"upload_id": upload_id}, resolved_token
-    )
-    _raise_for_status(commit_resp, "commit")
-    commit = _parse_json(commit_resp, "commit")
-    sim_id = commit.get("id")
-    if not sim_id:
-        raise PublishError("commit response missing id.")
-
-    return PublishResult(
-        id=sim_id, sim_id=session.get("sim_id", sim_id), upload_id=upload_id
-    )
+            return PublishResult(
+                id=sim_id, sim_id=session.get("sim_id", sim_id), upload_id=upload_id
+            )
+    except DocumentError as exc:
+        # Only `unpack_document` raises this; the upload itself speaks PublishError.
+        raise PublishError(str(exc), file=Path(dist_dir).name) from exc
 
 
 def _check_presigned_url(url: str, path: str) -> None:

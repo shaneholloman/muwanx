@@ -1,6 +1,8 @@
 # ONNX-traced MDP term bodies, mjlab-native runtime internals
 
-> Status: **Accepted (design)** — supersedes the *term-body representation* of
+> Status: **Accepted (design)** — §1 ("no new `manifest.json`") is superseded, and §2's PRNG
+> rule and §4's graph-reference base amended, by
+> [ADR 0006](0006-swn-simulation-document.md). Supersedes the *term-body representation* of
 > [ADR 0003](0003-declarative-mdp-terms-alongside-custom-js.md) and preserves the
 > *external engine API* of [ADR 0004](0004-headless-engine-core.md). This is a
 > pre-1.0 rewrite of the runtime's MDP-execution layer with no
@@ -10,6 +12,12 @@
 > in-browser internals to mirror mjlab's manager/`envs.mdp` layout. Scope,
 > security posture, and the five-manager restriction are inherited from ADRs
 > 0003/0004 and are **not** relitigated here — only the representation changes.
+>
+> **Superseded in part by [ADR 0006](0006-swn-simulation-document.md):** §1's
+> *"No new `manifest.json`"* no longer holds — the build writes one
+> `manifest.json` at the document root. ADR 0006 also amends §2 (PRNG behaviour
+> at an MDP switch) and §4 (graph references resolve against the scene
+> directory). §3 and §5–§9 stand as written.
 
 ## Context
 

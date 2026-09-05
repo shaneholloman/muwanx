@@ -77,8 +77,9 @@ def view_cmd(
 
 @app.command("serve")
 def serve_cmd(
-    dist_dir: Annotated[
-        Path, typer.Argument(help="Path to a built mjswan dist directory.")
+    source: Annotated[
+        Path,
+        typer.Argument(help="A built mjswan dist directory, or a .swn document."),
     ],
     port: Annotated[int, typer.Option(help="HTTP server port.")] = 8080,
     host: Annotated[str, typer.Option(help="HTTP server host.")] = "localhost",
@@ -87,17 +88,23 @@ def serve_cmd(
     ] = False,
     height: Annotated[int, typer.Option(help="Colab iframe height in pixels.")] = 600,
 ) -> None:
-    """Serve a pre-built mjswan app from a dist directory."""
+    """Serve a pre-built mjswan app, from a dist directory or a .swn document."""
     from mjswan.app import MjswanApp
+    from mjswan.document import DocumentError, is_document
 
-    resolved = dist_dir.resolve()
-    if not resolved.exists():
-        console.print(f"[red]Error:[/red] Directory not found: {dist_dir}")
+    if not source.exists():
+        console.print(f"[red]Error:[/red] Not found: {source}")
         raise typer.Exit(1)
+    if is_document(source):
+        # Unpacking a large document takes a few seconds; say what the pause is.
+        console.print(f"Expanding {source.name} with the packaged engine...")
+    try:
+        app_to_serve = MjswanApp.from_document(source)
+    except DocumentError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
-    MjswanApp(resolved).launch(
-        host=host, port=port, open_browser=not no_open, height=height
-    )
+    app_to_serve.launch(host=host, port=port, open_browser=not no_open, height=height)
 
 
 # ── publish ───────────────────────────────────────────────────
@@ -106,7 +113,8 @@ def serve_cmd(
 @app.command("publish")
 def publish_cmd(
     dist_dir: Annotated[
-        Path, typer.Argument(help="Path to a built mjswan dist directory.")
+        Path,
+        typer.Argument(help="A built mjswan dist directory, or a .swn document."),
     ],
     *,
     title: Annotated[
@@ -132,7 +140,7 @@ def publish_cmd(
         ),
     ] = None,
 ) -> None:
-    """Publish a built dist directory's data files to mjswan Cloud."""
+    """Publish a built dist directory, or a .swn document, to mjswan Cloud."""
     from mjswan.publish import (
         TOKEN_ENV_VAR,
         PublishError,
@@ -142,7 +150,7 @@ def publish_cmd(
 
     resolved = dist_dir.expanduser().resolve()
     if not resolved.exists():
-        console.print(f"[red]Error:[/red] Directory not found: {dist_dir}")
+        console.print(f"[red]Error:[/red] Not found: {dist_dir}")
         raise typer.Exit(1)
 
     # No flag, env or stored session: run the browser login first, then publish.
@@ -413,52 +421,79 @@ def demo_cmd(
 @app.command("info")
 def info_cmd(
     dist_dir: Annotated[
-        Path, typer.Argument(help="Path to a built mjswan dist directory.")
+        Path,
+        typer.Argument(help="A built mjswan dist directory, or a .swn document."),
     ],
 ) -> None:
-    """Show information about a built mjswan app."""
-    import json
-
+    """Show information about a built mjswan app or a .swn simulation document."""
     from rich.tree import Tree
 
-    from mjswan.utils import name2id
+    from mjswan.document import (
+        MANIFEST_NAME,
+        DocumentError,
+        as_directory,
+        is_document,
+        read_manifest,
+    )
 
-    config_path = dist_dir / "assets" / "config.json"
-    if not config_path.exists():
-        console.print(f"[red]Error:[/red] No assets/config.json found in {dist_dir}")
+    if not dist_dir.exists():
+        console.print(f"[red]Error:[/red] Not found: {dist_dir}")
+        raise typer.Exit(1)
+    if not is_document(dist_dir) and not (dist_dir / MANIFEST_NAME).exists():
+        console.print(f"[red]Error:[/red] No {MANIFEST_NAME} found in {dist_dir}")
         raise typer.Exit(1)
 
-    config = json.loads(config_path.read_text())
-    version = config.get("version", "unknown")
+    try:
+        with as_directory(dist_dir) as root:
+            manifest = read_manifest(root)
+            kind = "document" if is_document(dist_dir) else "app"
+            version = manifest.get("version", "unknown")
+            fmt = manifest.get("format", "?")
+            tree = Tree(
+                f"[bold]mjswan {kind}[/bold] — {dist_dir}  "
+                f"[dim]v{version}, format {fmt}[/dim]"
+            )
+            total_bytes = _describe_projects(tree, root, manifest)
+    except DocumentError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
 
-    tree = Tree(f"[bold]mjswan app[/bold] — {dist_dir}  [dim]v{version}[/dim]")
+    tree.add(f"[dim]Total scene+policy assets: {_fmt_size(total_bytes)}[/dim]")
+    console.print(tree)
 
+
+def _describe_projects(tree, root: Path, manifest: dict) -> int:
+    """Add one node per project/scene/MDP/policy under ``tree``; return the asset bytes."""
     total_bytes = 0
-    for project in config.get("projects", []):
-        project_dir_name = project.get("id") or "main"
+    for project in manifest.get("projects", []):
         p_node = tree.add(
-            f"[cyan]{project['name']}[/cyan]  [dim][{project_dir_name}][/dim]"
+            f"[cyan]{project['name']}[/cyan]  [dim][{project['id']}][/dim]"
         )
         for scene in project.get("scenes", []):
-            scene_rel = scene.get("path", "")
-            scene_path = dist_dir / project_dir_name / "assets" / scene_rel
+            scene_dir = root / project["id"] / scene["id"]
+            scene_path = scene_dir / scene.get("scene", "")
             scene_size = scene_path.stat().st_size if scene_path.exists() else 0
             total_bytes += scene_size
             s_node = p_node.add(
                 f"[green]{scene['name']}[/green]  "
-                f"[dim]{scene_rel}  ({_fmt_size(scene_size)})[/dim]"
+                f"[dim]{scene['id']}/{scene.get('scene', '')}  "
+                f"({_fmt_size(scene_size)})[/dim]"
             )
+            for mdp in scene.get("mdps", []):
+                graphs = list((scene_dir / "mdp" / mdp["id"]).rglob("*.onnx"))
+                s_node.add(
+                    f"MDP: [magenta]{mdp['id']}[/magenta]  [dim]{len(graphs)} graph(s)[/dim]"
+                )
             for policy in scene.get("policies", []):
-                onnx_path = scene_path.parent / f"{name2id(policy['name'])}.onnx"
+                onnx_path = scene_dir / policy.get("onnx", "")
                 policy_size = onnx_path.stat().st_size if onnx_path.exists() else 0
                 total_bytes += policy_size
                 size_str = f"  ({_fmt_size(policy_size)})" if policy_size else ""
                 s_node.add(
-                    f"Policy: [yellow]{policy['name']}[/yellow][dim]{size_str}[/dim]"
+                    f"Policy: [yellow]{policy['name']}[/yellow]  "
+                    f"[dim]mdp={policy.get('mdp')}{size_str}[/dim]"
                 )
-
-    tree.add(f"[dim]Total scene+policy assets: {_fmt_size(total_bytes)}[/dim]")
-    console.print(tree)
+    return total_bytes
 
 
 # ── Legacy entry points (backward compatibility) ──────────────
@@ -480,15 +515,14 @@ def mjlab() -> None:
 
 
 def serve() -> None:
-    """Launch a pre-built mjswan app from a dist directory.
+    """Launch a pre-built mjswan app from a dist directory or a ``.swn`` document.
 
-    Usage: serve <dist-dir>
+    Usage: serve <dist-dir | document.swn>
     """
     if len(sys.argv) < 2:
-        print("Usage: serve <dist-dir>", file=sys.stderr)
+        print("Usage: serve <dist-dir | document.swn>", file=sys.stderr)
         sys.exit(1)
 
     from mjswan.app import MjswanApp
 
-    mjswan_app = MjswanApp(Path(sys.argv[1]).resolve())
-    mjswan_app.launch()
+    MjswanApp.from_document(Path(sys.argv[1])).launch()

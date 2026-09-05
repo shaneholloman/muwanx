@@ -49,15 +49,8 @@ class MotionConfig:
     metadata: dict[str, Any] = field(default_factory=dict)
     """Additional metadata for future extensions."""
 
-    def to_summary_dict(self) -> dict[str, Any]:
-        """Serialize the motion for root ``config.json`` summaries."""
-        data: dict[str, Any] = {"name": self.name}
-        if self.default:
-            data["default"] = True
-        return data
-
     def to_dict(self, path: str) -> dict[str, Any]:
-        """Serialize the motion for a policy JSON file."""
+        """Serialize the motion for its policy's ``manifest.json`` entry."""
         data: dict[str, Any] = {
             "name": self.name,
             "path": path,

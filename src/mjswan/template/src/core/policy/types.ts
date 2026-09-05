@@ -3,6 +3,7 @@ import type { Scene } from 'three';
 
 import type { CommandsConfig } from '../command';
 import type { CommandManager } from '../command/CommandManager';
+import type { EventConfig } from '../event/EventBase';
 import type { Bytes } from '../utils/bytes';
 
 export type PolicyRunnerContext = {
@@ -71,13 +72,14 @@ export type PolicyConfig = {
    * which bounds `raw * scale + offset` per target.
    */
   clip_actions?: number;
-  onnx?: {
-    // Weights arrive as bytes via PolicyInput.onnx; policy.json holds only the io keys.
-    meta?: {
-      in_keys?: string[];
-      out_keys?: (string | string[])[];
-    };
-  };
+  /**
+   * The ONNX input slot table (ADR 0006 §5): `in_keys[i]` names the tensor that fills the
+   * network's i-th input, an observation group or one the runtime synthesizes. Absent
+   * for the common single-input policy, whose one input takes the `actor` group.
+   */
+  in_keys?: string[];
+  /** The output slot table, positional like `in_keys`; absent means `['action']`. */
+  out_keys?: (string | string[])[];
   commands?: CommandsConfig;
   motions?: Array<{
     name: string;
@@ -92,5 +94,7 @@ export type PolicyConfig = {
   observations?: Record<string, ObservationGroupConfig>;
   actions?: Record<string, ActionConfigEntry>;
   terminations?: Record<string, TerminationConfigEntry>;
+  /** The MDP's event terms, switched with the policy rather than held by the scene (ADR 0006 §3). */
+  events?: EventConfig[];
   [key: string]: unknown;
 };

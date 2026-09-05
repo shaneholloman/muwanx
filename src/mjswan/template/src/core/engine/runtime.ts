@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 import type { MainModule, MjData, MjModel } from 'mujoco';
 import {
   getPosition,
@@ -49,8 +50,9 @@ import { TrackingPolicy } from '../policy/modules/TrackingPolicy';
 import { LocomotionPolicy } from '../policy/modules/LocomotionPolicy';
 import { CommandManager, type CommandTermContext, type CommandsConfig } from '../command';
 import { EventManager, type EventControl } from '../event/EventManager';
+import { ModelFieldDefaults } from '../event/modelFieldDr';
 import { Events } from '../event/events';
-import type { EventConfig, EventContext, TerrainData } from '../event/EventBase';
+import type { EventContext, TerrainData } from '../event/EventBase';
 import { OnnxSessionCache, type SlotReader } from '../onnx/session';
 import { ContactSensorSet, type ContactSensorDescriptor } from '../onnx/contact';
 import type { RaycastSensorDescriptor } from '../onnx/raycast';
@@ -129,12 +131,10 @@ export type ResolvedScene = {
   policy?: ResolvedPolicy | null;
   splat?: ResolvedSplat | null;
   viewer?: ViewerConfig | null;
-  events?: EventConfig[] | null;
+  /** Spawn positions the event terms of any policy on this scene may draw from. */
   terrainData?: TerrainData | null;
   /** Seconds per control step (mjlab's `step_dt`). */
   controlDt?: number | null;
-  /** Traced event-term graphs, keyed by the model-relative path. */
-  graphs?: Array<{ name: string; data: ArrayBuffer }>;
   /** Scene-scoped custom terms (events). */
   plugins?: EnginePlugins;
 };
@@ -246,10 +246,19 @@ export class mjswanRuntime {
   private readonly referenceActionCommands = new Map<ResolvedActionTerm, string>();
   private scenePlugins: EnginePlugins;
   private policyPlugins: EnginePlugins;
-  // Split by lifetime, so `setPolicy` leaves the scene's event graphs alone.
+  /** Every traced graph of the current MDP: observations, terminations, commands, events. */
   private policyGraphs: OnnxSessionCache;
-  private sceneGraphs: OnnxSessionCache;
-  /** Shared by every ONNX term's `rand` input; reseeded per `loadEnvironment`. */
+  /**
+   * The compiled values of every `mjModel` field a startup randomization has touched, for
+   * the life of the model (ADR 0006 §9). Restored before the next MDP's startup pass, so
+   * randomizations never compound across a policy switch.
+   */
+  private modelFieldDefaults: ModelFieldDefaults | null;
+  /**
+   * Shared by every ONNX term's `rand` input. Reseeded at every scene load *and* every
+   * policy load, so randomization is a function of (seed, MDP) rather than of playback
+   * so far.
+   */
   private termRng: SeededRng;
   /** Held so an app recording a session can persist the seed the run used. */
   private readonly termSeed: number;
@@ -273,7 +282,7 @@ export class mjswanRuntime {
     this.scenePlugins = {};
     this.policyPlugins = {};
     this.policyGraphs = new OnnxSessionCache();
-    this.sceneGraphs = new OnnxSessionCache();
+    this.modelFieldDefaults = null;
     this.termRng = new SeededRng(termSeed);
     // Re-reads mjModel/mjData per call so a scene rebuild needs no rewiring.
     this.readOnnxSlot = createSlotReader(
@@ -332,7 +341,11 @@ export class mjswanRuntime {
     this.handMocap = null;
     if (handTracking) {
       const hands = [0, 1].map((i) => this.renderer.xr.getHand(i));
+      // Spheres, not the `mesh` profile: that one fetches a glTF from a CDN, and a built
+      // mjswan app is self-contained.
+      const handModels = new XRHandModelFactory();
       for (const hand of hands) {
+        hand.add(handModels.createHandModel(hand, 'spheres'));
         this.xrRig.add(hand);
       }
       this.handMocap = new HandMocap(hands);
@@ -430,25 +443,9 @@ export class mjswanRuntime {
     this.controlDt = scene.controlDt && scene.controlDt > 0 ? scene.controlDt : null;
     // Reseed so two loads of the same scene draw the same randomness.
     this.termRng = new SeededRng(this.termSeed);
-    await this.sceneGraphs.clear();
-    await this.sceneGraphs.load(scene.graphs ?? []);
-    if (scene.events && scene.events.length > 0) {
-      this.eventManager = new EventManager(
-        scene.events,
-        { ...Events, ...this.scenePlugins.events },
-        {
-          sessions: this.sceneGraphs,
-          rng: this.termRng,
-          readSlot: this.readOnnxSlot,
-        },
-      );
-      console.log(
-        `[EventManager] ${this.eventManager.size} event term(s) loaded ` +
-          `(${this.sceneGraphs.size} traced graph(s))`,
-      );
-    } else {
-      this.eventManager = null;
-    }
+    // Events belong to the policy's MDP; `loadPolicyConfig` builds their manager.
+    this.eventManager = null;
+    this.modelFieldDefaults = null;
 
     // Dispose previous splat/collider before switching scenes
     if (this.splatMesh) {
@@ -472,21 +469,17 @@ export class mjswanRuntime {
     this.dynamicBodyIds = null;
 
     await this.buildSceneFromMjz(scene.model);
+    // A fresh model: nothing snapshotted yet, nothing to restore.
+    if (this.mjModel) this.modelFieldDefaults = new ModelFieldDefaults(this.mjModel);
 
     if (scene.splat) {
       await this.applySplat(scene.splat);
     }
 
+    // Builds the MDP's event manager and fires its startup pass before the reset.
     await this.loadPolicyConfig(scene.policy ?? null);
 
     this.applyViewerConfig(scene.viewer ?? null);
-
-    // `mode="startup"` fires once, after the model and policy exist.
-    if (this.eventManager && this.mjModel && this.mjData) {
-      await this.eventManager.startup(this.eventContext());
-      this.mujoco.mj_forward(this.mjModel, this.mjData);
-      this.updateCachedState();
-    }
 
     this.running = true;
     void this.startLoop();
@@ -595,7 +588,9 @@ export class mjswanRuntime {
       // written before injection zero-pads the appended free joints: without this the
       // fingertips spawn at the world origin, inside the scene.
       this.handMocap?.park(this.mjData);
-      for (const bodyId of this.handMocap?.tipBodyIds() ?? []) {
+      // Tagged so `frameCamera` can leave them out: a parked hand waits 100 m up, and
+      // with DEBUG_DRAW_BONES on it is drawn there.
+      for (const bodyId of this.handMocap?.bodyIds() ?? []) {
         if (this.bodies[bodyId]) {
           this.bodies[bodyId].userData.xrHand = true;
         }
@@ -892,6 +887,8 @@ export class mjswanRuntime {
     this.onnxInferencing = false;
     this.onnxTimeStep = 0;
     this.terminationManager = null;
+    // The outgoing MDP's events go with it; `terrainData` stays, it is the scene's.
+    this.eventManager = null;
     // Before the release below — `setPolicy` runs live.
     this.commandManager.clear();
     await this.policyGraphs.clear();
@@ -899,9 +896,22 @@ export class mjswanRuntime {
     this.clipActions = null;
     this.raycastSensors = {};
     this.contactSensors = new ContactSensorSet();
-    // eventManager, sceneGraphs and terrainData are scene-level; do not clear here.
+
+    // An MDP switch, in order (ADR 0006 §9): restore every model field the previous
+    // startup pass touched, reseed, then apply the incoming MDP's startup events over the
+    // compiled values. Restoring runs even with no policy following, so clearing the
+    // policy leaves the scene as compiled.
+    const restored = this.modelFieldDefaults?.restore() ?? false;
+    if (restored && this.mjModel && this.mjData) {
+      this.mujoco.mj_setConst(this.mjModel, this.mjData);
+    }
+    this.termRng = new SeededRng(this.termSeed);
 
     if (!policy) {
+      if (restored && this.mjModel && this.mjData) {
+        this.mujoco.mj_forward(this.mjModel, this.mjData);
+        this.updateCachedState();
+      }
       return;
     }
 
@@ -914,6 +924,25 @@ export class mjswanRuntime {
     try {
       const config = policy.config;
       await this.policyGraphs.load(policy.graphs ?? []);
+      if (config.events && config.events.length > 0) {
+        this.eventManager = new EventManager(
+          config.events,
+          { ...Events, ...this.scenePlugins.events, ...this.policyPlugins.events },
+          {
+            sessions: this.policyGraphs,
+            rng: this.termRng,
+            readSlot: this.readOnnxSlot,
+          },
+        );
+        console.log(
+          `[EventManager] ${this.eventManager.size} event term(s) loaded ` +
+            `(${this.policyGraphs.size} traced graph(s) in this MDP)`,
+        );
+        // `mode="startup"` fires once per MDP before its first reset, as mjlab fires it
+        // at env construction, over the model `restore()` just put back to compiled.
+        await this.eventManager.startup(this.eventContext(), this.modelFieldDefaults ?? undefined);
+        this.mujoco.mj_forward(this.mjModel, this.mjData);
+      }
       this.jointBias = buildJointBias(config);
       this.clipActions = readClipActions(config.clip_actions);
       const structured = collectStructuredSensors(config);
@@ -1020,7 +1049,7 @@ export class mjswanRuntime {
         console.log(`[TerminationManager] ${this.terminationManager.size} termination term(s) loaded`);
       }
 
-      const module = new OnnxModule(policy.onnx, config.onnx?.meta);
+      const module = new OnnxModule(policy.onnx, { in_keys: config.in_keys, out_keys: config.out_keys });
       await module.init();
       this.onnxModule = module;
       this.onnxInputDict = module.initInput();
@@ -1039,6 +1068,7 @@ export class mjswanRuntime {
       this.onnxModule = null;
       this.onnxInputDict = null;
       this.terminationManager = null;
+      this.eventManager = null;
       throw error;
     }
   }
@@ -1367,7 +1397,7 @@ export class mjswanRuntime {
     }
     // Viewer-only: mouse-drag forces and tracked hands, not part of the MDP.
     this.applyDragForces();
-    this.handMocap?.update(this.mjData);
+    this.handMocap?.update(this.mjModel, this.mjData);
 
     this.refreshActionReferences();
     stepPhysics(
@@ -1589,6 +1619,38 @@ export class mjswanRuntime {
     return dynamic;
   }
 
+  /**
+   * A hand bone is resized every frame, but `CapsuleGeometry` is built once at load, so
+   * the drawn capsule has to be remade to keep its ends on the joints. A no-op unless
+   * `handMocap.ts`'s debug switch is drawing the bones: with it off they have no mesh.
+   */
+  private resizeHandBoneMeshes(): void {
+    if (!this.mjModel || !this.bodies) {
+      return;
+    }
+    for (const bodyId of this.handMocap?.bodyIds() ?? []) {
+      const mesh = this.bodies[bodyId]?.children[0] as THREE.Mesh | undefined;
+      const geomId = mesh?.userData.geomId as number | undefined;
+      if (!mesh || geomId === undefined) {
+        continue;
+      }
+      const half = this.mjModel.geom_size[geomId * 3 + 1];
+      // Half a millimetre is under what a headset resolves, and it keeps tracking noise
+      // from rebuilding every geometry every frame.
+      if (Math.abs(half - ((mesh.userData.drawnHalf as number) ?? 0)) < 0.0005) {
+        continue;
+      }
+      mesh.userData.drawnHalf = half;
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.CapsuleGeometry(
+        this.mjModel.geom_size[geomId * 3],
+        half * 2.0,
+        20,
+        20
+      );
+    }
+  }
+
   private syncStaticBodiesFromData(): void {
     if (!this.mjModel || !this.mjData || !this.bodies) {
       return;
@@ -1692,6 +1754,7 @@ export class mjswanRuntime {
         }
       }
 
+      this.resizeHandBoneMeshes();
       updateLightsFromData(this.mujoco, this.mjData, this.lights);
 
       if (this.mujocoRoot && this.mujocoRoot.cylinders) {
@@ -1770,7 +1833,7 @@ export class mjswanRuntime {
     this.onnxInputDict = null;
     this.onnxInferencing = false;
     await this.policyGraphs.clear();
-    await this.sceneGraphs.clear();
+    this.modelFieldDefaults = null;
     if (this.splatMesh) {
       disposeSplat(this.splatMesh, this.scene);
       this.splatMesh = null;

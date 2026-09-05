@@ -38,6 +38,7 @@ from .envs.mdp.observations import ObservationBinding, register_observation
 from .envs.mdp.terminations import TerminationBinding, register_termination
 from .managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from .managers.termination_manager import TerminationTermCfg
+from .mdp import MdpConfig
 from .motion import MotionConfig, MotionHandle
 from .policy import PolicyConfig, PolicyHandle
 from .project import ProjectConfig, ProjectHandle
@@ -62,6 +63,7 @@ __all__ = [
     "ViewerConfig",
     "SplatConfig",
     "PolicyConfig",
+    "MdpConfig",
     "MotionConfig",
     # MDP bindings (mjlab-name → browser impl). Pre-0.8 register_*_func /
     # register_command_term names survive as deprecated aliases via _compat.

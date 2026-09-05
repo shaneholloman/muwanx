@@ -36,12 +36,12 @@ def build_policy() -> onnx.ModelProto:
     weights = np.array([[-KP], [-KD], [KP]], dtype=np.float32)
     bias = np.array([MASS * GRAVITY], dtype=np.float32)
 
-    obs_in = helper.make_tensor_value_info("policy", TensorProto.FLOAT, [1, 3])
+    obs_in = helper.make_tensor_value_info("actor", TensorProto.FLOAT, [1, 3])
     act_out = helper.make_tensor_value_info("action", TensorProto.FLOAT, [1, 1])
 
     graph = helper.make_graph(
         nodes=[
-            helper.make_node("MatMul", ["policy", "W"], ["matmul_out"]),
+            helper.make_node("MatMul", ["actor", "W"], ["matmul_out"]),
             helper.make_node("Add", ["matmul_out", "b"], ["action"]),
         ],
         name="hover_pd",

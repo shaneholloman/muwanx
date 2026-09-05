@@ -1086,7 +1086,9 @@ def test_serialize_events_reports_each_term_it_traces(monkeypatch):
     from mjswan import _onnx_build
 
     monkeypatch.setattr(
-        _onnx_build, "serialize_event", lambda name, cfg, env, out: {"name": name}
+        _onnx_build,
+        "serialize_event",
+        lambda name, cfg, env, out, **kw: {"name": name},
     )
     seen: list[str] = []
     _onnx_build.serialize_events(

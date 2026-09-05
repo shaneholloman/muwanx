@@ -35,29 +35,31 @@ function makeByteSource(base: string): ByteSource {
 
 async function loadCatalog(base: string): Promise<Catalog> {
   const params = new URLSearchParams(window.location.search);
-  const override = params.get('config');
-  const configUrl = override
+  const override = params.get('manifest');
+  const manifestUrl = override
     ? new URL(override, window.location.href).toString()
-    : `${base}assets/config.json`.replace(/([^:])\/{2,}/g, '$1/');
-  const res = await fetch(configUrl, { cache: 'no-store' });
+    : `${base}manifest.json`.replace(/([^:])\/{2,}/g, '$1/');
+  const res = await fetch(manifestUrl, { cache: 'no-store' });
   if (!res.ok) {
-    throw new Error(`Failed to fetch ${configUrl}: ${res.status}`);
+    throw new Error(`Failed to fetch ${manifestUrl}: ${res.status}`);
   }
   return parseManifest(await res.text(), makeByteSource(base));
 }
 
-function pickByName<T extends { name: string }>(
+/**
+ * Resolve a `?project=` / `?scene=` / `?policy=` value against the entries' ids. The
+ * query is sanitized too, so a hand-typed display name still lands, but nothing matches
+ * on the raw name (ADR 0006 §4).
+ */
+function pickById<T extends { id: string }>(
   items: T[],
   query: string | null,
   fallback: T | undefined,
 ): T | undefined {
   if (!query) return fallback;
-  const normalized = query.trim().toLowerCase();
-  return (
-    items.find((i) => i.name.toLowerCase() === normalized) ??
-    items.find((i) => sanitizeName(i.name) === normalized) ??
-    fallback
-  );
+  const wanted = sanitizeName(query);
+  if (!wanted) return fallback;
+  return items.find((i) => i.id === wanted) ?? fallback;
 }
 
 function AppContent() {
@@ -101,10 +103,10 @@ function AppContent() {
           pluginsRef.current = (await import(/* @vite-ignore */ url)) as EnginePlugins;
         }
         const params = new URLSearchParams(window.location.search);
-        const project = pickByName(cat.projects, params.get(PROJECT_PARAM), cat.projects[0]);
-        const scene = pickByName(project?.scenes ?? [], params.get(SCENE_PARAM), project?.scenes[0]);
+        const project = pickById(cat.projects, params.get(PROJECT_PARAM), cat.projects[0]);
+        const scene = pickById(project?.scenes ?? [], params.get(SCENE_PARAM), project?.scenes[0]);
         const policy = scene
-          ? pickByName(scene.policies, params.get(POLICY_PARAM), scene.policies.find((p) => p.default) ?? scene.policies[0])
+          ? pickById(scene.policies, params.get(POLICY_PARAM), scene.policies.find((p) => p.default) ?? scene.policies[0])
           : undefined;
         const motion = policy?.motions.find((m) => m.default) ?? policy?.motions[0];
         setCatalog(cat);
@@ -152,7 +154,10 @@ function AppContent() {
       engine.subscribe(setEngineState);
       try {
         setLoadingMessage('Loading scene…');
-        const input = await sceneEntry.buildScene({ policy: policyName, splat: splatName });
+        const input = await sceneEntry.buildScene({
+          policy: sceneEntry.policies.find((p) => p.name === policyName)?.id ?? null,
+          splat: sceneEntry.splats.find((s) => s.name === splatName)?.id ?? null,
+        });
         await engine.loadScene(withPlugins(input));
         if (motionName) await engine.setMotion(motionName);
         engine.setReferenceVisible(showReference);
@@ -192,11 +197,14 @@ function AppContent() {
   // and scene at once, and a per-site write pins whichever its closure still holds.
   useEffect(() => {
     if (!catalog) return;
+    // URL values are ids, but the UI state holds display names, so look each one up.
+    const proj = catalog.projects.find((p) => p.name === projectName);
+    const scene = proj?.scenes.find((s) => s.name === sceneName);
     const search = applyUrlState(window.location.search, {
       // Pin ?project only once more than one exists (single-project builds stay clean).
-      project: catalog.projects.length > 1 ? projectName : null,
-      scene: sceneName,
-      policy: policyName,
+      project: catalog.projects.length > 1 ? (proj?.id ?? null) : null,
+      scene: scene?.id ?? null,
+      policy: scene?.policies.find((p) => p.name === policyName)?.id ?? null,
       panel: panelVisible,
       ref: showReference,
     });
@@ -209,14 +217,16 @@ function AppContent() {
     if (!engine) return;
     const policy = scene.policies.find((p) => p.default) ?? scene.policies[0];
     const motion = policy?.motions.find((m) => m.default) ?? policy?.motions[0];
-    const splat = scene.splats[0]?.name ?? null;
+    const splat = scene.splats[0] ?? null;
     setSceneName(scene.name);
     setPolicyName(policy?.name ?? null);
     setMotionName(motion?.name ?? null);
-    setSplatName(splat);
+    setSplatName(splat?.name ?? null);
     showLoading(`Loading scene "${scene.name}"…`);
     try {
-      await engine.loadScene(withPlugins(await scene.buildScene({ policy: policy?.name, splat })));
+      await engine.loadScene(
+        withPlugins(await scene.buildScene({ policy: policy?.id, splat: splat?.id ?? null })),
+      );
       if (motion) await engine.setMotion(motion.name);
       engine.setReferenceVisible(showReference);
     } catch (err) {

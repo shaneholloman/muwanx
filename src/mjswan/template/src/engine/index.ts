@@ -18,4 +18,4 @@ export * from './types';
 export { createEngine } from './createEngine';
 export { createEngine as default } from './createEngine';
 // Which traced graphs a config refers to, for a caller assembling inputs by hand.
-export { eventGraphRefs, policyGraphRefs } from '../core/onnx/graphRefs';
+export { policyGraphRefs } from '../core/onnx/graphRefs';

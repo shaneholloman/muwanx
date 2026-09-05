@@ -9,7 +9,8 @@ from __future__ import annotations
 import copy
 import re
 import tempfile
-from collections.abc import Callable, Mapping
+import warnings
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,13 +28,16 @@ from .adapters import (
     resolve_pd_gains,
     resolve_runner_defaults,
 )
+from .mdp import MdpConfig
 from .motion import MotionConfig
 from .policy import PolicyConfig, PolicyHandle
 from .splat import SplatConfig, SplatHandle
+from .utils import assign_id, name2id, unique_id
 from .viewer import ViewerConfig
 
 if TYPE_CHECKING:
     from .envs.mdp.actions.actions import ActionTermCfg
+    from .managers.event_manager import EventTermCfg
     from .managers.observation_manager import ObservationGroupCfg
     from .managers.termination_manager import TerminationTermCfg
     from .project import ProjectHandle
@@ -206,6 +210,11 @@ class SceneConfig:
     name: str
     """Name of the scene."""
 
+    id: str = ""
+    """Sanitized name, unique within the project: the scene's directory in the build and
+    its ``?scene=`` value (ADR 0006 §4). Assigned by :meth:`ProjectHandle.add_scene`;
+    defaults to ``name2id(name)``."""
+
     model: mujoco.MjModel | None = None
     """MuJoCo model for the scene (saved as .mjb)."""
 
@@ -232,9 +241,21 @@ class SceneConfig:
     """Optional viewer configuration for this scene."""
 
     events: dict[str, Any] | None = None
-    """Optional dict of scene-level ``EventTermCfg`` instances (mjswan or mjlab),
-    serialized lazily at build time (same timing as observations/terminations) so
-    ONNX tracing has access to the scene's live env and output directory."""
+    """The scene's event terms (mjswan or mjlab ``EventTermCfg``), adapted.
+
+    The default a policy's MDP takes when it says nothing about events (ADR 0006 §3).
+    Serialized at build time, when ONNX tracing has the live env and output directory."""
+
+    events_explicit: bool = field(default=False, repr=False, compare=False)
+    """Whether :attr:`events` were set by the author rather than inherited from a task's
+    env config; only an author's are worth warning about when no policy carries them."""
+
+    mdps: list[MdpConfig] = field(default_factory=list, repr=False, compare=False)
+    """Every distinct :class:`MdpConfig` a policy on this scene uses, in first-use order.
+    Index *n* here is what makes an unnamed config ``mdp_<n>``."""
+
+    mdp_ids: list[str] = field(default_factory=list, repr=False, compare=False)
+    """The id of each entry in :attr:`mdps`, unique within the scene."""
 
     terrain_data: dict[str, Any] | None = None
     """Optional terrain data (e.g. flat_patches) for browser-side event execution."""
@@ -294,9 +315,99 @@ class SceneConfig:
     :func:`mjswan.adapters.resolve_runner_defaults`."""
 
     def __post_init__(self) -> None:
+        if not self.id:
+            self.id = name2id(self.name)
         # The scene asset's filename, from whichever of spec/model was given. Fixed now
         # rather than a property: `_save_web` drops both right after writing the asset.
         self.scene_filename = "scene.mjz" if self.spec is not None else "scene.mjb"
+
+    def mdp_id(self, mdp: MdpConfig, *, policy_id: str | None = None) -> str:
+        """The id of ``mdp`` on this scene, registering it on first use.
+
+        By object identity, not equality (ADR 0006 §3): the same config on two policies
+        is one MDP, two equal configs are two.
+
+        A named config takes ``name2id(name)``. One the term-set sugar built for a single
+        policy takes that policy's id, so ``mdp/locomotion/`` sits beside
+        ``policy/locomotion.onnx``. Only a config shared by hand falls back to
+        ``mdp_<n>``, numbered by first use within this scene, so adding a scene in front
+        of this one moves none of its ids.
+        """
+        for known, ident in zip(self.mdps, self.mdp_ids):
+            if known is mdp:
+                return ident
+        source = mdp.name if mdp.name is not None else policy_id
+        if source is not None:
+            ident = assign_id(source, set(self.mdp_ids), kind="mdp", stacklevel=4)
+        else:
+            # No warning on a rename here: the author never chose this spelling.
+            ident = unique_id(f"mdp_{len(self.mdps)}", self.mdp_ids)
+        self.mdps.append(mdp)
+        self.mdp_ids.append(ident)
+        return ident
+
+
+def _onnx_io_names(model: onnx.ModelProto) -> tuple[list[str], list[str]]:
+    """The network's real input and output names, initializers excluded."""
+    initializers = {init.name for init in model.graph.initializer}
+    inputs = [i.name for i in model.graph.input if i.name not in initializers]
+    return inputs, [o.name for o in model.graph.output]
+
+
+def _check_slot_tables(
+    name: str,
+    model: onnx.ModelProto,
+    in_keys: Sequence[str] | None,
+    out_keys: Sequence[str | Sequence[str]] | None,
+) -> tuple[list[str] | None, list[str | list[str]] | None]:
+    """Check a policy's slot tables against its network and return them as lists.
+
+    ``in_keys[i]`` fills the *i*-th input and ``out_keys[i]`` names the *i*-th output, so
+    each table must be exactly as long as what it indexes. A network with several inputs
+    must declare ``in_keys``: nothing else records where the runtime-synthesized tensors
+    sit relative to the observation groups (ADR 0006 §5). Several *outputs* cannot be
+    refused the same way, since which one is the action is unknowable here, so the
+    default (the first) is announced instead.
+    """
+    inputs, outputs = _onnx_io_names(model)
+    if in_keys is None:
+        if len(inputs) > 1:
+            raise ValueError(
+                f"Policy {name!r} has {len(inputs)} ONNX inputs ({inputs}) but declares "
+                "no in_keys. Pass in_keys naming, per input in order, the observation "
+                "group or runtime tensor (is_init, adapt_hx, time_step) that fills it."
+            )
+        checked_in = None
+    else:
+        checked_in = [str(k) for k in in_keys]
+        if len(checked_in) != len(inputs):
+            raise ValueError(
+                f"Policy {name!r} declares {len(checked_in)} in_keys {checked_in} but its "
+                f"ONNX has {len(inputs)} inputs ({inputs}). in_keys[i] fills the i-th "
+                "input, so the two must have the same length."
+            )
+    if out_keys is None:
+        if len(outputs) > 1:
+            warnings.warn(
+                f"Policy {name!r} has {len(outputs)} ONNX outputs ({outputs}) but "
+                f"declares no out_keys, so the runtime drives the actuators from the "
+                f"first one, {outputs[0]!r}. If the action is a different output, pass "
+                "out_keys naming each output in order (ADR 0006 §5).",
+                category=RuntimeWarning,
+                stacklevel=3,
+            )
+        checked_out: list[str | list[str]] | None = None
+    else:
+        checked_out = [
+            k if isinstance(k, str) else [str(p) for p in k] for k in out_keys
+        ]
+        if len(checked_out) != len(outputs):
+            raise ValueError(
+                f"Policy {name!r} declares {len(checked_out)} out_keys but its ONNX has "
+                f"{len(outputs)} outputs ({outputs}). out_keys[i] names the i-th output, "
+                "so the two must have the same length."
+            )
+    return checked_in, checked_out
 
 
 class SceneHandle:
@@ -347,19 +458,32 @@ class SceneHandle:
         commands: Any,
         actions: Any,
         terminations: Any,
-    ) -> tuple[Any, Any, Any, Any]:
-        """Fill each unset term set from an mjlab env config, and return all four.
+        *,
+        events: Any = None,
+    ) -> tuple[Any, Any, Any, Any, Any]:
+        """Fill each unset term set from an mjlab env config, and return all five.
 
         Per field, so "the task's observations but my own terminations" needs one
-        override rather than all four. ``{}`` is not ``None``, so an explicitly empty
+        override rather than all five. ``{}`` is not ``None``, so an explicitly empty
         term set still reads as "this policy has none".
 
-        :meth:`add_policy_wandb` needs the resolved ``commands`` too — it scans them for
-        the tracking term to know which motion clip to fetch — hence a shared helper.
+        Events default differently from the other four: a per-policy ``env_cfg`` supplies
+        its own, but otherwise they come from the scene's, which carry the terrain-spawn
+        patch.
+
+        Shared with :meth:`add_policy_wandb`, which needs the resolved ``commands`` to
+        find the tracking term that names the motion clip to fetch.
         """
+        # Returned unadapted, like the other four: `_resolve_mdp` adapts all five.
+        if events is None:
+            events = (
+                getattr(env_cfg, "events", None)
+                if env_cfg is not None
+                else self._config.events
+            )
         source_cfg = self._resolve_env_cfg(env_cfg)
         if source_cfg is None:
-            return observations, commands, actions, terminations
+            return observations, commands, actions, terminations, events
         if observations is None:
             observations = getattr(source_cfg, "observations", None)
         if commands is None:
@@ -368,7 +492,57 @@ class SceneHandle:
             actions = getattr(source_cfg, "actions", None)
         if terminations is None:
             terminations = getattr(source_cfg, "terminations", None)
-        return observations, commands, actions, terminations
+        return observations, commands, actions, terminations, events
+
+    def _resolve_mdp(
+        self,
+        mdp: MdpConfig,
+        *,
+        env_cfg: Any | None,
+        task_id: str | None,
+        policy_joint_names: list[str] | None,
+    ) -> None:
+        """Fill ``mdp``'s unset fields and adapt its mjlab types, in place, once.
+
+        Runs on the first policy to use the config; later ones find ``_adapted`` set and
+        share the result, including action scales and PD gains resolved against the first
+        policy's joint names, which the checkpoints of one run share.
+        """
+        if mdp._adapted:
+            return
+        (
+            observations,
+            commands,
+            actions,
+            terminations,
+            events,
+        ) = self._derive_term_sets(
+            env_cfg,
+            mdp.observations,
+            mdp.commands,
+            mdp.actions,
+            mdp.terminations,
+            events=mdp.events,
+        )
+        runner = resolve_runner_defaults(
+            task_id if task_id is not None else self._config.mjlab_task_id
+        )
+        mdp.observations = adapt_observations(
+            observations, obs_groups=runner.obs_groups
+        )
+        mdp.commands = adapt_commands(commands) or {}
+        mdp.actions = adapt_actions(actions)
+        mdp.terminations = adapt_terminations(terminations)
+        from .adapters.mjlab_adapter import adapt_events
+
+        mdp.events = adapt_events(events)
+        _enrich_joint_observations(self._config, mdp.observations)
+        if mdp.actions and policy_joint_names:
+            resolve_action_scales(mdp.actions, policy_joint_names)
+            resolve_pd_gains(
+                mdp.actions, policy_joint_names, self._resolve_env_cfg(env_cfg)
+            )
+        mdp._adapted = True
 
     def add_policy(
         self,
@@ -380,10 +554,14 @@ class SceneHandle:
         config_path: str | None = None,
         env_cfg: Any | None = None,
         task_id: str | None = None,
+        mdp: MdpConfig | None = None,
         observations: ObservationGroupCfg | Mapping[str, Any] | Any | None = None,
         commands: Mapping[str, Any] | None = None,
         actions: Mapping[str, ActionTermCfg] | Mapping[str, Any] | None = None,
         terminations: dict[str, TerminationTermCfg] | dict[str, Any] | None = None,
+        events: dict[str, EventTermCfg] | Mapping[str, Any] | None = None,
+        in_keys: Sequence[str] | None = None,
+        out_keys: Sequence[str | Sequence[str]] | None = None,
         policy_joint_names: list[str] | None = None,
         policy_num_actions: int | None = None,
         default_joint_pos: list[float] | None = None,
@@ -396,13 +574,17 @@ class SceneHandle:
     ) -> PolicyHandle:
         """Add an ONNX policy to this scene.
 
-        ``observations`` / ``commands`` / ``actions`` / ``terminations`` each default to
-        the matching field of an mjlab env config, when one is available: the
-        ``env_cfg`` passed here, else the one the scene was built from by
-        :meth:`ProjectHandle.add_scene_mjlab`. Pass a term set to override that field;
-        pass ``{}`` to say the policy genuinely has none. A plain
-        :meth:`ProjectHandle.add_scene` scene has no config to fall back on, so there
-        each field means exactly what it says.
+        The policy runs against an MDP: observations, actions, terminations, commands
+        and events (ADR 0006 §3). Pass one as ``mdp`` to share it between policies (the
+        checkpoints of one run), or pass the five term sets directly and an anonymous
+        :class:`~mjswan.mdp.MdpConfig` is built from them; not both.
+
+        Each term set defaults to the matching field of an mjlab env config, when one
+        is available: the ``env_cfg`` passed here, else the one the scene was built
+        from by :meth:`ProjectHandle.add_scene_mjlab`. Events default to the scene's own.
+        Pass a term set to override that field; pass ``{}`` to say the policy genuinely
+        has none. A plain :meth:`ProjectHandle.add_scene` scene has no config to fall
+        back on, so there each field means exactly what it says.
 
         Args:
             policy: ONNX model containing the policy.
@@ -416,15 +598,27 @@ class SceneHandle:
                 ``control_dt``, which the scene owns.
             task_id: mjlab task id whose *runner* config supplies the actor's
                 observation group and ``clip_actions``. Defaults to the scene's task.
+            mdp: The MDP to run against, shared by every policy handed the same object.
+                Its unset fields are filled and its mjlab types adapted, in place, by
+                the first policy to use it.
             observations: A single observation group, mjlab's whole
-                ``env_cfg.observations`` dict, or a dict already keyed by ONNX input
-                name. Prefer the first two and let mjswan key it — the key is the input
-                name the runtime feeds, not a free label. A group named for a
-                training-only network (``"critic"``) is dropped with a warning.
+                ``env_cfg.observations`` dict, or a dict keyed by the slot names
+                ``in_keys`` uses. Prefer the first two: a lone group lands under
+                ``"actor"``, the default slot, and needs no ``in_keys`` at all. A group
+                named for a training-only network (``"critic"``) is dropped.
             commands: Command term configurations. Custom mjlab terms are converted
                 through the Python command-term registry.
             actions: Action term configurations.
             terminations: Termination term configurations.
+            events: Event term configurations, in any of the four modes.
+            in_keys: The network's input slot table: ``in_keys[i]`` names what fills its
+                *i*-th input, an observation group or a tensor the runtime synthesizes
+                (``is_init``, ``adapt_hx``, ``time_step``). The mapping is positional, so
+                the network's own input names never matter. Required when the network has
+                more than one input; a single-input one takes its one observation group.
+            out_keys: The output slot table, ``out_keys[i]`` naming the *i*-th output.
+                ``action`` is the one the runtime drives the actuators from; a recurrent
+                policy also carries ``["next", "adapt_hx"]``. Defaults to ``["action"]``.
             policy_num_actions: Output width for policies whose action count cannot be
                 inferred from ``policy_joint_names`` (e.g. muscle-driven ones).
             clip_actions: Symmetric bound on the raw policy output, before any action
@@ -463,39 +657,61 @@ class SceneHandle:
         if metadata is None:
             metadata = {}
 
-        observations, commands, actions, terminations = self._derive_term_sets(
-            env_cfg, observations, commands, actions, terminations
+        given = {
+            k: v
+            for k, v in (
+                ("observations", observations),
+                ("commands", commands),
+                ("actions", actions),
+                ("terminations", terminations),
+                ("events", events),
+            )
+            if v is not None
+        }
+        if mdp is not None and given:
+            raise ValueError(
+                f"Policy {name!r} was given mdp= and also {sorted(given)}. An MdpConfig "
+                "carries all five term sets; pass either it or the term sets, not both."
+            )
+        # An MDP built here belongs to this policy alone, so it takes the policy's id;
+        # one passed in may be shared, and is numbered unless it carries a name.
+        sugar_built = mdp is None
+        if mdp is None:
+            mdp = MdpConfig(
+                observations=observations,
+                commands=commands,
+                actions=actions,
+                terminations=terminations,
+                events=events,
+            )
+        self._resolve_mdp(
+            mdp,
+            env_cfg=env_cfg,
+            task_id=task_id,
+            policy_joint_names=policy_joint_names,
         )
+        policy_id = assign_id(
+            name, {p.id for p in self._config.policies}, kind="policy", stacklevel=3
+        )
+        self._config.mdp_id(mdp, policy_id=policy_id if sugar_built else None)
 
         runner = resolve_runner_defaults(
             task_id if task_id is not None else self._config.mjlab_task_id
         )
         if clip_actions is None:
             clip_actions = runner.clip_actions
-
-        adapted_observations = adapt_observations(
-            observations, policy_groups=runner.policy_obs_groups
-        )
-        adapted_commands = adapt_commands(commands)
-        adapted_actions = adapt_actions(actions)
-        adapted_terminations = adapt_terminations(terminations)
-        _enrich_joint_observations(self._config, adapted_observations)
-        if adapted_actions and policy_joint_names:
-            resolve_action_scales(adapted_actions, policy_joint_names)
-            resolve_pd_gains(
-                adapted_actions, policy_joint_names, self._resolve_env_cfg(env_cfg)
-            )
+        slot_in, slot_out = _check_slot_tables(name, policy, in_keys, out_keys)
 
         policy_config = PolicyConfig(
             name=name,
+            id=policy_id,
             model=policy,
             metadata=metadata,
             source_path=source_path,
             config_path=config_path,
-            commands=adapted_commands or {},
-            observations=adapted_observations,
-            actions=adapted_actions,
-            terminations=adapted_terminations,
+            mdp=mdp,
+            in_keys=slot_in,
+            out_keys=slot_out,
             policy_joint_names=policy_joint_names,
             policy_num_actions=policy_num_actions,
             default_joint_pos=default_joint_pos,
@@ -623,11 +839,20 @@ class SceneHandle:
 
         # Resolved here, not left to `add_policy`: the tracking clip is found by scanning
         # `commands`, which would miss one that came from the scene's env config.
-        observations, commands, actions, terminations = self._derive_term_sets(
+        observations, commands, actions, terminations, events = self._derive_term_sets(
             env_cfg, observations, commands, actions, terminations
         )
         tracking_motion_term = _extract_tracking_motion_term(commands)
         tracking_motion_cache: dict[str, tuple[str, bytes]] = {}
+        # One MDP for every checkpoint this call adds: they were trained against one
+        # env config, so they share its graphs rather than tracing them once each.
+        shared_mdp = MdpConfig(
+            observations=observations,
+            commands=commands,
+            actions=actions,
+            terminations=terminations,
+            events=events,
+        )
 
         handles = []
         seen_names: set[str] = set()
@@ -645,10 +870,7 @@ class SceneHandle:
                         metadata=metadata,
                         env_cfg=env_cfg,
                         task_id=task_id,
-                        observations=observations,
-                        commands=commands,
-                        actions=actions,
-                        terminations=terminations,
+                        mdp=shared_mdp,
                         clip_actions=clip_actions,
                         extras=extras,
                     )
@@ -736,10 +958,7 @@ class SceneHandle:
                                     metadata=metadata,
                                     env_cfg=env_cfg,
                                     task_id=task_id,
-                                    observations=observations,
-                                    commands=commands,
-                                    actions=actions,
-                                    terminations=terminations,
+                                    mdp=shared_mdp,
                                     policy_joint_names=export_context.joint_names
                                     or None,
                                     default_joint_pos=export_context.default_joint_pos
@@ -859,6 +1078,9 @@ class SceneHandle:
 
         splat_config = SplatConfig(
             name=name,
+            id=assign_id(
+                name, {s.id for s in self._config.splats}, kind="splat", stacklevel=3
+            ),
             source=source,
             url=url,
             scale=scale,
@@ -914,11 +1136,15 @@ class SceneHandle:
         self._config.viewer = config
         return self
 
-    def set_events(self, events: Mapping[str, Any]) -> SceneHandle:
-        """Set scene-level events.
+    def set_events(
+        self, events: Mapping[str, Any], *, _explicit: bool = True
+    ) -> SceneHandle:
+        """Set the scene's events, the default for every policy's MDP on it.
 
-        Accepts mjswan or mjlab ``EventTermCfg`` instances in any of the three modes.
-        ONNX tracing happens at build time, as for observations and terminations.
+        Accepts mjswan or mjlab ``EventTermCfg`` instances in any of the four modes.
+        ONNX tracing happens at build time, as for observations and terminations. Events
+        belong to an MDP (ADR 0006 §3), so a scene with events and no policy has nowhere
+        to put them, and the build says so.
 
         Args:
             events: Dict mapping event names to ``EventTermCfg`` instances.
@@ -929,6 +1155,7 @@ class SceneHandle:
         from .adapters.mjlab_adapter import adapt_events
 
         self._config.events = adapt_events(events)
+        self._config.events_explicit = _explicit
         return self
 
     def set_trace_env(self, env: Any) -> SceneHandle:

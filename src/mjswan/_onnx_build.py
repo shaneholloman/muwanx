@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 import mujoco
 
+from ._graph_io import onnx_ref as _onnx_ref
+from ._graph_io import write_onnx as _write_onnx
 from .command import ButtonConfig, CommandTermConfig
 from .envs.mdp.events import EventBinding
 from .envs.mdp.observations import ObservationBinding
@@ -30,11 +32,6 @@ if TYPE_CHECKING:
     from .managers.event_manager import EventTermCfg
     from .managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
     from .managers.termination_manager import TerminationTermCfg
-
-
-def _onnx_ref(kind: str, name: str) -> str:
-    """Bundle-relative path for a traced term's ``.onnx`` file."""
-    return f"{kind}/{name}.onnx"
 
 
 def _require_ts_src(kind: str, name: str, binding: Any) -> None:
@@ -53,12 +50,6 @@ def _require_ts_src(kind: str, name: str, binding: Any) -> None:
         f"term's own function, or point `ts_src` at a `.ts` file exporting "
         f"{binding.ts_name or 'the class'!r}."
     )
-
-
-def _write_onnx(out_dir: Path, ref: str, onnx_bytes: bytes) -> None:
-    path = out_dir / ref
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(onnx_bytes)
 
 
 # --- Observations ---
@@ -158,6 +149,8 @@ def serialize_observation_term(
     env: Any,
     out_dir: Path,
     group_history_length: int | None,
+    *,
+    scope: str | None = None,
 ) -> dict[str, Any] | None:
     """Serialize one observation term.
 
@@ -195,7 +188,7 @@ def serialize_observation_term(
             "size": len(values),
         }
         return _apply_observation_pipeline(entry, term_cfg, group_history_length)
-    ref = _onnx_ref("obs", name)
+    ref = _onnx_ref("obs", name, scope)
     _write_onnx(out_dir, ref, export.onnx_bytes)
 
     # The runtime cannot infer `size`: inference is async, the group layout is not.
@@ -285,6 +278,8 @@ def _fused_group_entry(
     out_dir: Path,
     group_name: str,
     native_sizes: dict[str, int] | None = None,
+    *,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     """Trace the group as one graph and return the fused config entry."""
     from .compile.tracer import (
@@ -305,7 +300,7 @@ def _fused_group_entry(
         for name, term_cfg in group.terms.items()
     ]
     export = trace_observation_group(specs, env, name=group_name)
-    ref = _onnx_ref("obs", group_name)
+    ref = _onnx_ref("obs", group_name, scope)
     _write_onnx(out_dir, ref, export.onnx_bytes)
     entry: dict[str, Any] = {
         "fused": ref,
@@ -446,20 +441,24 @@ def serialize_observation_group(
     out_dir: Path,
     group_name: str = "policy",
     native_sizes: dict[str, int] | None = None,
+    *,
+    scope: str | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """Serialize an observation group — one fused graph where possible, else per term."""
     from .compile.tracer import ConstantGroup
 
     if _group_is_fusable(group):
         try:
-            return _fused_group_entry(group, env, out_dir, group_name, native_sizes)
+            return _fused_group_entry(
+                group, env, out_dir, group_name, native_sizes, scope=scope
+            )
         except ConstantGroup:
             # Only knowable by tracing, so not a `_group_is_fusable` static check.
             pass
     result = []
     for name, term_cfg in group.terms.items():
         entry = serialize_observation_term(
-            name, term_cfg, env, out_dir, group.history_length
+            name, term_cfg, env, out_dir, group.history_length, scope=scope
         )
         if entry is not None:
             result.append(entry)
@@ -470,7 +469,12 @@ def serialize_observation_group(
 
 
 def serialize_termination(
-    name: str, term_cfg: TerminationTermCfg, env: Any, out_dir: Path
+    name: str,
+    term_cfg: TerminationTermCfg,
+    env: Any,
+    out_dir: Path,
+    *,
+    scope: str | None = None,
 ) -> dict[str, Any] | None:
     """Serialize one termination term."""
     from .compile import trace_term
@@ -489,7 +493,7 @@ def serialize_termination(
         # Narrow: `UntraceableTerm` is a ValueError too, and must fail the build.
         return _native_termination_entry(name, term_cfg, env)
 
-    ref = _onnx_ref("term", name)
+    ref = _onnx_ref("term", name, scope)
     _write_onnx(out_dir, ref, export.onnx_bytes)
     entry: dict[str, Any] = {
         "name": name,
@@ -545,7 +549,11 @@ def _is_native_termination(name: str, term_cfg: TerminationTermCfg, env: Any) ->
 
 
 def serialize_terminations(
-    terminations: dict[str, TerminationTermCfg] | None, env: Any, out_dir: Path
+    terminations: dict[str, TerminationTermCfg] | None,
+    env: Any,
+    out_dir: Path,
+    *,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     """Serialize a policy's terminations, fusing the traced ones into one graph.
 
@@ -573,13 +581,13 @@ def serialize_terminations(
     if len(fusable) == 1:
         # Fusing one term buys nothing and costs a wire shape, so don't.
         name, term_cfg = next(iter(fusable.items()))
-        entry = serialize_termination(name, term_cfg, env, out_dir)
+        entry = serialize_termination(name, term_cfg, env, out_dir, scope=scope)
         if entry is not None:
             result[name] = entry
         return result
 
     result[FUSED_TERMINATION_KEY] = _fused_termination_entry(
-        fusable, env, out_dir, "terminations"
+        fusable, env, out_dir, "terminations", scope=scope
     )
     return result
 
@@ -590,7 +598,12 @@ name, which is always a Python identifier."""
 
 
 def _fused_termination_entry(
-    terms: dict[str, TerminationTermCfg], env: Any, out_dir: Path, group_name: str
+    terms: dict[str, TerminationTermCfg],
+    env: Any,
+    out_dir: Path,
+    group_name: str,
+    *,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     from .compile.tracer import (
         GroupTermSpec,
@@ -605,7 +618,7 @@ def _fused_termination_entry(
         for name, cfg in terms.items()
     ]
     export = trace_termination_group(specs, env, name=group_name)
-    ref = _onnx_ref("term", group_name)
+    ref = _onnx_ref("term", group_name, scope)
     _write_onnx(out_dir, ref, export.onnx_bytes)
     return {
         "fused": ref,
@@ -858,7 +871,12 @@ def _event_writes_nothing_reason(
 
 
 def serialize_event(
-    name: str, term_cfg: EventTermCfg, env: Any, out_dir: Path
+    name: str,
+    term_cfg: EventTermCfg,
+    env: Any,
+    out_dir: Path,
+    *,
+    scope: str | None = None,
 ) -> dict[str, Any] | None:
     """Serialize one event term, or ``None`` if there is genuinely nothing to emit."""
     # Before the torch import below: a config mistake should not need a tracer to report.
@@ -908,7 +926,7 @@ def serialize_event(
             "EventBinding's `ts_src` at it."
         ) from exc
 
-    ref = _onnx_ref("event", name)
+    ref = _onnx_ref("event", name, scope)
     _write_onnx(out_dir, ref, export.onnx_bytes)
     entry: dict[str, Any] = {
         "name": name,
@@ -958,10 +976,13 @@ def serialize_events(
     env: Any,
     out_dir: Path,
     on_term: Callable[[str], None] | None = None,
+    *,
+    scope: str | None = None,
 ) -> list[dict[str, Any]] | None:
-    """Serialize a scene's events dict to the JSON list ``config.json`` carries.
+    """Serialize an MDP's events dict to the JSON list the manifest carries.
 
     ``on_term`` names each term before it is traced, for the build's progress line.
+    *scope* is the owning MDP's directory; see :func:`mjswan._graph_io.onnx_ref`.
     """
     if not events:
         return None
@@ -970,7 +991,7 @@ def serialize_events(
     for name, term_cfg in events.items():
         if on_term is not None:
             on_term(name)
-        entry = serialize_event(name, term_cfg, env, out_dir)
+        entry = serialize_event(name, term_cfg, env, out_dir, scope=scope)
         if entry is not None:
             result.append(entry)
     return result or None
@@ -980,7 +1001,12 @@ def serialize_events(
 
 
 def _serialize_reset_graph(
-    name: str, cmd_cfg: CommandTermConfig, env: Any, out_dir: Path
+    name: str,
+    cmd_cfg: CommandTermConfig,
+    env: Any,
+    out_dir: Path,
+    *,
+    scope: str | None = None,
 ) -> dict[str, Any] | None:
     """Trace a native command's reset-time graph, or ``None`` if it has none.
 
@@ -1001,7 +1027,7 @@ def _serialize_reset_graph(
         name=graph_name,
         mode="reset",
     )
-    ref = _onnx_ref("command", graph_name)
+    ref = _onnx_ref("command", graph_name, scope)
     _write_onnx(out_dir, ref, export.onnx_bytes)
     return {
         "name": graph_name,
@@ -1015,11 +1041,16 @@ def _serialize_reset_graph(
 
 
 def serialize_command(
-    name: str, cmd_cfg: CommandTermConfig, env: Any, out_dir: Path
+    name: str,
+    cmd_cfg: CommandTermConfig,
+    env: Any,
+    out_dir: Path,
+    *,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     """Serialize one command term, resolving a pending ONNX trace if needed."""
     if cmd_cfg.pending_trace is None:
-        reset_graph = _serialize_reset_graph(name, cmd_cfg, env, out_dir)
+        reset_graph = _serialize_reset_graph(name, cmd_cfg, env, out_dir, scope=scope)
         if reset_graph is None:
             return cmd_cfg.to_dict()
         # `to_dict` refuses while a trace is pending; the graph is resolved now.
@@ -1053,6 +1084,7 @@ def serialize_command(
     return write_command_artifact(
         export,
         out_dir,
+        scope=scope,
         resampling_time_range=getattr(pending.mjlab_cfg, "resampling_time_range", None),
         debug_vis=debug_vis,
         ui=pending.ui or _record_command_gui(term, name),

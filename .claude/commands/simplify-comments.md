@@ -9,3 +9,4 @@ Using the `ponytail:ponytail-review` skill, review every comment in the target r
 - Scope: docstrings and comment lines only. Do not change code.
 - If a comment fits on one line, make it one line. Multiple lines are fine when a developer genuinely needs that much context, but strip anything that is not carrying its weight.
 - If the range is a PR, branch, or commit, first get its diff with `gh` / `git` and review only the comments inside that diff.
+- Cut anything that is session-derived rather than generally true: what a review said, why an earlier attempt failed, what the code used to do, or context that only makes sense to whoever was in the room. Keep only what a reader coming to the file cold needs.

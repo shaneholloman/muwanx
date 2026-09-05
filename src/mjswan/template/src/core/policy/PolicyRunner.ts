@@ -361,15 +361,11 @@ export class PolicyRunner {
       }
     }
 
-    if (this.obsGroups.policy) {
-      this.defaultObsKey = 'policy';
-    } else if (this.obsGroups.observation) {
-      this.defaultObsKey = 'observation';
-    } else if (this.obsGroups.obs_history) {
-      this.defaultObsKey = 'obs_history';
-    } else {
-      this.defaultObsKey = Object.keys(this.obsGroups)[0] ?? null;
-    }
+    // The group a single-input policy is fed: the default slot when it exists, else the
+    // one group there is (its name is free), else the first declared.
+    this.defaultObsKey = this.obsGroups.actor
+      ? 'actor'
+      : (Object.keys(this.obsGroups)[0] ?? null);
   }
 
   /**

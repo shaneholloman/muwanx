@@ -32,6 +32,65 @@ class MjswanApp:
     def __init__(self, app_dir: Path) -> None:
         self._app_dir = app_dir
 
+    @classmethod
+    def from_document(cls, source: str | Path) -> "MjswanApp":
+        """The app for a built directory, or for a ``.swn`` document.
+
+        A directory is already an app and is served where it sits. A document is only
+        the tree (ADR 0006 §8), so one is assembled: unpacked into a temporary directory
+        with the packaged engine laid over it, removed when the process exits. The engine
+        is built first if no matching SPA is cached, exactly as a build would.
+        """
+        import atexit
+        import shutil
+        import tempfile
+
+        from ._build_client import TEMPLATE_DIR, ClientBuilder, install_spa
+        from .document import DocumentError, is_document, read_manifest, unpack_document
+
+        source = Path(source).expanduser()
+        if not source.exists():
+            raise FileNotFoundError(f"No such app or document: {source}")
+        if not is_document(source):
+            return cls(source.resolve())
+
+        # Custom-JS terms compile to a `plugins.js` that ships with the engine, not in
+        # the document, so the manifest would point at a module that is not there.
+        if read_manifest(source).get("uses_custom_js") is True:
+            raise DocumentError(
+                f"{source.name} was built with custom-JS MDP terms, whose runtime module "
+                "ships with the engine rather than in the document (ADR 0006 §8). Serve "
+                "the built directory instead."
+            )
+
+        app_dir = Path(tempfile.mkdtemp(prefix="mjswan-swn-"))
+        atexit.register(shutil.rmtree, app_dir, ignore_errors=True)
+        unpack_document(source, app_dir)
+        if (TEMPLATE_DIR / "package.json").exists():
+            ClientBuilder(TEMPLATE_DIR).build(base_path="/")
+        if not install_spa(app_dir):
+            raise RuntimeError(
+                f"No built engine at {TEMPLATE_DIR / 'dist'}, so {source.name} cannot be "
+                "served. Build an app once with `builder.build()` to produce one."
+            )
+        return cls(app_dir)
+
+    @property
+    def app_dir(self) -> Path:
+        """The built directory: the engine plus the expanded simulation document."""
+        return self._app_dir
+
+    def save_document(self, path: str | Path | None = None) -> Path:
+        """Write the simulation as one ``.swn`` file and return its path (ADR 0006 §8).
+
+        The document is the build's data (``manifest.json`` and every project directory)
+        packaged as a ZIP of the same tree, carrying no engine. ``path`` defaults to the
+        build directory's name with ``.swn``, beside it.
+        """
+        from .document import write_document
+
+        return write_document(self._app_dir, path)
+
     def publish(
         self,
         *,
@@ -43,9 +102,9 @@ class MjswanApp:
     ) -> "PublishResult":
         """Publish this built app's data files to mjswan Cloud.
 
-        Extracts only data files (config.json, scene/policy/motion/splat assets)
-        from the built ``dist/`` and uploads them via the presigned-upload
-        protocol. Refuses builds that use custom-JS MDP terms
+        Extracts only data files (manifest.json, scene/policy/motion/splat assets,
+        traced MDP graphs) from the built ``dist/`` and uploads them via the
+        presigned-upload protocol. Refuses builds that use custom-JS MDP terms
         (``uses_custom_js: true``), which mjswan Cloud cannot render.
 
         Args:

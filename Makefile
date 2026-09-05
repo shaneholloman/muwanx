@@ -7,10 +7,11 @@ format:
 	uv run ruff format
 	uv run ruff check --fix
 
+# Both checkers always run, and the target fails if either does: a failing first line
+# used to stop the second from ever running.
 .PHONY: type
 type:
-	uv run ty check
-	uv run pyright
+	@status=0; uv run ty check || status=1; uv run pyright || status=1; exit $$status
 
 .PHONY: check
 check: format type

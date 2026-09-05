@@ -275,6 +275,19 @@ def setup_builder() -> mjswan.Builder:
         name="Gentle Humanoid Tracking",
         policy=onnx.load(str(policy_path), load_external_data=True),
         config_path=str(policy_json),
+        # Without this the runtime drives the robot from output 0 instead of `action`
+        # (ADR 0006 §5). The sidecar still carries a table, so the build warns that it
+        # is ignoring it.
+        out_keys=[
+            "policy",
+            "priv_pred",
+            "_actor_inp",
+            "_actor_feature",
+            "loc",
+            "scale",
+            "action",
+            "action_log_prob",
+        ],
         commands={
             # Built-in motion player; clips convert to its body_world format at build time (#79).
             # `time_steps` is the window its `ref_*` fields are sampled at, sliced by the terms.
