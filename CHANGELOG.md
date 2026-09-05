@@ -140,6 +140,15 @@ velocity-command shortcuts were removed outright, see Removed.
 
 ### Changed
 
+- **Every scene carries a `camera`, and the view follows the robot by default.** The
+  build used to omit the block for a scene that never called `set_viewer`, and the
+  browser filled the gap from defaults generated out of the Python dataclass. The two
+  did not agree: a missing block left tracking off, so the camera watched the robot walk
+  out of frame, while an explicit `ViewerConfig()` with the same values tracked it. The
+  build now resolves the whole block for every scene, `fovy` included, and the browser
+  reads what the document says. A scene that set no viewer therefore tracks the first
+  non-world body, as one that set the defaults by hand always did.
+
 - **The default observation slot is `actor`** (was `policy`), mjlab's own name for the
   group its actor network reads, in Python (`DEFAULT_OBS_GROUP_KEY`) and the engine
   together. A lone observation group lands there and needs no `in_keys`; the common fused
@@ -226,6 +235,12 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   env and let the build trace it. `scripts/verify_dsl_migration.py` goes with it.
 - `PolicyHandle.add_velocity_command` / `add_command_velocity`, both with no alias. Pass
   `commands={"velocity": mjswan.velocity_command(...)}` to `add_policy()` instead.
+- **`viewer_config_defaults.ts` and its generator.** The defaults were code-generated
+  from Python's `ViewerConfig` on every build to keep the two in step. The document now
+  carries the resolved values instead, so the browser has nothing to keep in step: the
+  small view it falls back on is ordinary source, reached only by a manifest mjswan did
+  not write, which also logs a warning. Nothing is generated into the template any more,
+  so a fresh checkout builds and tests with no Python step in front of it.
 - **The generated `custom_*.ts` registries**, and the `Observations` / `Terminations` /
   `Events` modules that held nothing else. A `ts_src` term is collected into the standalone
   `plugins.js` and reaches the engine as `EnginePlugins` (ADR 0004 §10), so nothing had

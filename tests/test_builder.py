@@ -30,6 +30,7 @@ from mjswan.envs.mdp.actions import JointEffortActionCfg, JointPositionActionCfg
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjswan.managers.termination_manager import TerminationTermCfg
 from mjswan.utils import name2id
+from mjswan.viewer import ViewerConfig
 
 
 def _entry(
@@ -175,6 +176,34 @@ class TestSceneAndPolicyIds:
 # ===========================================================================
 # L1 — GTM ID handling
 # ===========================================================================
+class TestSceneCamera:
+    """Every scene carries a resolved `camera`, so the browser never invents a view."""
+
+    def test_a_scene_with_no_viewer_still_gets_the_defaults(
+        self, tmp_path, minimal_model, build_manifest
+    ):
+        project = Builder().add_project(name="P")
+        project.add_scene(name="S", model=minimal_model)
+        manifest = build_manifest(project._builder, tmp_path / "out")
+
+        camera = manifest["projects"][0]["scenes"][0]["camera"]
+        assert camera == ViewerConfig().to_dict()
+        # `fovy=None` means 45 to Python; the document has to say so itself.
+        assert camera["fovy"] == 45.0
+        # AUTO is what makes the view follow the robot rather than watch it leave.
+        assert camera["origin_type"] == "AUTO"
+
+    def test_an_explicit_viewer_wins(self, tmp_path, minimal_model, build_manifest):
+        project = Builder().add_project(name="P")
+        project.add_scene(name="S", model=minimal_model).set_viewer(
+            ViewerConfig(distance=9.0, fovy=60.0)
+        )
+        manifest = build_manifest(project._builder, tmp_path / "out")
+
+        camera = manifest["projects"][0]["scenes"][0]["camera"]
+        assert (camera["distance"], camera["fovy"]) == (9.0, 60.0)
+
+
 class TestBuilderGtmId:
     def test_defaults_to_none(self):
         assert Builder()._gtm_id is None

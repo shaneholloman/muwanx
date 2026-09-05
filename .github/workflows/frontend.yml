@@ -23,14 +23,6 @@ jobs:
           cd src/mjswan/template
           npm install
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      # The viewer defaults are derived from Python and only the build writes them,
-      # so a fresh checkout cannot compile the template without generating them.
-      - name: Generate the viewer defaults
-        run: uv run --python 3.12 python -c "from pathlib import Path; from mjswan._build_client import ClientBuilder; ClientBuilder(Path('src/mjswan/template')).generate_viewer_config_defaults()"
-
       - name: Run eslint
         run: |
           cd src/mjswan/template

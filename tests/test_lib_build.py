@@ -52,7 +52,6 @@ def lib_dist() -> Path:
     builder = ClientBuilder(TEMPLATE_DIR)
     builder.create_env()
     builder.sync_version_from_python()
-    builder.generate_viewer_config_defaults()
     builder.install_dependencies()
     builder.run_build_script("build:lib")
     return TEMPLATE_DIR / "dist"

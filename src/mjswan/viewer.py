@@ -81,9 +81,9 @@ class ViewerConfig:
             "enable_shadows": self.enable_shadows,
             "height": self.height,
             "width": self.width,
+            # None means "45" to Python; the document says what it means.
+            "fovy": self.fovy if self.fovy is not None else 45.0,
         }
-        if self.fovy is not None:
-            d["fovy"] = self.fovy
         if self.entity_name is not None:
             d["entity_name"] = self.entity_name
         if self.body_name is not None:
