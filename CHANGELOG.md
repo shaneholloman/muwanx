@@ -375,12 +375,12 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   the whole scene down with `invalid input '...'`. Feeds are now filtered to the session's
   own input names.
 - **Switching project pins the project it switched to.** The URL was written at each
-  call site from React state, so the write that followed a project change — the one for
-  the scene that change loads — still held the *previous* project in its closure and put
-  it back. `?project=old&scene=new_projects_scene` is a view that cannot be reopened: the
-  reload resolves the old project, fails to find that scene in it, and lands on the
-  default. The address bar is now a projection of the live selection, written in one
-  place from all of it, so a selection that moves two things at once records both.
+  call site from React state. The write that followed a project change is the one for the
+  scene that change loads, and it still held the *previous* project in its closure, so it
+  put the old one back. `?project=old&scene=new_projects_scene` is a view that cannot be
+  reopened: the reload resolves the old project, fails to find that scene in it, and lands
+  on the default. The address bar is now a projection of the live selection, written in
+  one place from all of it, so a selection that moves two things at once records both.
   Clearing a policy clears `?policy` for the same reason, where the merge used to read
   the cleared `null` as "unchanged" and leave the old name behind, and the parameters
   are normalized on load rather than at the first interaction, so the address bar is
