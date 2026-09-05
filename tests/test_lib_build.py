@@ -52,9 +52,6 @@ def lib_dist() -> Path:
     builder = ClientBuilder(TEMPLATE_DIR)
     builder.create_env()
     builder.sync_version_from_python()
-    # The core imports these generated modules; ensure they exist as empty stubs
-    # (custom terms load at runtime via plugins.js, not the engine bundle).
-    builder.generate_empty_custom_stubs()
     builder.generate_viewer_config_defaults()
     builder.install_dependencies()
     builder.run_build_script("build:lib")

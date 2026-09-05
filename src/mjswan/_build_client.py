@@ -196,46 +196,6 @@ class ClientBuilder:
             env=build_env,
         )
 
-    # Empty stubs for the engine's Custom* registries: author terms compile to a runtime
-    # plugins.js instead of inlining, so the SPA stays project-independent.
-    _EMPTY_CUSTOM_STUBS = {
-        "observation/custom_observations.ts": (
-            "// Auto-generated. Custom observations load at runtime via plugins.js"
-            " (ADR 0004 §10).\n"
-            "export const CustomObservations:"
-            " Record<string, new (...args: never[]) => unknown> = {};\n"
-        ),
-        "command/custom_commands.ts": (
-            "// Auto-generated. Custom commands load at runtime via plugins.js"
-            " (ADR 0004 §10).\n"
-            "import type { CommandTermConstructor } from './types';\n"
-            "export const CustomCommands:"
-            " Record<string, CommandTermConstructor> = {};\n"
-        ),
-        "termination/custom_terminations.ts": (
-            "// Auto-generated. Custom terminations load at runtime via plugins.js"
-            " (ADR 0004 §10).\n"
-            "type TerminationConstructor = new ("
-            "runner: import('../policy/PolicyRunner').PolicyRunner,"
-            " config: import('./TerminationBase').TerminationConfig) =>"
-            " import('./TerminationBase').TerminationBase;\n"
-            "export const CustomTerminations:"
-            " Record<string, TerminationConstructor> = {};\n"
-        ),
-        "event/custom_events.ts": (
-            "// Auto-generated. Custom events load at runtime via plugins.js"
-            " (ADR 0004 §10).\n"
-            "import type { EventConstructor } from './EventBase';\n"
-            "export const CustomEvents: Record<string, EventConstructor> = {};\n"
-        ),
-    }
-
-    def generate_empty_custom_stubs(self) -> None:
-        """Write empty Custom* registry files so the engine compiles project-independently."""
-        core = self.project_dir / "src" / "core"
-        for rel, content in self._EMPTY_CUSTOM_STUBS.items():
-            (core / rel).write_text(content)
-
     def _plugin_alias_args(self) -> list[str]:
         """esbuild `--alias:` args for bundling author custom-MDP terms.
 
@@ -399,10 +359,6 @@ class ClientBuilder:
     # Derived files, excluded from the fingerprint: regenerated identically each build.
     _GENERATED_TS = frozenset(
         {
-            "src/core/observation/custom_observations.ts",
-            "src/core/command/custom_commands.ts",
-            "src/core/event/custom_events.ts",
-            "src/core/termination/custom_terminations.ts",
             "src/core/engine/viewer_config_defaults.ts",
         }
     )
@@ -485,8 +441,6 @@ class ClientBuilder:
         try:
             self.create_env(clean=clean)
             self.sync_version_from_python()
-            # Custom terms are runtime plugins now, so the engine stubs stay empty.
-            self.generate_empty_custom_stubs()
             self.generate_viewer_config_defaults()
             self.install_dependencies(clean=clean)
             env: dict[str, str] = {"MJSWAN_BASE_PATH": base_path}

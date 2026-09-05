@@ -38,9 +38,7 @@ import {
   type ResolvedActionTerm,
 } from '../action/applyAction';
 import { applyResetTerms } from './resetChain';
-import { Observations } from '../observation/observations';
 import { TerminationManager } from '../termination/TerminationManager';
-import { Terminations } from '../termination/terminations';
 import * as ort from 'onnxruntime-web';
 import { PolicyRunner } from '../policy/PolicyRunner';
 import { OnnxModule } from '../policy/OnnxModule';
@@ -51,7 +49,6 @@ import { LocomotionPolicy } from '../policy/modules/LocomotionPolicy';
 import { CommandManager, type CommandTermContext, type CommandsConfig } from '../command';
 import { EventManager, type EventControl } from '../event/EventManager';
 import { ModelFieldDefaults } from '../event/modelFieldDr';
-import { Events } from '../event/events';
 import type { EventContext, TerrainData } from '../event/EventBase';
 import { OnnxSessionCache, type SlotReader } from '../onnx/session';
 import { ContactSensorSet, type ContactSensorDescriptor } from '../onnx/contact';
@@ -927,7 +924,7 @@ export class mjswanRuntime {
       if (config.events && config.events.length > 0) {
         this.eventManager = new EventManager(
           config.events,
-          { ...Events, ...this.scenePlugins.events, ...this.policyPlugins.events },
+          { ...this.scenePlugins.events, ...this.policyPlugins.events },
           {
             sessions: this.policyGraphs,
             rng: this.termRng,
@@ -1008,7 +1005,7 @@ export class mjswanRuntime {
           tracking: TrackingPolicy,
           locomotion: LocomotionPolicy,
         },
-        observations: { ...Observations, ...this.policyPlugins.observations },
+        observations: { ...this.policyPlugins.observations },
         // Custom terms read clip bytes via `runner.getMotionData` rather than fetching.
         motions: policy.motions,
         onnxSessions: this.policyGraphs,
@@ -1042,7 +1039,7 @@ export class mjswanRuntime {
       if (config.terminations && Object.keys(config.terminations).length > 0) {
         this.terminationManager = new TerminationManager(
           config.terminations,
-          { ...Terminations, ...this.policyPlugins.terminations },
+          { ...this.policyPlugins.terminations },
           runner,
           { onnxSessions: this.policyGraphs, readOnnxSlot: this.readOnnxSlot }
         );

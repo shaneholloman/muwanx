@@ -184,26 +184,8 @@ class TestBuilderGtmId:
 
 
 class TestClientBuilderCustomTerms:
-    """Custom terms are runtime plugins now (ADR 0004 §10): the engine gets empty
-    Custom* stubs, and author TS is collected for esbuild into a standalone ESM."""
-
-    def test_generate_empty_custom_stubs_writes_empty_registries(self, tmp_path):
-        project_dir = tmp_path / "template"
-        for sub in ("observation", "command", "termination", "event"):
-            (project_dir / "src" / "core" / sub).mkdir(parents=True)
-
-        ClientBuilder(project_dir).generate_empty_custom_stubs()
-
-        core = project_dir / "src" / "core"
-        obs = (core / "observation" / "custom_observations.ts").read_text()
-        evt = (core / "event" / "custom_events.ts").read_text()
-        assert "CustomObservations" in obs and "= {};" in obs
-        assert "CustomCommands" in (core / "command" / "custom_commands.ts").read_text()
-        assert (
-            "CustomTerminations"
-            in (core / "termination" / "custom_terminations.ts").read_text()
-        )
-        assert "CustomEvents" in evt and "= {};" in evt
+    """Custom terms are runtime plugins (ADR 0004 §10): author TS is collected for
+    esbuild into a standalone ESM the engine loads at runtime."""
 
     def test_collect_custom_terms_gathers_ts_src_by_kind(self, tmp_path, monkeypatch):
         src = tmp_path / "FooTerm.ts"

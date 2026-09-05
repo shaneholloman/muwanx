@@ -226,6 +226,12 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   env and let the build trace it. `scripts/verify_dsl_migration.py` goes with it.
 - `PolicyHandle.add_velocity_command` / `add_command_velocity`, both with no alias. Pass
   `commands={"velocity": mjswan.velocity_command(...)}` to `add_policy()` instead.
+- **The generated `custom_*.ts` registries**, and the `Observations` / `Terminations` /
+  `Events` modules that held nothing else. A `ts_src` term is collected into the standalone
+  `plugins.js` and reaches the engine as `EnginePlugins` (ADR 0004 §10), so nothing had
+  written those files since; the build stamped four empty registries out and the runtime
+  spread four empty objects into the maps the plugins already filled. The comments claiming
+  the registries held `ts_src` terms described the design they replaced.
 
 ### Fixed
 
