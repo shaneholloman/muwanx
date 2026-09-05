@@ -57,6 +57,16 @@ describe('HAND_SEGMENTS', () => {
     expect(HAND_SEGMENTS.some((s) => s.to.endsWith('-finger-metacarpal'))).toBe(false);
   });
 
+  // The thumb opposes every finger in a pinch, so its pinching face is one capsule
+  // rather than two that hinge against each other halfway along.
+  it('runs the thumb from its PIP joint straight to the tip', () => {
+    const thumb = HAND_SEGMENTS.filter((s) => s.to.startsWith('thumb-'));
+    expect(thumb.map((s) => `${s.from} -> ${s.to}`)).toEqual([
+      'thumb-metacarpal -> thumb-phalanx-proximal',
+      'thumb-phalanx-proximal -> thumb-tip',
+    ]);
+  });
+
   // Only the load-bearing bones cost degrees of freedom; the rest are near free.
   it('keeps the palm and the five fingertips as the only grips', () => {
     const grips = HAND_SEGMENTS.filter((s) => s.role === 'grip');
@@ -69,7 +79,7 @@ describe('HAND_SEGMENTS', () => {
       'ring-finger-tip',
       'pinky-finger-tip',
     ]);
-    expect(HAND_SEGMENTS.filter((s) => s.role === 'wall')).toHaveLength(10);
+    expect(HAND_SEGMENTS.filter((s) => s.role === 'wall')).toHaveLength(9);
   });
 });
 
@@ -98,6 +108,17 @@ describe('injectHandMocapXml', () => {
     const drawn = xml.match(/group="2" rgba="1 1 1 0\.\d+"/g)?.length ?? 0;
     expect(hidden + drawn).toBe(grips + walls);
     expect(hidden === 0 || drawn === 0).toBe(true);
+  });
+
+  // Adjacent bones share a joint, so their caps always overlap. Left colliding, a mocap
+  // wall shoved the dynamic capsule beside it 78 degrees off its bone.
+  it('lets the hand hit the scene but never itself', () => {
+    const xml = injectHandMocapXml(MINIMAL);
+    const capsules = HAND_SEGMENTS.length * 2;
+    expect(xml.match(/contype="2" conaffinity="1"/g)).toHaveLength(capsules);
+    // MuJoCo pairs on (contype1 & conaffinity2) || (contype2 & conaffinity1).
+    expect((2 & 1) || (2 & 1)).toBe(0);
+    expect((2 & 1) || (1 & 1)).toBe(1);
   });
 
   // Two dials that want opposite things, so a later edit cannot quietly conflate them.
@@ -348,6 +369,73 @@ describe('HandMocap against the real WASM', () => {
     mocap.update(mjModel, mjData);
     mujoco.mj_forward(mjModel, mjData);
     expect([0, 1, 2, 3].map((i) => mjData.xquat[id * 4 + i])).toEqual(aimed);
+  });
+
+  /**
+   * A flat adult hand, all 25 WebXR joints, in MuJoCo metres. Laid out anatomically so
+   * adjacent bones meet at shared joints, which is where a hand fights itself.
+   */
+  const FLAT_HAND: Record<string, readonly [number, number, number]> = Object.fromEntries(
+    Object.entries({
+      'wrist': [50, 128], 'thumb-metacarpal': [40, 118], 'thumb-phalanx-proximal': [22, 98],
+      'thumb-phalanx-distal': [12, 81], 'thumb-tip': [5, 67],
+      'index-finger-metacarpal': [47, 119], 'index-finger-phalanx-proximal': [34, 70],
+      'index-finger-phalanx-intermediate': [32, 45], 'index-finger-phalanx-distal': [31, 30],
+      'index-finger-tip': [30, 18],
+      'middle-finger-metacarpal': [50, 119], 'middle-finger-phalanx-proximal': [48, 66],
+      'middle-finger-phalanx-intermediate': [48, 38], 'middle-finger-phalanx-distal': [48, 21],
+      'middle-finger-tip': [48, 8],
+      'ring-finger-metacarpal': [53, 119], 'ring-finger-phalanx-proximal': [61, 69],
+      'ring-finger-phalanx-intermediate': [63, 43], 'ring-finger-phalanx-distal': [64, 27],
+      'ring-finger-tip': [65, 14],
+      'pinky-finger-metacarpal': [56, 120], 'pinky-finger-phalanx-proximal': [73, 76],
+      'pinky-finger-phalanx-intermediate': [76, 57], 'pinky-finger-phalanx-distal': [78, 46],
+      'pinky-finger-tip': [79, 35],
+    }).map(([k, [x, y]]) => [k, [(x - 50) * 0.00158, 0, 1 + (128 - y) * 0.00158] as const])
+  );
+
+  /**
+   * The one a headset caught twice. Every bone the hand has, held still: the dynamic grip
+   * capsules have to stay on the bones their mocap targets are aimed at. Before the hand
+   * stopped colliding with itself they came to rest up to 78 degrees off, because two
+   * bones meeting at a joint always overlap and a mocap wall wins every such push.
+   */
+  it('keeps every bone on its joints with the whole hand in the model', () => {
+    const { mjModel, mjData, hand, mocap, bodyOf } = setup();
+    for (const [joint, at] of Object.entries(FLAT_HAND)) hand.set(joint, at);
+    for (let i = 0; i < 100; i++) {
+      mocap.update(mjModel, mjData);
+      for (let sub = 0; sub < SUBSTEPS; sub++) mujoco.mj_step(mjModel, mjData);
+    }
+
+    // The scene's own cube resting on its floor is fine; two hand bones touching is not.
+    const handBodies = new Set(HAND_SEGMENTS.map((seg) => bodyOf(seg.to)));
+    const selfPairs: string[] = [];
+    for (let c = 0; c < mjData.ncon; c++) {
+      const contact = mjData.contact.get(c);
+      if (!contact) continue;
+      const [b1, b2] = [contact.geom1, contact.geom2].map((g: number) => mjModel.geom_bodyid[g]);
+      contact.delete();
+      if (handBodies.has(b1) && handBodies.has(b2)) selfPairs.push(`${b1}/${b2}`);
+    }
+    expect(selfPairs, 'the hand is colliding with itself').toEqual([]);
+
+    for (const seg of HAND_SEGMENTS) {
+      const [from, to] = [FLAT_HAND[seg.from], FLAT_HAND[seg.to]];
+      const bone = new THREE.Vector3(to[0] - from[0], to[1] - from[1], to[2] - from[2]).normalize();
+      const id = bodyOf(seg.to);
+      // The capsule runs along the body's local +z, which is the third column of `xmat`.
+      const axis = new THREE.Vector3(mjData.xmat[id * 9 + 2], mjData.xmat[id * 9 + 5], mjData.xmat[id * 9 + 8]);
+      const degrees = (Math.acos(Math.min(1, Math.abs(axis.dot(bone)))) * 180) / Math.PI;
+      expect(degrees, `${seg.to} axis`).toBeLessThan(1);
+
+      const mid = [0, 1, 2].map((i) => (from[i] + to[i]) / 2);
+      const off = Math.hypot(...[0, 1, 2].map((i) => mjData.xpos[id * 3 + i] - mid[i]));
+      expect(off, `${seg.to} centre`).toBeLessThan(0.001);
+      // Sized from the joints, so the ends are on them rather than a nominal hand's.
+      const span = Math.hypot(...[0, 1, 2].map((i) => to[i] - from[i]));
+      expect(mjModel.geom_size[mjModel.body_geomadr[id] * 3 + 1]).toBeCloseTo(span / 2, 6);
+    }
   });
 
   it('never arms the weld from contact alone', () => {

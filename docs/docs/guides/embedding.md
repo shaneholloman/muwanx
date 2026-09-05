@@ -135,8 +135,10 @@ whatever the wearer's hand measures.
 A bone enters the model according to what it has to do. The palm's two edges and the five
 fingertips carry load, so each is a mocap body welded to a dynamic twin: MuJoCo takes
 contact velocity from body velocity, and a body that is teleported every step has none, so
-a bare mocap bone can push something but never hold it. The ten bones in between only ever
-push, so they stay plain mocap — no degrees of freedom, and almost no cost. A grab starts
+a bare mocap bone can push something but never hold it. The nine bones in between only ever
+push, so they stay plain mocap — no degrees of freedom, and almost no cost. The bones
+never collide with each other: two that meet at a joint always overlap there, and a mocap
+one shoves the dynamic one beside it clean off its bone. A grab starts
 on three.js's `pinchstart` and ends on `pinchend`; the contacts under the hand at that
 moment choose which object the pinch takes hold of.
 

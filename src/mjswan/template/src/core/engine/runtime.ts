@@ -1596,6 +1596,39 @@ export class mjswanRuntime {
     return dynamic;
   }
 
+  /**
+   * A hand bone is sized from the wearer's own joints every frame, but `CapsuleGeometry`
+   * is built once when the scene loads, so the drawn capsule has to be remade to keep its
+   * ends on the joints. A no-op unless the bones are being drawn, which is a debug switch
+   * in `handMocap.ts`: with it off they have no mesh at all.
+   */
+  private resizeHandBoneMeshes(): void {
+    if (!this.mjModel || !this.bodies) {
+      return;
+    }
+    for (const bodyId of this.handMocap?.bodyIds() ?? []) {
+      const mesh = this.bodies[bodyId]?.children[0] as THREE.Mesh | undefined;
+      const geomId = mesh?.userData.geomId as number | undefined;
+      if (!mesh || geomId === undefined) {
+        continue;
+      }
+      const half = this.mjModel.geom_size[geomId * 3 + 1];
+      // Half a millimetre is under what a headset resolves, and it keeps tracking noise
+      // from rebuilding thirty-four geometries every frame.
+      if (Math.abs(half - ((mesh.userData.drawnHalf as number) ?? 0)) < 0.0005) {
+        continue;
+      }
+      mesh.userData.drawnHalf = half;
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.CapsuleGeometry(
+        this.mjModel.geom_size[geomId * 3],
+        half * 2.0,
+        20,
+        20
+      );
+    }
+  }
+
   private syncStaticBodiesFromData(): void {
     if (!this.mjModel || !this.mjData || !this.bodies) {
       return;
@@ -1699,6 +1732,7 @@ export class mjswanRuntime {
         }
       }
 
+      this.resizeHandBoneMeshes();
       updateLightsFromData(this.mujoco, this.mjData, this.lights);
 
       if (this.mujocoRoot && this.mujocoRoot.cylinders) {

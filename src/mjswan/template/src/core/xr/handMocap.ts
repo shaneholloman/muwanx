@@ -20,7 +20,7 @@
  *   velocity and a teleported mocap body has none, so a bare mocap bone can push but
  *   never hold: a squeezed object slides straight out of it.
  * - `wall` bones only ever push, so they stay plain mocap. Carrying no degrees of
- *   freedom is what makes the ten bones a hand needs for coverage nearly free.
+ *   freedom is what makes the nine bones a hand needs for coverage nearly free.
  *
  * Two stiffness dials pull in opposite directions, so they are set apart from each
  * other: the geom's `solref` is the grip and wants to be stiff, or a held object slips;
@@ -70,8 +70,10 @@ export const HAND_SEGMENTS: readonly Segment[] = [
   { from: 'wrist', to: 'index-finger-phalanx-proximal', radius: 0.02, length: 0.095, role: 'grip' },
   { from: 'wrist', to: 'pinky-finger-phalanx-proximal', radius: 0.02, length: 0.088, role: 'grip' },
   { from: 'thumb-metacarpal', to: 'thumb-phalanx-proximal', radius: 0.014, length: 0.046, role: 'wall' },
-  { from: 'thumb-phalanx-proximal', to: 'thumb-phalanx-distal', radius: 0.012, length: 0.032, role: 'wall' },
-  { from: 'thumb-phalanx-distal', to: 'thumb-tip', radius: 0.011, length: 0.026, role: 'grip' },
+  // The thumb's last two bones are one capsule, from the PIP joint straight to the tip:
+  // it is the face that opposes the fingers in a pinch, and a single span keeps that face
+  // continuous instead of hinging in the middle.
+  { from: 'thumb-phalanx-proximal', to: 'thumb-tip', radius: 0.012, length: 0.058, role: 'grip' },
   ...FINGERS.flatMap((finger): Segment[] => {
     const [proximal, intermediate, distal] = FINGER_BONES[finger];
     return [
@@ -106,13 +108,27 @@ const GRIP_MASS = 0.05;
 const PALM_MASS = 0.15;
 
 /**
+ * The hand collides with the scene but never with itself. Two adjacent bones share a
+ * joint, so their capsule caps always overlap, and a mocap wall — immovable, and with no
+ * velocity for the solver to work from — shoves the dynamic grip capsule next to it out
+ * of its weld. Measured on a flat hand held still, that was every contact in the scene
+ * and left the fingertips 78 degrees off their bones.
+ *
+ * MuJoCo pairs two geoms when `(contype1 & conaffinity2) || (contype2 & conaffinity1)`.
+ * At `2 / 1` that is false for two hand geoms and true against anything at the default
+ * `1 / 1`, which is the whole scene.
+ */
+const SELF_EXCLUDE = 'contype="2" conaffinity="1"';
+
+/**
  * Dial one: contact. Stiff, and `priority` so the hand's value wins over the object's.
  * At MuJoCo's default the reaction force saturates far below a grip, and a pinched
  * 50 g box slides out however hard it is squeezed.
  */
-const CONTACT = 'condim="6" friction="2 0.05 0.001" priority="1" solref="0.004 1" solimp="0.99 0.999 0.001"';
+const CONTACT =
+  `condim="6" friction="2 0.05 0.001" priority="1" solref="0.004 1" solimp="0.99 0.999 0.001" ${SELF_EXCLUDE}`;
 /** A wall never has to hold anything, so it keeps MuJoCo's ordinary contact. */
-const WALL_CONTACT = 'condim="4" friction="1.5 0.02 0.001"';
+const WALL_CONTACT = `condim="4" friction="1.5 0.02 0.001" ${SELF_EXCLUDE}`;
 /**
  * Dial two: the hand's own suspension. Soft, so a hand driven into something immovable
  * stops at its surface instead of punching 63 mm through it, and so a reacquired hand
