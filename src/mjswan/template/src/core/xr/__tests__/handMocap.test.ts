@@ -1,7 +1,7 @@
 /**
  * The hand that runs without a headset: the bone table, the MJCF the loader injects, the
- * rotation that aims a capsule, and — against the real WASM — the one thing the design
- * exists for, which is carrying a load rather than only shoving it.
+ * rotation that aims a capsule, and — against the real WASM — carrying a load rather
+ * than only shoving it.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as THREE from 'three';
@@ -101,10 +101,9 @@ describe('injectHandMocapXml', () => {
     expect(xml.match(/mass="0.05"/g)).toHaveLength(10);
     expect(xml).toContain('name="mjswan_xr1_index-finger-phalanx-intermediate_body"');
     expect(xml).toContain('name="mjswan_xr1_grab"');
-    // Every bone sits in one group, and the scene builder draws nothing at `group >= 3`.
-    // DEBUG_DRAW_BONES picks which: hidden behind three.js's hand model, or drawn over it.
+    // Every bone sits in one group, hidden or drawn, as DEBUG_DRAW_BONES picks: the
+    // scene builder draws nothing at `group >= 3`.
     const hidden = xml.match(/group="3"/g)?.length ?? 0;
-    // White, like three.js's joint spheres, so only the shape says whether a bone is off.
     const drawn = xml.match(/group="2" rgba="1 1 1 0\.\d+"/g)?.length ?? 0;
     expect(hidden + drawn).toBe(grips + walls);
     expect(hidden === 0 || drawn === 0).toBe(true);
@@ -181,15 +180,11 @@ describe('quatFromZ', () => {
  */
 class FakeHand {
   readonly joints: Record<string, { visible: boolean; getWorldPosition(v: THREE.Vector3): THREE.Vector3 }> = {};
-  private readonly listeners: Record<string, (() => void)[]> = {};
+  /** three.js keeps this on the hand itself, and it is what starts and stops a grab. */
+  readonly inputState = { pinching: false };
 
-  addEventListener(type: string, handler: () => void): void {
-    (this.listeners[type] ??= []).push(handler);
-  }
-
-  /** Fire three.js's pinch events, which is what starts and stops a grab. */
   pinch(on: boolean): void {
-    for (const handler of this.listeners[on ? 'pinchstart' : 'pinchend'] ?? []) handler();
+    this.inputState.pinching = on;
   }
 
   set(joint: string, mjc: readonly [number, number, number]): void {
@@ -222,8 +217,8 @@ describe('HandMocap against the real WASM', () => {
 
   /**
    * Palm flat against one face of the box, four fingertips against the other, then lift.
-   * `squeeze` is how far past the surface the two sides are driven; `oneSided` drops the
-   * fingers, so nothing opposes the palm and the box has only friction to hang from.
+   * `oneSided` drops the fingers, so nothing opposes the palm and the box has only
+   * friction to hang from.
    */
   function clampAndLift(mass: number, { oneSided = false, pinch = true } = {}) {
     const xml = injectHandMocapXml(cubeScene(mass));
@@ -292,8 +287,8 @@ describe('HandMocap against the real WASM', () => {
   // The whole point of the dynamic twin. A plain mocap hand scores 0 here, at any mass.
   it.each([0.15, 0.6, 2.0])('carries a %s kg box 25 cm up and holds it', (mass) => {
     const { lifted, held } = clampAndLift(mass);
-    // The hand travels 25 cm. A load hangs one to two centimetres below that against the
-    // soft weld, which is the hand's suspension yielding, and recovers once it stops.
+    // The hand travels 25 cm; a load hangs one to two centimetres below that against the
+    // soft weld, and recovers once it stops.
     expect(lifted).toBeGreaterThan(0.21);
     // Not creeping. A grip that is slowly slipping loses centimetres over the half second.
     expect(held).toBeGreaterThan(lifted - 0.002);
@@ -395,10 +390,10 @@ describe('HandMocap against the real WASM', () => {
   );
 
   /**
-   * The one a headset caught twice. Every bone the hand has, held still: the dynamic grip
-   * capsules have to stay on the bones their mocap targets are aimed at. Before the hand
-   * stopped colliding with itself they came to rest up to 78 degrees off, because two
-   * bones meeting at a joint always overlap and a mocap wall wins every such push.
+   * Every bone the hand has, held still: the dynamic grip capsules have to stay on the
+   * bones their mocap targets are aimed at. Before the hand stopped colliding with
+   * itself they came to rest up to 78 degrees off, since two bones meeting at a joint
+   * always overlap and a mocap wall wins every such push.
    */
   it('keeps every bone on its joints with the whole hand in the model', () => {
     const { mjModel, mjData, hand, mocap, bodyOf } = setup();

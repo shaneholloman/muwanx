@@ -2,16 +2,11 @@
  * WebXR hand tracking as bodies inside the simulation, so a hand can be touched back
  * rather than only shoving forces in.
  *
- * A hand enters as capsules, one per bone between two adjacent WebXR joints. A capsule
- * is a sphere swept along a cylinder, so a finger is continuous rather than a row of
- * balls with notches between them. Each one is sized from the two joints it spans, so
- * its ends sit on them: WebXR reports no bone lengths, and a nominal adult hand is the
- * wrong length for most wearers.
- *
- * The bones are normally compiled in `group="3"`, which the scene builder skips, so they
- * are invisible: the hand on screen is three.js's own joint-sphere model, which is what
- * makes it read as a hand. Physics and rendering split cleanly, with no double image.
- * `DEBUG_DRAW_BONES` puts them in a drawn group instead, to check where the physics is.
+ * A hand enters as capsules, one per bone between two adjacent WebXR joints, each sized
+ * from the two joints it spans: WebXR reports no bone lengths, and a nominal adult hand
+ * is the wrong length for most wearers. They compile into the group the scene builder
+ * skips, so the hand on screen is three.js's own joint-sphere model and there is no
+ * double image.
  *
  * How a bone enters depends on what it has to do:
  *
@@ -21,17 +16,12 @@
  *   never hold: a squeezed object slides straight out of it.
  * - `wall` bones only ever push, so they stay plain mocap. Carrying no degrees of
  *   freedom is what makes the nine bones a hand needs for coverage nearly free.
- *
- * Two stiffness dials pull in opposite directions, so they are set apart from each
- * other: the geom's `solref` is the grip and wants to be stiff, or a held object slips;
- * the weld's `solref` is the hand's own suspension and wants to be soft, or the hand
- * punches through whatever it leans on.
  */
 import * as THREE from 'three';
 import type { MainModule, MjData, MjModel } from 'mujoco';
 
 import { threeToMjcCoordinate } from '../scene/coordinate';
-import { normalizeQuat, quatApplyInv, quatInverse, quatMultiply } from '../observation/math';
+import { quatApplyInv, quatInverse, quatMultiply } from '../observation/math';
 
 type Quat = readonly [number, number, number, number];
 
@@ -48,75 +38,62 @@ type Segment = {
 
 const FINGERS = ['index', 'middle', 'ring', 'pinky'] as const;
 
-/** Adult-hand proximal / intermediate / distal bone lengths, metres, as a starting size. */
-const FINGER_BONES: Record<(typeof FINGERS)[number], readonly [number, number, number]> = {
-  index: [0.04, 0.024, 0.019],
-  middle: [0.045, 0.027, 0.02],
-  ring: [0.041, 0.026, 0.02],
-  pinky: [0.032, 0.018, 0.018],
-};
-const FINGER_RADII = [0.01, 0.009, 0.008] as const;
+/**
+ * Nominal adult proximal / intermediate / distal finger bone, metres. One set for all
+ * four fingers: the length lasts until the first tracked frame measures the wearer's own
+ * (it only sets the compiled inertia), and the four differ by a millimetre anyway.
+ */
+const FINGER_BONES = [
+  { radius: 0.01, length: 0.04 },
+  { radius: 0.009, length: 0.025 },
+  { radius: 0.008, length: 0.019 },
+] as const;
 
 export const HAND_SEGMENTS: readonly Segment[] = [
-  // The palm's two edges, along the index and pinky metacarpals. One capsule down the
-  // middle would be a cylinder and anything round would roll straight off it; two make
-  // the shallow V a real palm has, which an object can sit in. The first is also the
-  // frame a grabbed object is held in.
+  // The palm's two edges, along the index and pinky metacarpals: one capsule down the
+  // middle would be a cylinder that anything round rolls off, two make the shallow V an
+  // object can sit in. The first is also the frame a grabbed object is held in.
   //
   // They end at the knuckles, not at `*-finger-metacarpal`: that joint is the *base* of
-  // the metacarpal bone, a couple of centimetres from the wrist, so aiming at it read a
-  // 95 mm capsule off a 15 mm span — the direction was mostly tracking noise, and 40 mm
-  // of palm hung behind the wrist.
+  // the metacarpal, a couple of centimetres from the wrist, so aiming at it read a 95 mm
+  // capsule off a 15 mm span and hung 40 mm of palm behind the wrist.
   { from: 'wrist', to: 'index-finger-phalanx-proximal', radius: 0.02, length: 0.095, role: 'grip' },
   { from: 'wrist', to: 'pinky-finger-phalanx-proximal', radius: 0.02, length: 0.088, role: 'grip' },
   { from: 'thumb-metacarpal', to: 'thumb-phalanx-proximal', radius: 0.014, length: 0.046, role: 'wall' },
-  // The thumb's last two bones are one capsule, from the PIP joint straight to the tip:
-  // it is the face that opposes the fingers in a pinch, and a single span keeps that face
-  // continuous instead of hinging in the middle.
+  // The thumb's last two bones are one capsule: it is the face that opposes the fingers
+  // in a pinch, and a single span keeps that face from hinging in the middle.
   { from: 'thumb-phalanx-proximal', to: 'thumb-tip', radius: 0.012, length: 0.058, role: 'grip' },
-  ...FINGERS.flatMap((finger): Segment[] => {
-    const [proximal, intermediate, distal] = FINGER_BONES[finger];
-    return [
-      {
-        from: `${finger}-finger-phalanx-proximal`,
-        to: `${finger}-finger-phalanx-intermediate`,
-        radius: FINGER_RADII[0],
-        length: proximal,
-        role: 'wall',
-      },
-      {
-        from: `${finger}-finger-phalanx-intermediate`,
-        to: `${finger}-finger-phalanx-distal`,
-        radius: FINGER_RADII[1],
-        length: intermediate,
-        role: 'wall',
-      },
-      {
-        from: `${finger}-finger-phalanx-distal`,
-        to: `${finger}-finger-tip`,
-        radius: FINGER_RADII[2],
-        length: distal,
-        role: 'grip',
-      },
-    ];
-  }),
+  ...FINGERS.flatMap((finger): Segment[] => [
+    {
+      from: `${finger}-finger-phalanx-proximal`,
+      to: `${finger}-finger-phalanx-intermediate`,
+      ...FINGER_BONES[0],
+      role: 'wall',
+    },
+    {
+      from: `${finger}-finger-phalanx-intermediate`,
+      to: `${finger}-finger-phalanx-distal`,
+      ...FINGER_BONES[1],
+      role: 'wall',
+    },
+    { from: `${finger}-finger-phalanx-distal`, to: `${finger}-finger-tip`, ...FINGER_BONES[2], role: 'grip' },
+  ]),
 ];
 
 /** Grip mass, kg: how hard a fingertip can shove something heavy. */
 const GRIP_MASS = 0.05;
-/** The palm is what a whole arm leans through. Its two bones are the ones off the wrist. */
+/** The palm is what a whole arm leans through; its bones are the two off the wrist. */
 const PALM_MASS = 0.15;
 
 /**
- * The hand collides with the scene but never with itself. Two adjacent bones share a
- * joint, so their capsule caps always overlap, and a mocap wall — immovable, and with no
- * velocity for the solver to work from — shoves the dynamic grip capsule next to it out
- * of its weld. Measured on a flat hand held still, that was every contact in the scene
- * and left the fingertips 78 degrees off their bones.
+ * The hand collides with the scene but never with itself: two adjacent bones share a
+ * joint, so their caps always overlap, and a mocap wall — immovable, and with no velocity
+ * for the solver to work from — shoves the dynamic grip capsule beside it out of its
+ * weld, leaving the fingertips 78 degrees off their bones on a flat hand held still.
  *
- * MuJoCo pairs two geoms when `(contype1 & conaffinity2) || (contype2 & conaffinity1)`.
- * At `2 / 1` that is false for two hand geoms and true against anything at the default
- * `1 / 1`, which is the whole scene.
+ * MuJoCo pairs two geoms when `(contype1 & conaffinity2) || (contype2 & conaffinity1)`:
+ * at `2 / 1` that is false between two hand geoms and true against the default `1 / 1`,
+ * which is the whole scene.
  */
 const SELF_EXCLUDE = 'contype="2" conaffinity="1"';
 
@@ -137,23 +114,21 @@ const WALL_CONTACT = `condim="4" friction="1.5 0.02 0.001" ${SELF_EXCLUDE}`;
 const WELD = 'solref="0.02 1" solimp="0.95 0.99 0.001"';
 
 /**
- * Debug: draw the bones alongside three.js's hand model, to see where the physics
- * actually is. `group="3"` is what the scene builder skips, so a group it draws plus an
- * alpha is the whole switch. White like the joint spheres, so a bone off its joints
- * shows up as a shape that does not line up rather than as a second colour. Set back to
- * `false` to hide them again.
+ * Debug: draw the bones over three.js's hand model to see where the physics actually is.
+ * `group="3"` is what the scene builder skips, so a group it draws plus an alpha is the
+ * whole switch. White like the joint spheres, so a bone off its joints shows up as a
+ * shape that does not line up rather than as a second colour.
  */
 const DEBUG_DRAW_BONES = true;
 const GEOM_VISIBILITY = DEBUG_DRAW_BONES ? 'group="2" rgba="1 1 1 0.1"' : 'group="3"';
 
-/** Where an untracked hand waits: above any scene, and outside the floor plane, which
+/** Where an untracked hand waits: above any scene, and clear of the floor plane, which
  * is solid all the way down. */
 const PARKED_Z = 100;
 
 /**
- * Below this the two joints are effectively on top of each other: `normalize` gives back
- * a zero vector, `quatFromZ` reads that as no rotation, and the bone snaps to world +z.
- * The shortest real bone is 18 mm, so anything under this is a bad read, not a pose.
+ * Below this the two joints read as the same point and the bone snaps to world +z. The
+ * shortest real bone is 18 mm, so anything under this is a bad read, not a pose.
  */
 const MIN_SPAN = 0.005;
 
@@ -163,6 +138,9 @@ const PARKED_SPACING = 0.05;
 const HAND_COUNT = 2;
 
 const IDENTITY_QUAT: Quat = [1, 0, 0, 0];
+
+/** A capsule runs along its body's local +z; a bone direction is aimed from there. */
+const CAPSULE_AXIS = new THREE.Vector3(0, 0, 1);
 
 function bodyName(hand: number, segment: Segment, kind: 'target' | 'body'): string {
   return `mjswan_xr${hand}_${segment.to}_${kind}`;
@@ -179,12 +157,8 @@ function parkedPosition(hand: number, index: number): THREE.Vector3 {
 
 /** Rotation taking the capsule's local +z onto `d`, in MuJoCo's `(w, x, y, z)` order. */
 export function quatFromZ(d: THREE.Vector3): Quat {
-  const w = 1 + d.z;
-  // Antiparallel: the axis is undefined, and any half turn about one perpendicular to z
-  // maps +z to -z. A capsule is symmetric, so which one does not matter.
-  if (w < 1e-6) return [0, 1, 0, 0];
-  const q = normalizeQuat([w, -d.y, d.x, 0]);
-  return [q[0], q[1], q[2], q[3]];
+  const q = new THREE.Quaternion().setFromUnitVectors(CAPSULE_AXIS, d);
+  return [q.w, q.x, q.y, q.z];
 }
 
 /**
@@ -267,7 +241,7 @@ type BoundHand = {
   /** The frame a grabbed object is held in; null if the model lacks the palm. */
   palm: BoundSegment | null;
   weldId: number;
-  grabbed: number | null;
+  grabbed: boolean;
 };
 
 export class HandMocap {
@@ -279,20 +253,8 @@ export class HandMocap {
   private readonly from = new THREE.Vector3();
   private readonly to = new THREE.Vector3();
 
-  /** Per hand, whether three.js says the thumb and index tips are currently pinched. */
-  private readonly pinching: boolean[];
-
   constructor(hands: THREE.XRHandSpace[]) {
     this.hands = hands;
-    this.pinching = hands.map(() => false);
-    for (const [hand, space] of hands.entries()) {
-      space.addEventListener('pinchstart', () => {
-        this.pinching[hand] = true;
-      });
-      space.addEventListener('pinchend', () => {
-        this.pinching[hand] = false;
-      });
-    }
   }
 
   /** Every body a bone occupies, so the viewer can keep parked hands out of its bounds. */
@@ -335,7 +297,7 @@ export class HandMocap {
         segments,
         palm: segments.find((s) => s.segment === HAND_SEGMENTS[0]) ?? null,
         weldId: mujoco.mj_name2id(mjModel, equality, weldName(hand)),
-        grabbed: null,
+        grabbed: false,
       });
     }
     for (let g = 0; g < mjModel.ngeom; g++) {
@@ -368,11 +330,11 @@ export class HandMocap {
         const b = threeToMjcCoordinate(this.to);
         const delta = b.clone().sub(a);
         const span = delta.length();
-        // One bad frame would otherwise fling the bone off to world +z; holding last
-        // frame's pose is invisible at the rate these are written.
+        // One bad frame would fling the bone to world +z; holding last frame's pose is
+        // invisible at the rate these are written.
         if (span < MIN_SPAN) continue;
-        // The bone table's length is only the compiled default. A capsule sized from the
-        // joints in front of it spans them exactly, on whichever hand is wearing it.
+        // The table's length is only the compiled default; the measured span is the one
+        // on the hand actually wearing it.
         mjModel.geom_size[bound.geomAdr * 3 + 1] = span / 2;
         const pos = a.clone().add(b).multiplyScalar(0.5);
         const quat = quatFromZ(delta.divideScalar(span));
@@ -424,32 +386,30 @@ export class HandMocap {
   }
 
   /**
-   * Start and stop grabs from three.js's pinch events. `pinchstart` fires when the thumb
-   * and index tips close to within 15 mm, which is a deliberate gesture rather than
-   * something a hand does by brushing past, and on a headset it proved steadier than
-   * inferring the grab from MuJoCo's contacts. Contacts still choose *what* is grabbed:
-   * the body the hand has the most geoms on when the pinch starts.
+   * Start and stop grabs from three.js's pinch events: `pinchstart` fires when the thumb
+   * and index tips close to within 15 mm, a deliberate gesture rather than something a
+   * hand does brushing past, and steadier on a headset than inferring the grab from
+   * contacts. Contacts still choose *what*: the body the hand has the most geoms on.
    */
   private settleGrabs(mjModel: MjModel, mjData: MjData): void {
     const touched = this.touchedBodies(mjModel, mjData);
     for (const [hand, boundHand] of this.bound.entries()) {
       if (boundHand.weldId < 0) continue;
-      if (!this.pinching[hand]) {
-        if (boundHand.grabbed !== null) this.release(mjData, boundHand);
+      if (!this.hands[hand]?.inputState.pinching) {
+        if (boundHand.grabbed) this.release(mjData, boundHand);
         continue;
       }
       const target = touched.get(hand);
       // The weld holds the object in the palm's frame, so a parked palm would drag it
       // out of the scene.
-      if (boundHand.grabbed !== null || target === undefined || !boundHand.palm?.tracked) continue;
+      if (boundHand.grabbed || target === undefined || !boundHand.palm?.tracked) continue;
       this.grab(mjModel, mjData, boundHand, boundHand.palm.bodyId, target);
     }
   }
 
   /** Per hand, the body it has the most geoms touching. */
   private touchedBodies(mjModel: MjModel, mjData: MjData): Map<number, number> {
-    type Touch = { hand: number; body: number; geoms: Set<number> };
-    const touches = new Map<string, Touch>();
+    const touches = new Map<number, Map<number, Set<number>>>();
     for (let c = 0; c < mjData.ncon; c++) {
       const contact = mjData.contact.get(c);
       if (!contact) continue;
@@ -465,20 +425,19 @@ export class HandMocap {
       const hand = hand1 ?? (hand2 as number);
       const body: number = mjModel.geom_bodyid[handFirst ? geom2 : geom1];
       if (body === 0) continue;
-      const key = `${hand}:${body}`;
-      const entry: Touch = touches.get(key) ?? { hand, body, geoms: new Set() };
-      entry.geoms.add(handFirst ? geom1 : geom2);
-      touches.set(key, entry);
+      const byBody = touches.get(hand) ?? new Map<number, Set<number>>();
+      touches.set(hand, byBody);
+      const geoms = byBody.get(body) ?? new Set<number>();
+      byBody.set(body, geoms);
+      geoms.add(handFirst ? geom1 : geom2);
     }
 
-    const best = new Map<number, number>();
-    const bestGeoms = new Map<number, number>();
-    for (const { hand, body, geoms } of touches.values()) {
-      if (geoms.size <= (bestGeoms.get(hand) ?? 0)) continue;
-      bestGeoms.set(hand, geoms.size);
-      best.set(hand, body);
-    }
-    return best;
+    return new Map(
+      [...touches].map(([hand, byBody]) => [
+        hand,
+        [...byBody].reduce((a, b) => (b[1].size > a[1].size ? b : a))[0],
+      ]),
+    );
   }
 
   /**
@@ -505,11 +464,11 @@ export class HandMocap {
     mjModel.eq_obj1id[hand.weldId] = palm;
     mjModel.eq_obj2id[hand.weldId] = target;
     mjData.eq_active[hand.weldId] = 1;
-    hand.grabbed = target;
+    hand.grabbed = true;
   }
 
   private release(mjData: MjData, hand: BoundHand): void {
     if (hand.weldId >= 0) mjData.eq_active[hand.weldId] = 0;
-    hand.grabbed = null;
+    hand.grabbed = false;
   }
 }

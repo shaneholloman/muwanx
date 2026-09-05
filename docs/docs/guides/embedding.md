@@ -125,25 +125,12 @@ keeps you on top of a slope instead of inside it.
 `hands=1`, or `createEngine(element, { handTracking: true })` when you drive the engine
 yourself, makes a headset's tracked hands part of the physics rather than a pair of
 floating models. On **Enter VR**, a Quest 3 can bat a scene's objects around, rest one on
-an open palm, and pick one up.
-
-What you see is three.js's own hand model — one sphere per WebXR joint, at the radius the
-headset reports. What the physics sees is a capsule per bone, compiled in `group="3"` so it
-is never drawn and sized each frame from the two joints it spans, so its ends sit on them
-whatever the wearer's hand measures.
-
-A bone enters the model according to what it has to do. The palm's two edges and the five
-fingertips carry load, so each is a mocap body welded to a dynamic twin: MuJoCo takes
-contact velocity from body velocity, and a body that is teleported every step has none, so
-a bare mocap bone can push something but never hold it. The nine bones in between only ever
-push, so they stay plain mocap — no degrees of freedom, and almost no cost. The bones
-never collide with each other: two that meet at a joint always overlap there, and a mocap
-one shoves the dynamic one beside it clean off its bone. A grab starts
-on three.js's `pinchstart` and ends on `pinchend`; the contacts under the hand at that
-moment choose which object the pinch takes hold of.
+an open palm, and pick one up: pinch to grab, release to drop. What you see is three.js's
+own hand model, and the physics under it is sized to the wearer's hand rather than to a
+nominal adult one.
 
 It is opt-in because both halves cost something: every scene the build loads gains the
-hand bodies, at about 1.6x per physics step, and the headset must grant the
+hand bodies, roughly 1.6x the physics cost, and the headset must grant the
 `hand-tracking` feature — **Meta Quest** is the recommended one, since its browser ships
 WebXR hand tracking with nothing to install. Ordinary desktop and mobile viewing is
 unaffected: untracked hands sit parked far above the scene.

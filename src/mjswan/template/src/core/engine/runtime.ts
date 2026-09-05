@@ -334,7 +334,7 @@ export class mjswanRuntime {
     if (handTracking) {
       const hands = [0, 1].map((i) => this.renderer.xr.getHand(i));
       // Spheres, not the `mesh` profile: that one fetches a glTF from a CDN, and a built
-      // mjswan app is a self-contained static site.
+      // mjswan app is self-contained.
       const handModels = new XRHandModelFactory();
       for (const hand of hands) {
         hand.add(handModels.createHandModel(hand, 'spheres'));
@@ -600,8 +600,8 @@ export class mjswanRuntime {
       // written before injection zero-pads the appended free joints: without this the
       // fingertips spawn at the world origin, inside the scene.
       this.handMocap?.park(this.mjData);
-      // Tagged so `frameCamera` can leave them out: with DEBUG_DRAW_BONES on the bones
-      // are drawn, and a parked hand waits 100 m above the scene.
+      // Tagged so `frameCamera` can leave them out: a parked hand waits 100 m up, and
+      // with DEBUG_DRAW_BONES on it is drawn there.
       for (const bodyId of this.handMocap?.bodyIds() ?? []) {
         if (this.bodies[bodyId]) {
           this.bodies[bodyId].userData.xrHand = true;
@@ -1597,10 +1597,9 @@ export class mjswanRuntime {
   }
 
   /**
-   * A hand bone is sized from the wearer's own joints every frame, but `CapsuleGeometry`
-   * is built once when the scene loads, so the drawn capsule has to be remade to keep its
-   * ends on the joints. A no-op unless the bones are being drawn, which is a debug switch
-   * in `handMocap.ts`: with it off they have no mesh at all.
+   * A hand bone is resized every frame, but `CapsuleGeometry` is built once at load, so
+   * the drawn capsule has to be remade to keep its ends on the joints. A no-op unless
+   * `handMocap.ts`'s debug switch is drawing the bones: with it off they have no mesh.
    */
   private resizeHandBoneMeshes(): void {
     if (!this.mjModel || !this.bodies) {
@@ -1614,7 +1613,7 @@ export class mjswanRuntime {
       }
       const half = this.mjModel.geom_size[geomId * 3 + 1];
       // Half a millimetre is under what a headset resolves, and it keeps tracking noise
-      // from rebuilding thirty-four geometries every frame.
+      // from rebuilding every geometry every frame.
       if (Math.abs(half - ((mesh.userData.drawnHalf as number) ?? 0)) < 0.0005) {
         continue;
       }
