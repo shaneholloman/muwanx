@@ -15,7 +15,7 @@ import mujoco
 from .adapters import apply_mjlab_sim_options, ensure_mjlab_extensions
 from .envs.mdp.events import apply_terrain_spawn
 from .scene import SceneConfig, SceneHandle, _env_cfg_control_dt
-from .utils import collect_spec_assets
+from .utils import assign_id, collect_spec_assets, name2id
 from .viewer import ViewerConfig
 
 if TYPE_CHECKING:
@@ -29,11 +29,21 @@ class ProjectConfig:
     name: str
     """Name of the project."""
 
-    id: str | None = None
-    """Optional ID for the project used in URL routing (e.g., 'menagerie' for /#/menagerie/)."""
+    id: str = ""
+    """Sanitized name, unique within the document: the project's directory in the build
+    and its ``?project=`` value (ADR 0006 §4). Assigned by :meth:`Builder.add_project`;
+    defaults to ``name2id(name)``."""
 
     scenes: list[SceneConfig] = field(default_factory=list)
     """List of scenes in the project."""
+
+    default: bool = False
+    """Open the app on this project. At most one project may set it; when none does,
+    the first added is the default."""
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            self.id = name2id(self.name)
 
 
 class ProjectHandle:
@@ -53,8 +63,8 @@ class ProjectHandle:
         return self._config.name
 
     @property
-    def id(self) -> str | None:
-        """Optional ID of the project for URL routing."""
+    def id(self) -> str:
+        """The project's id: its directory in the build and its ``?project=`` value."""
         return self._config.id
 
     def add_scene(
@@ -93,10 +103,8 @@ class ProjectHandle:
                 :meth:`add_scene_mjlab` fills it in from the task.
             events: Optional dict of ``EventTermCfg`` instances (mjswan or mjlab).
                 Equivalent to calling :meth:`~mjswan.scene.SceneHandle.set_events`
-                afterwards. Events are scene-scoped rather than per-policy: the runtime
-                builds one ``EventManager`` per scene and keeps it across policy
-                switches, and ``mode="startup"`` fires once at scene load, before any
-                policy is chosen (ADR 0004 §10, ADR 0005 brief §4).
+                afterwards: the default every policy's MDP on this scene takes for its
+                events (ADR 0006 §3).
 
         Returns:
             SceneHandle for adding policies and further configuration.
@@ -126,6 +134,9 @@ class ProjectHandle:
 
         scene_config = SceneConfig(
             name=name,
+            id=assign_id(
+                name, {s.id for s in self._config.scenes}, kind="scene", stacklevel=4
+            ),
             model=model,
             spec=spec,
             metadata=metadata,
@@ -229,11 +240,10 @@ class ProjectHandle:
         terrain_data = _extract_terrain_data(scene)
         if terrain_data:
             handle._config.terrain_data = terrain_data
-        scene_events = (
-            events if events is not None else getattr(env_cfg, "events", None)
-        )
-        if scene_events:
-            handle.set_events(scene_events)
+        if events is not None:
+            handle.set_events(events)
+        elif getattr(env_cfg, "events", None):
+            handle.set_events(env_cfg.events, _explicit=False)
         # After both: it rewrites an adapted event term using the patch table.
         apply_terrain_spawn(handle._config)
         return handle

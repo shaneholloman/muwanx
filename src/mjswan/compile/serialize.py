@@ -13,6 +13,8 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+from .._graph_io import onnx_ref as _onnx_ref
+from .._graph_io import write_onnx as _write_onnx
 from .tracer import CommandExport, slots_json
 
 
@@ -83,19 +85,21 @@ def write_command_artifact(
     export: CommandExport,
     out_dir: str | Path,
     *,
+    scope: str | None = None,
     resampling_time_range: tuple[float, float] | None = None,
     debug_vis: bool = False,
     ui: dict[str, Any] | None = None,
     viz: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Write ``<out_dir>/command/<name>.onnx`` and return its config entry."""
-    onnx_ref = f"command/{export.name}.onnx"
-    path = Path(out_dir) / onnx_ref
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(export.onnx_bytes)
+    """Write ``<out_dir>/[<scope>/]command/<name>.onnx`` and return its config entry.
+
+    *scope* is the owning policy's id; see :func:`mjswan._graph_io.onnx_ref`.
+    """
+    ref = _onnx_ref("command", export.name, scope)
+    _write_onnx(Path(out_dir), ref, export.onnx_bytes)
     return command_config(
         export,
-        onnx_ref=onnx_ref,
+        onnx_ref=ref,
         resampling_time_range=resampling_time_range,
         debug_vis=debug_vis,
         ui=ui,

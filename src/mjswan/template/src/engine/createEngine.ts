@@ -156,10 +156,8 @@ class Engine implements MjswanEngine {
         policy: input.policy ? await resolvePolicy(input.policy) : null,
         splat: input.splat ? await resolveSplat(input.splat) : null,
         viewer: input.viewer ?? null,
-        events: input.events ?? null,
         terrainData: input.terrainData ?? null,
         controlDt: input.controlDt ?? null,
-        graphs: await resolveGraphs(input.graphs),
         plugins: input.plugins,
       };
       await this.runtime.loadEnvironment(scene);

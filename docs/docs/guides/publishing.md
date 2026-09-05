@@ -19,16 +19,20 @@ simulation with its own pinned copy of the engine, loaded from a CDN.
 
 | Uploaded | Not uploaded |
 |---|---|
-| `assets/config.json` | `index.html`, `logo.svg`, `manifest.json`, `robots.txt` |
-| `scene.mjz` / `scene.mjb` | the compiled JS/CSS bundle and its WASM |
-| `<policy>.onnx`, `<policy>.json` | `_headers`, `coi-serviceworker.js` |
-| traced graphs (`obs/`, `term/`, `command/`, `event/`) | |
-| `<motion>.npz`, `<splat>.spz`, `.ply` colliders | |
+| `manifest.json` | `index.html`, `logo.svg`, `robots.txt` |
+| `scene.mjz` / `scene.mjb` | the compiled JS/CSS bundle and its WASM (`assets/`) |
+| `policy/<policy-id>.onnx` | `_headers`, `coi-serviceworker.js` |
+| traced graphs (`mdp/<mdp-id>/{obs,term,command,event}/`) | |
+| `assets/<motion-id>.npz`, `assets/<splat-id>.spz`, `.ply` colliders | |
+
+What travels is exactly the [simulation document](../getting-started/core-concepts.md#output-structure),
+so a `.swn` written by `app.save_document()` publishes the same file set as the directory
+it came from: `mjswan publish sim.swn`.
 
 Limits: 50 MB per file, 200 MB total, 64 files.
 
 !!! warning "Custom-JavaScript builds are rejected"
-    A build whose `config.json` carries `uses_custom_js: true` — one using a
+    A build whose `manifest.json` carries `uses_custom_js: true` — one using a
     `*Binding` with `ts_src`, i.e. an author-written TypeScript term class — cannot be
     published. Cloud will not execute author-supplied code in its own origin. Traced ONNX
     terms are fine; they are inert data run by a fixed runtime. This is checked locally
@@ -91,5 +95,5 @@ flow is skipped:
 ## Embedding a published simulation
 
 A published page can be embedded like any other, and the npm engine can load a published
-`config.json` directly. See [Embedding](embedding.md) and the
+`manifest.json` directly. See [Embedding](embedding.md) and the
 [Engine API](../api/engine.md).

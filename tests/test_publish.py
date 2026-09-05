@@ -104,40 +104,52 @@ def _make_dist(tmp_path: Path, *, uses_custom_js: bool = False) -> Path:
     """A realistic built dist/: data files plus app-shell files to be excluded."""
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
-    (dist / "main" / "assets" / "humanoid").mkdir(parents=True)
+    scene_dir = dist / "demo" / "humanoid"
+    (scene_dir / "policy").mkdir(parents=True)
+    (scene_dir / "assets").mkdir(parents=True)
+    (scene_dir / "mdp" / "mdp_0" / "obs").mkdir(parents=True)
 
     config = {
+        "format": 1,
         "version": "0.7.0",
         "uses_custom_js": uses_custom_js,
         "projects": [
             {
+                "id": "demo",
                 "name": "Demo",
-                "id": None,
                 "scenes": [
                     {
+                        "id": "humanoid",
                         "name": "Humanoid",
-                        "path": "humanoid/scene.mjz",
-                        "policies": [{"name": "Walk", "config": "humanoid/walk.json"}],
+                        "scene": "scene.mjz",
+                        "mdps": [{"id": "mdp_0"}],
+                        "policies": [
+                            {
+                                "id": "walk",
+                                "name": "Walk",
+                                "mdp": "mdp_0",
+                                "onnx": "policy/walk.onnx",
+                            }
+                        ],
                     }
                 ],
             }
         ],
     }
-    (dist / "assets" / "config.json").write_text(json.dumps(config))
+    (dist / "manifest.json").write_text(json.dumps(config))
 
     # Data files (should be uploaded).
-    scene_dir = dist / "main" / "assets" / "humanoid"
     (scene_dir / "scene.mjz").write_bytes(b"MJZ" * 10)
-    (scene_dir / "walk.onnx").write_bytes(b"ONNX" * 10)
-    (scene_dir / "walk.json").write_text(json.dumps({"onnx": {"path": "walk.onnx"}}))
-    (scene_dir / "walk_run.npz").write_bytes(b"NPZ" * 10)
+    (scene_dir / "policy" / "walk.onnx").write_bytes(b"ONNX" * 10)
+    (scene_dir / "mdp" / "mdp_0" / "obs" / "actor.onnx").write_bytes(b"GRAPH" * 2)
+    (scene_dir / "assets" / "walk_run.npz").write_bytes(b"NPZ" * 10)
 
     # App-shell files (must NOT be uploaded).
     (dist / "index.html").write_text("<!doctype html>")
     (dist / "assets" / "index-abc.js").write_text("console.log(1)")
     (dist / "assets" / "index-abc.css").write_text("body{}")
     (dist / "assets" / "mujoco-x.wasm").write_bytes(b"\0asm")
-    (dist / "main" / "index.html").write_text("<!doctype html>")
+    (dist / "assets" / ".mjswan-build-meta.json").write_text("{}")
     return dist
 
 
@@ -183,19 +195,23 @@ class TestPlanPublish:
         plan = plan_publish(_make_dist(tmp_path))
         paths = {f.upload_path for f in plan.files}
         assert paths == {
-            "config.json",
-            "main/assets/humanoid/scene.mjz",
-            "main/assets/humanoid/walk.onnx",
-            "main/assets/humanoid/walk.json",
-            "main/assets/humanoid/walk_run.npz",
+            "manifest.json",
+            "demo/humanoid/scene.mjz",
+            "demo/humanoid/policy/walk.onnx",
+            "demo/humanoid/mdp/mdp_0/obs/actor.onnx",
+            "demo/humanoid/assets/walk_run.npz",
         }
 
-    def test_config_hoisted_to_upload_root(self, tmp_path: Path):
+    def test_manifest_uploads_from_the_root_it_already_sits_at(self, tmp_path: Path):
         plan = plan_publish(_make_dist(tmp_path))
-        config_file = next(f for f in plan.files if f.upload_path == "config.json")
-        # Sourced from assets/config.json but uploaded at the root.
-        assert config_file.source.name == "config.json"
-        assert config_file.source.parent.name == "assets"
+        manifest = next(f for f in plan.files if f.upload_path == "manifest.json")
+        assert manifest.source == tmp_path / "dist" / "manifest.json"
+
+    def test_the_spa_bundles_own_json_is_not_document_data(self, tmp_path: Path):
+        # `assets/` at the root is the SPA's directory, so a build-cache key there is
+        # engine bookkeeping rather than simulation data.
+        plan = plan_publish(_make_dist(tmp_path))
+        assert not any(f.upload_path.startswith("assets/") for f in plan.files)
 
     def test_excludes_html_js_css_wasm(self, tmp_path: Path):
         plan = plan_publish(_make_dist(tmp_path))
@@ -205,34 +221,31 @@ class TestPlanPublish:
     def test_manifest_has_content_types_and_sizes(self, tmp_path: Path):
         plan = plan_publish(_make_dist(tmp_path))
         manifest = {entry["path"]: entry for entry in plan.manifest()}
-        assert manifest["config.json"]["contentType"] == "application/json"
+        assert manifest["manifest.json"]["contentType"] == "application/json"
+        assert manifest["demo/humanoid/scene.mjz"]["contentType"] == "application/zip"
         assert (
-            manifest["main/assets/humanoid/scene.mjz"]["contentType"]
-            == "application/zip"
-        )
-        assert (
-            manifest["main/assets/humanoid/walk.onnx"]["contentType"]
+            manifest["demo/humanoid/policy/walk.onnx"]["contentType"]
             == "application/octet-stream"
         )
-        assert manifest["main/assets/humanoid/scene.mjz"]["size"] == 30
+        assert manifest["demo/humanoid/scene.mjz"]["size"] == 30
 
     def test_rejects_custom_js(self, tmp_path: Path):
         with pytest.raises(PublishError) as exc:
             plan_publish(_make_dist(tmp_path, uses_custom_js=True))
-        assert exc.value.file == "config.json"
+        assert exc.value.file == "manifest.json"
         assert "custom-js" in str(exc.value).lower()
 
     def test_missing_config(self, tmp_path: Path):
         empty = tmp_path / "empty"
         empty.mkdir()
-        with pytest.raises(PublishError, match="No config.json"):
+        with pytest.raises(PublishError, match="No manifest.json"):
             plan_publish(empty)
 
     def test_invalid_json(self, tmp_path: Path):
         dist = tmp_path / "dist"
-        (dist / "assets").mkdir(parents=True)
-        (dist / "assets" / "config.json").write_text("{not json")
-        with pytest.raises(PublishError, match="Invalid config.json"):
+        dist.mkdir(parents=True)
+        (dist / "manifest.json").write_text("{not json")
+        with pytest.raises(PublishError, match="Invalid manifest.json"):
             plan_publish(dist)
 
     def test_rejects_oversized_file(self, tmp_path: Path, monkeypatch):
@@ -344,7 +357,7 @@ class TestPublishDist:
         # All five data files were PUT, none of the app-shell files.
         assert len(transport.puts) == 5
         put_urls = {url for url, _, _ in transport.puts}
-        assert "https://r2.example.com/config.json" in put_urls
+        assert "https://r2.example.com/manifest.json" in put_urls
         assert all(".html" not in u and ".css" not in u for u in put_urls)
 
     def test_authorization_header_and_body(self, tmp_path: Path):

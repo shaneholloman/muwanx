@@ -77,19 +77,24 @@ Add a project pre-configured with a single mjlab task (project + mjlab scene + o
 ### Builder.add_project
 
 ```python
-def add_project(name: str, *, id: str | None = None) -> ProjectHandle
+def add_project(name: str, *, default: bool = False) -> ProjectHandle
 ```
 
-Add a project to the application.
+Add a project to the application. Its id — the directory it is written to and its
+`?project=` value — is `name2id(name)`: lowercased, every run of characters other than
+`a-z0-9` collapsed to one `_`, edges trimmed (`"Newton's Cradle"` → `newton_s_cradle`). Two
+projects whose names sanitize alike get `<id>` and `<id>_1`, with a warning.
 
 **Parameters**
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `name` | `str` | — | Display name shown in the UI. |
-| `id` | `str \| None` | `None` | URL slug. The first project defaults to `None` (served at `/`). Subsequent projects without an explicit `id` get one derived from `name` (lowercased, spaces/hyphens → underscores). |
+| `name` | `str` | — | Display name shown in the UI; the id derives from it. |
+| `default` | `bool` | `False` | Open on this project when the URL names none. At most one project may set it — two fail the build — and when none does, the first added is the default. |
 
 **Returns** — `ProjectHandle`
+
+**Raises** — `TypeError` for the removed `id=` argument.
 
 ### Builder.build
 
@@ -146,9 +151,9 @@ Add a MuJoCo scene. Provide exactly one of `model` or `spec`.
 | `name` | `str` | — | Display name shown in the UI. |
 | `model` | `mujoco.MjModel \| None` | `None` | Compiled MuJoCo model. Saved as `.mjb` (binary). Loads faster; larger files. |
 | `spec` | `mujoco.MjSpec \| None` | `None` | MuJoCo spec. Saved as `.mjz` (DEFLATE-compressed ZIP). Smaller files; slightly slower to load. |
-| `metadata` | `dict \| None` | `None` | Arbitrary key-value metadata stored in `config.json`. |
+| `metadata` | `dict \| None` | `None` | Arbitrary key-value metadata kept on the scene. |
 | `control_dt` | `float \| None` | `None` | Seconds per control step — mjlab's `timestep * decimation`. Required once the scene carries a policy: the model holds only the physics timestep, and a wrong control rate raises nothing at playback. `add_scene_mjlab` fills it in from the task. |
-| `events` | `Mapping[str, Any] \| None` | `None` | Scene events (`EventTermCfg` instances, mjswan or mjlab). Same as calling `SceneHandle.set_events` afterwards. Events are scene-scoped, not per-policy: the runtime keeps one `EventManager` per scene across policy switches, and `mode="startup"` fires once at scene load, before any policy is chosen. |
+| `events` | `Mapping[str, Any] \| None` | `None` | The scene's default events (`EventTermCfg` instances, mjswan or mjlab). Same as calling `SceneHandle.set_events` afterwards. Events belong to a policy's MDP; these are what a policy gets when it declares none of its own (see [`MdpConfig`](#mdpconfig)). |
 
 **Returns** — `SceneHandle`
 
@@ -186,7 +191,7 @@ Load an mjlab task's MuJoCo spec from the task registry and add it as a scene. R
 | Property | Type | Description |
 |---|---|---|
 | `name` | `str` | Display name of the project. |
-| `id` | `str \| None` | URL slug of the project. |
+| `id` | `str` | `name2id(name)`, unique in the document: the project's directory in the build and its `?project=` value. |
 
 ---
 
@@ -206,10 +211,14 @@ def add_policy(
     source_path: str | None = None,
     env_cfg: Any | None = None,
     task_id: str | None = None,
+    mdp: MdpConfig | None = None,
     observations: ObservationGroupCfg | Mapping[str, Any] | None = None,
     commands: Mapping[str, CommandTermConfig] | None = None,
     actions: Mapping[str, ActionTermCfg] | None = None,
     terminations: dict[str, TerminationTermCfg] | None = None,
+    events: Mapping[str, Any] | None = None,
+    in_keys: Sequence[str] | None = None,
+    out_keys: Sequence[str | Sequence[str]] | None = None,
     policy_joint_names: list[str] | None = None,
     policy_num_actions: int | None = None,
     default_joint_pos: list[float] | None = None,
@@ -222,7 +231,13 @@ def add_policy(
 ) -> PolicyHandle
 ```
 
-Attach an ONNX policy to the scene. `observations`, `commands`, `actions`, and `terminations` all accept mjlab-compatible config classes (mjswan converts them via the adapter layer; mjlab is a soft dependency), and each defaults to the matching field of the scene's mjlab env config when it has one — pass `{}` for a policy that genuinely has none.
+Attach an ONNX policy to the scene. The policy runs against an MDP — `observations`,
+`actions`, `terminations`, `commands` and `events` — which it either shares with other
+policies (pass one [`MdpConfig`](#mdpconfig) as `mdp`) or gets built from the five term-set
+kwargs; not both. The term sets accept mjlab-compatible config classes (mjswan converts
+them via the adapter layer; mjlab is a soft dependency), and each defaults to the matching
+field of the scene's mjlab env config when it has one — events to the scene's own — so pass
+`{}` for a policy that genuinely has none.
 
 **Parameters**
 
@@ -231,25 +246,33 @@ Attach an ONNX policy to the scene. `observations`, `commands`, `actions`, and `
 | `name` | `str` | — | Display name shown in the UI. |
 | `policy` | `onnx.ModelProto` | — | Loaded ONNX model (e.g. from `onnx.load("policy.onnx")`). |
 | `metadata` | `dict \| None` | `None` | Arbitrary key-value metadata. |
-| `source_path` | `str \| None` | `None` | Path to the source `.onnx` file. Written to `config.json` for reference. |
-| `config_path` | `str \| None` | `None` | Path to a JSON file describing observations / actions / etc. mjswan merges any Python-side `commands`/`observations`/`actions`/`terminations` into this file. See [Policy Config Format](../guides/policy-config.md). |
+| `source_path` | `str \| None` | `None` | Path to the source `.onnx` file, kept for reference. |
+| `config_path` | `str \| None` | `None` | Path to a JSON sidecar with the checkpoint's own defaults — `policy_joint_names`, `default_joint_pos`, an `actions` block with PD gains. Merged into the policy's manifest entry at build time; Python-side fields win. Its `onnx` block and any `in_keys` / `out_keys` are ignored with a warning: the slot tables are declared here. See [MDP Terms](../guides/policy-config.md#legacy-passing-a-json-file-via-config_path). |
 | `env_cfg` | `Any \| None` | `None` | mjlab env config to take this policy's unset term sets from, instead of the scene's. Its control rate must match the scene's `control_dt`. |
 | `task_id` | `str \| None` | `None` | mjlab task id used to read the task's runner config (which observation group the actor reads, and `clip_actions`). Defaults to the scene's task. |
-| `observations` | `ObservationGroupCfg \| dict[str, ObservationGroupCfg] \| None` | `None` | A single observation group — mjlab's `env_cfg.observations["actor"]` — or a dict of them keyed by **ONNX input tensor name**. Prefer the single group: the key is an input name the runtime feeds, not a label, and a wrong one fails silently at playback. A `"critic"` group is dropped with a warning (only the actor is exported to ONNX). Accepts both mjswan and mjlab `ObservationGroupCfg` instances. |
+| `mdp` | `MdpConfig \| None` | `None` | The MDP to run against. Every policy handed the same object shares it: one set of traced graphs, one `mdp/<id>/` directory. Exclusive with the five term-set kwargs. |
+| `observations` | `ObservationGroupCfg \| dict[str, ObservationGroupCfg] \| None` | `None` | A single observation group — mjlab's `env_cfg.observations["actor"]` — mjlab's whole `env_cfg.observations` dict, or a dict keyed by the **slot names** `in_keys` uses. Prefer the first two: a lone group lands under `actor`, the default slot, and needs no `in_keys`. A `"critic"` group is dropped (only the actor is exported to ONNX). Accepts both mjswan and mjlab `ObservationGroupCfg` instances. |
 | `commands` | `Mapping[str, CommandTermConfig] \| None` | `None` | Command terms keyed by policy-visible name (e.g. `"velocity"`). Use `mjswan.velocity_command()` or `mjswan.ui_command([...])` to construct values. Accepts mjlab `CommandTermCfg` instances too. |
 | `actions` | `Mapping[str, ActionTermCfg] \| None` | `None` | Action term configs keyed by name (e.g. `"joint_pos"`). |
 | `terminations` | `dict[str, TerminationTermCfg] \| None` | `None` | Termination term configs keyed by name. |
+| `events` | `Mapping[str, EventTermCfg] \| None` | `None` | Event terms keyed by name, in any of the four modes. Defaults to the scene's events; `{}` means none. |
+| `in_keys` | `Sequence[str] \| None` | `None` | The network's **input slot table**: `in_keys[i]` names what fills its *i*-th input — an observation group, or a tensor the runtime synthesizes (`is_init`, `adapt_hx`, `time_step`). Positional; the network's own input names never matter. Required when the network has more than one input, checked here against its input count; a single-input network takes its one observation group and needs none. |
+| `out_keys` | `Sequence[str \| Sequence[str]] \| None` | `None` | The output slot table, `out_keys[i]` naming the *i*-th output. `action` is the one the runtime drives the actuators from; a recurrent policy also carries `["next", "adapt_hx"]`. Defaults to `["action"]`. |
 | `policy_joint_names` | `list[str] \| None` | `None` | Ordered list of joint names the policy controls. Required by the browser runtime to map outputs to actuators. |
 | `policy_num_actions` | `int \| None` | `None` | Output width for policies whose action count cannot be inferred from `policy_joint_names` — e.g. muscle-driven ones, which drive actuators rather than joints. |
 | `default_joint_pos` | `list[float] \| None` | `None` | Default (resting) joint positions corresponding to `policy_joint_names`. |
 | `encoder_bias` | `list[float] \| None` | `None` | Per-joint encoder bias (mirrors mjlab's joint-position action path). |
 | `clip_actions` | `float \| None` | `None` | Symmetric bound on the raw policy output, applied before any action term sees it (rsl-rl's `RslRlVecEnvWrapper`). Distinct from `ActionTermCfg.clip`, which bounds `raw * scale + offset` per target. Defaults to the task's runner config; `0.0` is a real bound. |
-| `initial_qpos` | `list[float] \| None` | `None` | Optional initial qpos serialized into the policy JSON for reset logic. |
-| `initial_qvel` | `list[float] \| None` | `None` | Optional initial qvel serialized into the policy JSON for reset logic. |
-| `extras` | `dict \| None` | `None` | Extra JSON payload merged verbatim into the generated policy config. |
-| `default` | `bool` | `False` | If `True`, this policy is initially selected in the viewer. |
+| `initial_qpos` | `list[float] \| None` | `None` | Optional initial qpos written to the policy's manifest entry for reset logic. |
+| `initial_qvel` | `list[float] \| None` | `None` | Optional initial qvel written to the policy's manifest entry for reset logic. |
+| `extras` | `dict \| None` | `None` | Extra JSON payload merged verbatim into the policy's manifest entry. |
+| `default` | `bool` | `False` | Open on this policy when the URL names none. At most one per scene may set it — two fail the build — and when none does, the first added is the default. |
 
 **Returns** — `PolicyHandle`
+
+**Raises** — `ValueError` when `mdp` is given together with a term set, when `in_keys` /
+`out_keys` disagree with the network's input / output count, or when a multi-input network
+declares no `in_keys`.
 
 ### SceneHandle.add_policy_wandb
 
@@ -352,10 +375,11 @@ Returns `self` for chaining.
 def set_events(events: Mapping[str, Any]) -> SceneHandle
 ```
 
-Set scene-level events. Accepts a dict of `EventTermCfg` instances (mjswan or mjlab). All
-three modes are supported: `"startup"` fires once at scene load, `"interval"` on a
-countdown timer, `"reset"` on episode reset. Events are scene-scoped — the runtime keeps one
-event manager per scene across policy switches.
+Set the scene's default events: a dict of `EventTermCfg` instances (mjswan or mjlab), in
+any of the four modes — `"startup"` once when the policy is loaded, `"interval"` on a
+countdown timer, `"reset"` on episode reset, `"manual"` from a button. Events belong to a
+policy's MDP ([`MdpConfig`](#mdpconfig)); these are what a policy on this scene gets when
+it declares none of its own, and a scene with events but no policy writes none.
 
 Equivalent to `add_scene(events=...)`.
 
@@ -428,6 +452,7 @@ Set a metadata entry for the scene. Returns `self` for chaining.
 | Property | Type | Description |
 |---|---|---|
 | `name` | `str` | Display name of the scene. |
+| `id` | `str` | `name2id(name)`, unique in the project: the scene's directory and its `?scene=` value. |
 
 ---
 
@@ -798,7 +823,20 @@ Two renamed modules keep their old import paths as well: `mjswan.viewer_config` 
 
 ## MjswanApp
 
-Returned by `Builder.build()`.
+Returned by `Builder.build()`. The built directory is the engine plus the expanded
+[simulation document](#output-structure); `app_dir` is its path.
+
+### MjswanApp.save_document
+
+```python
+def save_document(path: str | Path | None = None) -> Path
+```
+
+Write the simulation as one `.swn` file and return its path. The document is the build's
+data — `manifest.json` and every project directory — packaged as a ZIP of the same tree,
+with no engine in it. `path` defaults to the build directory's name with `.swn`, beside
+it. `mjswan info`, `mjswan publish` and `MjswanApp.publish` take a `.swn` wherever they
+take a directory.
 
 ### MjswanApp.launch
 
@@ -841,8 +879,9 @@ def publish(
 ```
 
 Upload this build's data files to [mjswan Cloud](../guides/publishing.md) and return the
-result, whose `id` gives the hosted page URL. Only data files travel — `config.json`, the
-scene/policy/motion/splat assets and traced graphs — never the compiled JavaScript.
+result, whose `id` gives the hosted page URL. Only the simulation document travels —
+`manifest.json`, the scene/policy/motion/splat assets and traced graphs — never the
+compiled JavaScript.
 
 **Parameters**
 
@@ -861,6 +900,42 @@ Cloud cannot render.
 Limits: 50 MB per file, 200 MB total, 64 files.
 
 ---
+
+## MdpConfig
+
+```python
+@dataclass
+class mjswan.MdpConfig:
+    observations: ObservationGroupCfg | Mapping[str, Any] | None = None
+    actions: Mapping[str, ActionTermCfg] | None = None
+    terminations: Mapping[str, TerminationTermCfg] | None = None
+    commands: Mapping[str, Any] | None = None
+    events: Mapping[str, EventTermCfg] | None = None
+    name: str | None = None
+```
+
+The MDP a policy runs against, as one unit: the five term sets mjlab's managers own. Two
+policies handed the **same object** share one MDP — its terms are traced once and written
+once, under `mdp/<mdp-id>/` in the scene directory — which is the shape of the common
+case, the checkpoints of one training run:
+
+```python
+mdp = mjswan.MdpConfig(observations=..., actions=..., terminations=..., commands=...)
+scene.add_policy(name="model_1000", policy=onnx.load("model_1000.onnx"), mdp=mdp)
+scene.add_policy(name="model_2000", policy=onnx.load("model_2000.onnx"), mdp=mdp)
+```
+
+Passing the term sets straight to `add_policy` builds an anonymous `MdpConfig` for that
+policy alone. Unset fields are filled from the scene's mjlab env config (events from the
+scene's own events) and mjlab types adapted, in place, by the first policy to use it.
+`add_policy_wandb` builds one `MdpConfig` per call, so every checkpoint of a run shares it.
+
+`name` fixes the MDP's id (`name2id(name)`). Unnamed, an MDP the `add_policy` term-set
+kwargs built takes the id of the policy it was built for; one shared by several policies —
+what `add_policy_wandb` does — is numbered `mdp_0`, `mdp_1`, … per scene in first-use
+order. Switching policy to a different MDP restores the compiled model, reseeds the term
+PRNG, and runs the new MDP's startup events — see
+[Core Concepts → Events](../getting-started/core-concepts.md#events).
 
 ## Action term configs
 
@@ -940,38 +1015,42 @@ ignored.
 
 ## Output structure
 
-`builder.build()` writes a fully static site:
+`builder.build()` writes a fully static site: the engine, plus the **simulation document**
+— one `manifest.json` describing every project, scene, MDP, policy and splat, and one
+directory per project with its data (ADR 0006).
 
 ```
 dist/
 ├── index.html
 ├── logo.svg
-├── manifest.json
 ├── robots.txt
-├── assets/
-│   ├── config.json          ← project / scene / policy / splat manifest
-│   └── …                    ← compiled JS / CSS
+├── manifest.json            ← the document's one descriptor: format, version, projects
+├── assets/                  ← compiled JS / CSS / WASM — the engine, never uploaded
 ├── _headers                 ← only when Builder(mt=True)
 ├── coi-serviceworker.js     ← only when Builder(mt=True)
-└── <project-id>/            ← "main" for the first project
-    ├── index.html
-    ├── logo.svg
-    ├── manifest.json
-    └── assets/
-        └── <scene-id>/
-            ├── scene.mjz          ← or scene.mjb (depending on add_scene argument)
-            ├── <policy-id>.onnx   ← the trained network
-            ├── <policy-id>.json   ← present when config_path / commands / observations / actions / terminations are set
-            ├── obs/<group>.onnx   ← traced observation group (usually fused into one graph)
-            ├── term/<name>.onnx   ← traced termination bodies
-            ├── command/<name>.onnx
-            ├── event/<name>.onnx  ← scene-scoped, referenced from config.json
-            ├── <motion-id>.npz    ← one per distinct clip in the scene, shared by its policies
-            └── <splat-id>.spz     ← only when source= is used
+└── <project-id>/            ← name2id(project name), e.g. my_robots/
+    └── <scene-id>/          ← name2id(scene name)
+        ├── scene.mjz              ← or scene.mjb (depending on add_scene argument)
+        ├── mdp/<mdp-id>/          ← one per MdpConfig: its name, its policy's id, or mdp_0, mdp_1, …
+        │   ├── obs/<group>.onnx       ← traced observation group, usually one fused graph (actor.onnx)
+        │   ├── term/<name>.onnx       ← traced termination bodies
+        │   ├── command/<name>.onnx
+        │   └── event/<name>.onnx      ← the MDP's events
+        ├── policy/<policy-id>.onnx    ← the trained network, one per policy
+        └── assets/
+            ├── <motion-id>.npz        ← one per distinct clip, shared by the scene's policies
+            └── <splat-id>.spz         ← only when source= is used
 ```
 
 Copy `dist/` to any static host (GitHub Pages, Netlify, S3, …) and it works without a server.
 
-`obs/`, `term/` and `command/` are referenced from `<policy-id>.json`; `event/` from
-`config.json`, since events are scene-scoped. See
+Every key in `manifest.json` is `snake_case`, and every path under a scene entry resolves
+against that scene's directory, so a policy entry reads `"onnx": "policy/walk.onnx"` and
+its MDP's fused group `"mdp/walk/obs/actor.onnx"`. A key carrying its default is omitted
+— `in_keys` when it is `["actor"]`, `out_keys` when it is `["action"]`. The manifest also
+stamps `format` (the layout's version, currently 1; an engine refuses a document newer than
+it knows) and `version` (the mjswan release that wrote it), independently.
+
+`MjswanApp.save_document()` packs the document — the manifest and the project directories,
+nothing of the engine — into one `.swn` file, a ZIP of the same tree. See
 [How the Build Works](../guides/how-it-works.md#artifact-layout).

@@ -301,3 +301,53 @@ describe('isModelFieldDrConfig', () => {
     expect(isModelFieldDrConfig({ name: 'x', native: true, reason: 'nope' })).toBe(false);
   });
 });
+
+describe('ModelFieldDefaults across an MDP switch (ADR 0006 §9)', () => {
+  it('restores every touched field to its compiled value', () => {
+    const compiled = friction('robot/foot_collision')[0];
+    const defaults = new ModelFieldDefaults(mjModel);
+    apply(config({ operation: 'scale', axis_ranges: { '0': [3, 3] } }), new SeededRng(1), defaults);
+    expect(friction('robot/foot_collision')[0]).toBeCloseTo(compiled * 3, 6);
+
+    expect(defaults.restore()).toBe(true);
+    expect(friction('robot/foot_collision')[0]).toBeCloseTo(compiled, 6);
+  });
+
+  it('has nothing to restore before anything was touched', () => {
+    expect(new ModelFieldDefaults(mjModel).restore()).toBe(false);
+  });
+
+  it('lets a second startup pass compose against the compiled value, not the first pass', () => {
+    // The switch sequence: restore, then the incoming MDP's startup over the compiled
+    // model. Without the restore the second scale would land on 3x, giving 9x.
+    const compiled = friction('robot/foot_collision')[0];
+    const defaults = new ModelFieldDefaults(mjModel);
+    const scale = config({ operation: 'scale', axis_ranges: { '0': [3, 3] } });
+    apply(scale, new SeededRng(1), defaults);
+    defaults.restore();
+    apply(scale, new SeededRng(1), defaults);
+    expect(friction('robot/foot_collision')[0]).toBeCloseTo(compiled * 3, 6);
+  });
+
+  it('restores the geom bounds a size randomization recomputed', () => {
+    const names = ['floor', 'robot/torso_collision', 'robot/foot_collision'];
+    const i = names.indexOf('robot/foot_collision');
+    const rbound = mjModel.geom_rbound as unknown as { [index: number]: number };
+    const compiledBound = rbound[i];
+    const defaults = new ModelFieldDefaults(mjModel);
+    apply(
+      config({
+        name: 'foot_size',
+        field: 'geom_size',
+        axis_ranges: { '0': [2, 2] },
+        operation: 'scale',
+        recompute_bounds: true,
+      }),
+      new SeededRng(1),
+      defaults,
+    );
+    expect(rbound[i]).toBeCloseTo(compiledBound * 2, 6);
+    defaults.restore();
+    expect(rbound[i]).toBeCloseTo(compiledBound, 6);
+  });
+});

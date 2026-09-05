@@ -73,8 +73,8 @@ flowchart TB
     trace["torch.onnx.export"]
     cfg --> trace
     env --> trace
-    trace --> graphs["obs/ term/ event/ command/<br/><i>.onnx graph bytes</i>"]
-    trace --> meta["policy.json + config.json<br/><i>slots, layout, pipelines</i>"]
+    trace --> graphs["mdp/&lt;id&gt;/{obs,term,command,event}/<br/><i>.onnx graph bytes</i>"]
+    trace --> meta["manifest.json<br/><i>slots, layout, pipelines</i>"]
   end
 
   subgraph run["Run time (browser)"]
@@ -138,8 +138,9 @@ Two group shapes deliberately do **not** fuse, and fall back to per-term graphs:
 
 ### Input slots
 
-A graph needs the simulation state it reads. The build records that as **slots** in
-`policy.json`, and the browser's slot reader serves each one from `mjModel` / `mjData`:
+A graph needs the simulation state it reads. The build records that as **slots** in the
+manifest's MDP entry, and the browser's slot reader serves each one from `mjModel` /
+`mjData`:
 
 ```json
 "input_slots": [
@@ -169,7 +170,9 @@ Term bodies never draw their own random numbers. All randomness comes from a sin
 seeded PRNG in the TypeScript orchestrator and is passed into the graph as an explicit
 `rand` input tensor; the graph's `rand_dim` declares how many values it consumes. The
 seed is reachable from the engine API (`termSeed`) and reported back in its state
-snapshot, so an app can persist the seed it ran with.
+snapshot, so an app can persist the seed it ran with. The PRNG is reseeded from it at
+every scene load and every switch to a policy with a different MDP, so the randomization a
+policy starts from does not depend on how long the previous one ran.
 
 Stateful terms — a velocity command holding a heading target, say — are exported the way
 an RNN cell is: hidden state promoted to explicit input and output, with the orchestrator
@@ -186,30 +189,40 @@ called with `resample_mask = 1`.
 
 ## Artifact layout
 
-For an mjlab velocity task with eleven checkpoints, one traced command, two reset events
-and one traced termination:
+For an mjlab velocity task with eleven checkpoints of one run, one traced command, two
+reset events and one traced termination:
 
 ```
-dist/main/assets/mjlab_velocity_flat_unitree_g1/
-├── scene.mjz              # the MuJoCo model
-├── model_2000.onnx        # the trained policy network (one per checkpoint)
-├── model_2000.json        # its policy config: slots, layout, actions, commands
-├── obs/policy.onnx        # fused observation group
-├── term/fell_over.onnx    # traced termination body
-├── command/twist.onnx     # traced command body (stateful)
-└── event/
-    ├── reset_base.onnx
-    └── reset_robot_joints.onnx
+dist/
+├── manifest.json                        # the one descriptor: format, version, projects → scenes → mdps / policies
+└── mjlab_tasks/                         # <project-id>
+    └── mjlab_velocity_flat_unitree_g1/  # <scene-id>
+        ├── scene.mjz                    # the MuJoCo model
+        ├── mdp/mdp_0/                   # the run's MDP, traced once for all eleven checkpoints
+        │   ├── obs/actor.onnx               # fused observation group
+        │   ├── term/fell_over.onnx          # traced termination body
+        │   ├── command/twist.onnx           # traced command body (stateful)
+        │   └── event/
+        │       ├── reset_base.onnx
+        │       └── reset_robot_joints.onnx
+        └── policy/
+            ├── model_1000.onnx          # the trained network, one per checkpoint
+            └── …
 ```
 
-`obs/`, `term/` and `command/` are referenced from `policy.json`; `event/` is referenced
-from `config.json`, because events are scene-scoped and survive a policy switch.
+The manifest's scene entry lists the MDPs and the policies; each policy entry names its
+network (`"onnx": "policy/model_1000.onnx"`) and its MDP by id, and each MDP entry carries
+the five term sets with their graph references (`"fused": "mdp/mdp_0/obs/actor.onnx"`).
+Every path resolves against the scene directory, and every key is `snake_case`.
 
-Some randomization needs no graph at all. Startup domain randomization that perturbs
-`mjModel` rather than `mjData` — geom friction, body COM offsets — is emitted as a
-**descriptor** (field, entity names, axis ranges, operation, distribution) that the
-browser applies once at load from the seeded PRNG. Entity *names* rather than ids,
-because the browser compiles its own model.
+An MDP is written once however many policies share it. Two policies handed *different*
+`MdpConfig`s get `mdp_0` and `mdp_1`, so a group or term name only has to be unique within
+one MDP — the two fused groups above would otherwise land on the same file. Events sit in
+the MDP like everything else: a policy switch swaps them, and the engine restores the model
+values the previous MDP's startup randomization changed before running the new one's.
+
+`app.save_document()` packs the manifest and the project directories — nothing of the
+engine — into one `.swn` file, a ZIP of this same tree.
 
 ## What can fail, and what to do about it
 

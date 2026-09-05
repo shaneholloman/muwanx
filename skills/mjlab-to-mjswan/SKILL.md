@@ -112,13 +112,17 @@ def setup_builder() -> mjswan.Builder:
     scene = project.add_scene_mjlab(TASK_ID)
 
     meta = json.loads((HERE / "policy_meta.json").read_text())
+    mdp = mjswan.MdpConfig()  # one MDP, traced once, shared by every checkpoint
     for name in meta.pop("checkpoints"):
-        scene.add_policy(pathlib.Path(name).stem, onnx.load(HERE / name), **meta)
+        scene.add_policy(
+            pathlib.Path(name).stem, onnx.load(HERE / name), mdp=mdp, **meta
+        )
     return builder
 
 
 def main() -> None:
-    setup_builder().build().launch()
+    app = setup_builder().build()
+    app.launch()
 
 
 if __name__ == "__main__":
@@ -127,8 +131,11 @@ if __name__ == "__main__":
 
 Canonical run command, from the repo root: `python -m mjswan_app.main`.
 
+`build()` writes `mjswan_app/dist/`: the engine, plus the simulation document it serves — `manifest.json` and one `<project-id>/<scene-id>/` per scene holding `scene.mjz`, `mdp/<mdp-id>/{obs,term,command,event}/*.onnx` and `policy/<policy-id>.onnx`. `app.save_document()` packs that document alone as `dist.swn`, engine excluded, and `mjswan serve` / `info` / `publish` each take either form. Keep the `app` the build returns rather than chaining off it, so the document is one call away.
+
 - W&B instead of local checkpoints: replace the loop with `scene.add_policy_wandb("entity/project/run_id")` and drop the meta plumbing.
-- `add_policy` accepts `observations=` / `terminations=` / `actions=` / `commands=`. Leave all four out: `add_scene_mjlab` supplies `control_dt` and the trace env, and each term set already defaults to the scene's env config. To change a term set, mutate `env_cfg` instead (step 6) and pass `env_cfg=` to `add_scene_mjlab` *before* any policy is added, because a scene built first never sees the mutation.
+- `add_policy` accepts the five MDP term sets — `observations=` / `actions=` / `terminations=` / `commands=` / `events=` — or one `mdp=mjswan.MdpConfig(...)` carrying all five, shared by every policy handed the same object. Leave them all out: `add_scene_mjlab` supplies `control_dt` and the trace env, each term set already defaults to the scene's env config (events included), and `add_policy_wandb` builds one `MdpConfig` per call so a run's checkpoints share one traced MDP. When looping over local checkpoints as above, build one `MdpConfig()` before the loop and pass `mdp=` to each `add_policy` for the same effect. To change a term set, mutate `env_cfg` instead (step 6) and pass `env_cfg=` to `add_scene_mjlab` *before* any policy is added, because a scene built first never sees the mutation.
+- A single-input network — every mjlab export — needs no `in_keys`: its one observation group lands under the default slot, `actor`. A network with several inputs declares `in_keys=` on `add_policy`, and the build refuses one that does not. `out_keys=` is the same table for the *outputs*, and a network with several of them needs it whenever the action is not the first: the runtime drives the actuators from `out_keys`' `action`, defaulting to output 0. The build warns; a checkpoint whose exporter sidecar lists `out_keys` is telling you what to pass.
 - When `terms.py` exists, import it in `main.py` for its side effects: `from mjswan_app import terms  # noqa: F401`.
 - No `ViewerConfig`. The default `OriginType.AUTO` tracks the first non-world body.
 
@@ -155,6 +162,14 @@ The build fails loudly by design and names the ways out. For each failure: read 
 
 Rebuild after each fix. A term skipped because mjswan cannot express it, rather than because the task is unusual, goes to step 8.
 
+When it finally builds, read the document it wrote before spending minutes on parity:
+
+```sh
+mjswan info mjswan_app/dist
+```
+
+One line per project, scene, MDP and policy. Three things to check, none of which a successful build says out loud: **one MDP per shared `MdpConfig`** (one per W&B run, one for the whole local-checkpoint loop — more than that means a policy was handed its own config and the same terms were traced once per checkpoint); a **non-zero graph count** on each MDP (zero means every term ended up native or skipped); and **every checkpoint present** as a policy. The same command reads a `dist.swn`, so it is also how you inspect a document someone hands you.
+
 ## 7. Parity gate
 
 A successful build only proves every term *traced*. It does not prove the graph computes what mjlab computes. Run the numeric gate, the same harness mjswan's own CI runs over its reference tasks:
@@ -171,7 +186,8 @@ import mjswan_app.terms  # only if terms.py exists
 TASK_ID = "Mjlab-Velocity-Flat-Unitree-G1"
 cfg = load_env_cfg(TASK_ID, play=True)
 cfg.scene.num_envs = 1
-groups = resolve_runner_defaults(TASK_ID).policy_obs_groups
+obs_groups = resolve_runner_defaults(TASK_ID).obs_groups or {}
+groups = obs_groups.get("actor")
 report = run_parity(
     build_mjlab_env(cfg),
     obs_group=groups[0] if groups else "actor",
@@ -237,11 +253,11 @@ The port stays blocked until the PR lands. Finish every other part of it, and re
 
 ## 9. Report
 
-Write `mjswan_app/README.md`: the target's source URL, the task id, prerequisites (credentials, env vars, data files), and the run command.
+Write `mjswan_app/README.md`: the target's source URL, the task id, prerequisites (credentials, env vars, data files), the run command, and how the build is handed on — `app.save_document()` writes `mjswan_app/dist.swn`, which `mjswan serve`, `mjswan info` and `mjswan publish` each accept in place of the directory.
 
 Then tell the user, in this order:
 
-1. terms traced and parity result (`report.summary()` verbatim if anything failed);
+1. the `mjswan info` tree, then terms traced and parity result (`report.summary()` verbatim if anything failed);
 2. terms skipped, each with what unblocks it: an author-side `terms.py` replacement, a `ts_src` TypeScript class (out of scope here), or the mjswan PR you opened in step 8, with its URL;
 3. anything you stopped on: dependency conflicts, missing credentials, task-specific gaps that mjswan must not absorb;
 4. that browser behaviour is unverified by this pipeline: parity proves the graph matches mjlab, but mjlab integrates with `mujoco_warp` while the browser runs MuJoCo's WASM build, and a policy can behave differently under the two.

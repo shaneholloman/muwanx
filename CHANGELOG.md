@@ -16,6 +16,44 @@ velocity-command shortcuts were removed outright, see Removed.
 
 ### Added
 
+- **The build output is a simulation document**
+  ([ADR 0006](docs/adr/0006-swn-simulation-document.md)): one `manifest.json` at the
+  root — `{format, version, uses_custom_js, plugins?, projects}`, every key `snake_case`
+  — over `<project-id>/<scene-id>/{scene.mjz, mdp/<mdp-id>/…, policy/<policy-id>.onnx,
+  assets/…}`. Every path under a scene entry resolves against the scene directory. The
+  `format` integer versions the layout (an engine refuses a newer document, naming both
+  values); `version` is the release that wrote it, and never a gate.
+- **`.swn`**: the document as one file. `MjswanApp.save_document()` writes the manifest
+  and the project directories — nothing of the engine — as a ZIP of the same tree;
+  `mjswan info`, `mjswan serve`, `mjswan publish` and `publish_dist` accept a `.swn`
+  wherever they take a directory, and a `.swn` publishes exactly the file set its directory
+  would. Serving one expands it beside the packaged engine (`MjswanApp.from_document`) into
+  a temporary app; a custom-JS document is refused, since its plugin module ships with the
+  engine rather than in the document.
+- **`MdpConfig`**: the five term sets a policy runs against — observations, actions,
+  terminations, commands and now **events** — as one object. Policies handed the same
+  `MdpConfig` share one MDP, traced and written once under `mdp/<mdp-id>/`; the term-set
+  kwargs on `add_policy` build an anonymous one, and `add_policy_wandb` builds one per
+  call so a run's checkpoints share it. An MDP built for a single policy takes that
+  policy's id, so `mdp/locomotion/` sits beside `policy/locomotion.onnx`; a shared one is
+  `mdp_0`, `mdp_1`, … per scene in first-use order, and a `name` (`name2id(name)`) wins
+  over both.
+- `add_policy(events=...)`: events belong to the policy's MDP. A scene's `events` /
+  `set_events` are the default for policies that declare none, so an mjlab task's
+  `env_cfg.events` lands where it did before. Switching to a policy with a different MDP
+  restores the model values the previous MDP's startup randomization changed, reseeds the
+  term PRNG from `termSeed`, and runs the new MDP's startup events — so randomization no
+  longer compounds across switches and A → B → A reproduces A's draw.
+- `add_policy(in_keys=..., out_keys=...)`: the network's slot tables, declared beside the
+  network and checked against its input and output counts. A multi-input network without
+  `in_keys` is refused at `add_policy` rather than going inert at playback; a slot naming no
+  observation group fails the build. A multi-*output* network without `out_keys` is warned
+  about instead of refused, naming the output the actuators will be driven from. Written to
+  the manifest only when they differ from the defaults (`["actor"]`, `["action"]`).
+- `add_project(default=True)` and `add_policy(default=True)` pick what the app opens on;
+  two siblings both marked fail the build, none marked means the first added.
+- `mjswan info` lists each scene's MDPs with their traced-graph counts, and reads a
+  `.swn`.
 - **MDP term bodies are traced to ONNX at build time and run by ONNX Runtime Web**
   ([ADR 0005](docs/adr/0005-onnx-traced-terms-superseding-the-declarative-dsl.md)),
   replacing the hand-written TypeScript DSL (see Removed). mjlab's real
@@ -102,6 +140,35 @@ velocity-command shortcuts were removed outright, see Removed.
 
 ### Changed
 
+- **The default observation slot is `actor`** (was `policy`), mjlab's own name for the
+  group its actor network reads, in Python (`DEFAULT_OBS_GROUP_KEY`) and the engine
+  together. A lone observation group lands there and needs no `in_keys`; the common fused
+  graph is `mdp/<mdp-id>/obs/actor.onnx`. The engine's `obs`→`policy` input-name special
+  case is gone; the mapping from `in_keys` onto a network's inputs is positional, so what
+  the network calls its tensors never matters.
+- **Every project, scene, MDP, policy and splat has an id**, `name2id(name)`, unique
+  within its parent — the directory it is written to and the value `?project=` /
+  `?scene=` / `?policy=` take. Two siblings whose names sanitize alike get `<id>` and
+  `<id>_1` with a `RuntimeWarning` naming both. The frontend's `sanitizeName` is the same
+  function, pinned to `name2id` by a shared table of cases (apostrophes, parentheses and
+  accents included), so `?scene=newton_s_cradle` opens Newton's Cradle.
+- mjlab's network-keyed observation dict is reduced by the runner's whole `obs_groups`,
+  not by the `actor` name: only groups the runner attributes to a network are renamed or
+  dropped, so a multi-input policy's own slots (`command_`) survive beside `actor`.
+  `adapt_observations(obs_groups=...)` replaces `policy_groups=`; `MjlabRunnerDefaults.obs_groups`
+  replaces `policy_obs_groups`.
+- A `config_path` sidecar contributes the checkpoint's own defaults (`policy_joint_names`,
+  `default_joint_pos`, an `actions` block) and nothing else: its `onnx` block is dropped
+  and any `in_keys` / `out_keys` in it are ignored with a warning pointing at `add_policy`.
+- `mjswan/manifest`: `parseManifest` takes the new `Manifest` shape (`AppConfig` remains
+  as a deprecated alias), maps its `snake_case` onto the engine's camelCase
+  (`ViewerConfig`, `SplatTransform`), orders the default project first, and gives the
+  engine a policy config that is the manifest entry merged with its MDP — slot tables at
+  the top level, events included. `SceneInput` lost `events` and `graphs`; `PolicyInput.graphs`
+  carries the whole MDP's graphs, events included, keyed by scene-relative path.
+- Every script under `examples/` is restructured for the document layout: bare groups for
+  single-input policies, the Go2 slot tables spelled out in `examples/demo/main.py`, and
+  the demo sidecars stripped of their `onnx` blocks.
 - **Methods**
   - `ProjectHandle.add_mjlab_scene` → `ProjectHandle.add_scene_mjlab`
   - `SceneHandle.add_policy_from_wandb` → `SceneHandle.add_policy_wandb`
@@ -141,6 +208,17 @@ All kept as aliases via `_compat.py`, removed in 0.9:
 
 ### Removed
 
+- **`config.json` and the per-policy `<policy>.json`**, replaced by the one root
+  `manifest.json` (supersedes ADR 0005 §1). The per-project `index.html` / `logo.svg`
+  copies and the `main/` special case for the first project go with them: a project's
+  directory is its id, and the app resolves `?project=` against ids only.
+- `add_project(id=...)`: a project's id is `name2id(name)`, so the directory and the
+  `?project=` value can never disagree. Passing `id=` raises `TypeError`.
+- `eventGraphRefs` from `mjswan/engine`, with no alias. Events are part of a policy's MDP
+  now, so `policyGraphRefs(config)` already enumerates their graphs; a scene carries no
+  event list for a separate helper to scan.
+- Slot tables read from a `config_path` sidecar (`onnx.meta.in_keys` / `out_keys`, or
+  top-level `in_keys` / `out_keys`): declare them on `add_policy` instead.
 - **`mjswan.dsl`**, the declarative composition-graph DSL (ADR 0003) and its TypeScript
   interpreter, with no alias. Term bodies are traced to ONNX instead (see Added), so
   `div` / `sqrt` / `slice_` / `normalize` / `quat_to_rot6d_columns` and the rest have no
@@ -180,6 +258,15 @@ All kept as aliases via `_compat.py`, removed in 0.9:
   read it as `mat_reflectance || 0.5`, and MuJoCo's default *is* 0, so every material
   that left the attribute out, or zeroed it deliberately, got a half-strength environment
   reflection.
+- **A scene's policies no longer overwrite each other's traced graphs.** A graph's
+  bundle path was built from its kind and name alone (`obs/policy.onnx`) under the
+  *scene* directory, while its contents are per-MDP, so a second policy in the same
+  scene wrote over the first, and every earlier policy's config went on pointing at it.
+  Nothing caught it at either end: the build overwrote silently, and the runtime pads or
+  truncates a mismatched vector to the `size` the config declares, so a policy loading a
+  sibling's graph merely behaved oddly. Graphs now live under their MDP's directory
+  (`mdp/<mdp-id>/obs/actor.onnx`, see Added), and a write that would replace a
+  *different* graph at one path fails the build rather than shipping it.
 - **The control panel is mjviser's, control for control.** Two viewers onto the same
   mjlab task should not look like two products, so the panel now renders what mjlab's
   viser GUI renders: command groups nested in a `Commands` folder, one row per control

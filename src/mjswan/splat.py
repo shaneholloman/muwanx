@@ -53,17 +53,28 @@ class SplatConfig:
     control: bool = False
     """Show scale and offset controls in the viewer control panel."""
 
+    id: str = ""
+    """Sanitized name, unique within the scene; the ``.spz`` file's stem. Assigned by
+    :meth:`~mjswan.scene.SceneHandle.add_splat`; defaults to ``name2id(name)``."""
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            from .utils import name2id
+
+            self.id = name2id(self.name)
+
     metadata: dict[str, Any] = field(default_factory=dict)
     """Additional metadata for the splat."""
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a dict for config.json. ``path`` is added externally when ``source`` is set."""
+        """Serialize to a manifest entry. ``path`` is added externally when ``source`` is set."""
         d: dict[str, Any] = {
+            "id": self.id,
             "name": self.name,
             "scale": self.scale,
-            "xOffset": self.x_offset,
-            "yOffset": self.y_offset,
-            "zOffset": self.z_offset,
+            "x_offset": self.x_offset,
+            "y_offset": self.y_offset,
+            "z_offset": self.z_offset,
         }
         if self.url is not None:
             d["url"] = self.url
@@ -74,7 +85,7 @@ class SplatConfig:
         if self.yaw != 0.0:
             d["yaw"] = self.yaw
         if self.collider_url is not None:
-            d["colliderUrl"] = self.collider_url
+            d["collider_url"] = self.collider_url
         if self.control:
             d["control"] = True
         return d

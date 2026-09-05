@@ -61,17 +61,6 @@
     0.0,
     0.0
   ],
-  "onnx": {
-    "meta": {
-      "in_keys": [
-        "observation"
-      ],
-      "out_keys": [
-        "action"
-      ]
-    },
-    "path": "policy/g1/balance.onnx"
-  },
   "actions": {
     "joint_pos": {
       "type": "joint_position",

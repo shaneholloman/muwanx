@@ -7,22 +7,6 @@ from mjswan.motion import MotionConfig, MotionHandle
 
 
 # ===========================================================================
-# MotionConfig — to_summary_dict
-# ===========================================================================
-class TestMotionConfigToSummaryDict:
-    def test_to_summary_dict_minimal(self):
-        cfg = MotionConfig(name="Walk")
-        result = cfg.to_summary_dict()
-        assert result == {"name": "Walk"}
-        assert "default" not in result
-
-    def test_to_summary_dict_with_default_true(self):
-        cfg = MotionConfig(name="Run", default=True)
-        result = cfg.to_summary_dict()
-        assert result == {"name": "Run", "default": True}
-
-
-# ===========================================================================
 # MotionConfig — to_dict
 # ===========================================================================
 class TestMotionConfigToDict:

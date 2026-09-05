@@ -68,6 +68,10 @@ dev = [
     # 0.16.0 and failed a `__init__` that had passed for months. A lint version is
     # a tool, not a dependency; bump it deliberately.
     "ruff==0.16.0",
+    # Pinned exactly for the same reason as ruff, and more so: ty is pre-1.0 and ships
+    # weekly, so a floor would let a release change what `make type` reports with no
+    # change to this repo. Bump it deliberately.
+    "ty==0.0.77",
     "pytest>=9.0.2",
 ]
 examples = [
@@ -92,7 +96,28 @@ serve = "mjswan._cli:serve"
 
 [tool.pyright]
 extraPaths = []
-exclude = ["./docs/**/*", "./examples/assets/**/*", "./src/mjswan/template/.nodeenv", "./build"]
+# The package. `examples/` is deliberately out: those scripts are written
+# against third-party APIs (mjlab, myosuite, playground), and checking them meant walking
+# every one of those dependency graphs — minutes per run — for diagnostics about code that
+# is not shipped. `**/.dep` keeps a repo an example clones at run time out of any glob.
+include = ["src/mjswan"]
+exclude = ["**/.dep", "**/node_modules", "**/dist", "./src/mjswan/template/.nodeenv", "./build"]
+# `from torch import arange` and its siblings: torch's stubs re-export without `as`,
+# so every such import reads as private. A packaging artifact of the dependency.
+reportPrivateImportUsage = "none"
+
+[tool.ty.environment]
+# The hand-written mujoco stubs resolve types without being checked themselves: they are
+# pyright-flavoured `.pyi` (`typing._CallableGenericAlias` and friends) that ty reads as
+# errors when it owns them, but as a search path they are exactly what they are for.
+extra-paths = ["typings"]
+
+[tool.ty.src]
+# The package, like pyright: `examples/` is written against third-party APIs and is not
+# shipped, `typings/` is hand-written stubs whose pyright-only syntax ty reads as source,
+# and `.dep/` is a repo an example clones at run time.
+include = ["src/mjswan"]
+exclude = ["typings", "**/.dep", "**/node_modules", "**/dist", "./src/mjswan/template/.nodeenv"]
 
 [tool.ruff]
 lint.select = [

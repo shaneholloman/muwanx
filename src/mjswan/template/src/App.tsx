@@ -36,29 +36,31 @@ function makeByteSource(base: string): ByteSource {
 
 async function loadCatalog(base: string): Promise<Catalog> {
   const params = new URLSearchParams(window.location.search);
-  const override = params.get('config');
-  const configUrl = override
+  const override = params.get('manifest');
+  const manifestUrl = override
     ? new URL(override, window.location.href).toString()
-    : `${base}assets/config.json`.replace(/([^:])\/{2,}/g, '$1/');
-  const res = await fetch(configUrl, { cache: 'no-store' });
+    : `${base}manifest.json`.replace(/([^:])\/{2,}/g, '$1/');
+  const res = await fetch(manifestUrl, { cache: 'no-store' });
   if (!res.ok) {
-    throw new Error(`Failed to fetch ${configUrl}: ${res.status}`);
+    throw new Error(`Failed to fetch ${manifestUrl}: ${res.status}`);
   }
   return parseManifest(await res.text(), makeByteSource(base));
 }
 
-function pickByName<T extends { name: string }>(
+/**
+ * Resolve a `?project=` / `?scene=` / `?policy=` value against the entries' ids. The
+ * query is sanitized too, so a hand-typed display name still lands, but nothing matches
+ * on the raw name (ADR 0006 §4).
+ */
+function pickById<T extends { id: string }>(
   items: T[],
   query: string | null,
   fallback: T | undefined,
 ): T | undefined {
   if (!query) return fallback;
-  const normalized = query.trim().toLowerCase();
-  return (
-    items.find((i) => i.name.toLowerCase() === normalized) ??
-    items.find((i) => sanitizeName(i.name) === normalized) ??
-    fallback
-  );
+  const wanted = sanitizeName(query);
+  if (!wanted) return fallback;
+  return items.find((i) => i.id === wanted) ?? fallback;
 }
 
 function AppContent() {
@@ -102,10 +104,10 @@ function AppContent() {
           pluginsRef.current = (await import(/* @vite-ignore */ url)) as EnginePlugins;
         }
         const params = new URLSearchParams(window.location.search);
-        const project = pickByName(cat.projects, params.get('project'), cat.projects[0]);
-        const scene = pickByName(project?.scenes ?? [], params.get('scene'), project?.scenes[0]);
+        const project = pickById(cat.projects, params.get('project'), cat.projects[0]);
+        const scene = pickById(project?.scenes ?? [], params.get('scene'), project?.scenes[0]);
         const policy = scene
-          ? pickByName(scene.policies, params.get('policy'), scene.policies.find((p) => p.default) ?? scene.policies[0])
+          ? pickById(scene.policies, params.get('policy'), scene.policies.find((p) => p.default) ?? scene.policies[0])
           : undefined;
         const motion = policy?.motions.find((m) => m.default) ?? policy?.motions[0];
         setCatalog(cat);
@@ -153,7 +155,10 @@ function AppContent() {
       engine.subscribe(setEngineState);
       try {
         setLoadingMessage('Loading scene…');
-        const input = await sceneEntry.buildScene({ policy: policyName, splat: splatName });
+        const input = await sceneEntry.buildScene({
+          policy: sceneEntry.policies.find((p) => p.name === policyName)?.id ?? null,
+          splat: sceneEntry.splats.find((s) => s.name === splatName)?.id ?? null,
+        });
         await engine.loadScene(withPlugins(input));
         if (motionName) await engine.setMotion(motionName);
         engine.setReferenceVisible(showReference);
@@ -191,13 +196,19 @@ function AppContent() {
   const syncUrl = useCallback(
     (next: { project?: string | null; scene?: string | null; policy?: string | null; panel?: boolean; ref?: boolean }) => {
       const params = new URLSearchParams(window.location.search);
+      // URL values are ids, but the UI state holds display names, so look each id up.
+      const idOf = <T extends { id: string; name: string }>(items: T[] | undefined, name: string | null | undefined) =>
+        items?.find((i) => i.name === name)?.id ?? null;
       const setOrDelete = (key: string, value: string | null | undefined, keep: boolean) =>
         value != null && keep ? params.set(key, value) : params.delete(key);
       // Only pin ?project once more than one exists (single-project builds stay clean).
-      const proj = next.project ?? projectName;
-      setOrDelete('project', proj, (catalog?.projects.length ?? 0) > 1);
-      setOrDelete('scene', next.scene ?? sceneName, true);
-      setOrDelete('policy', next.policy ?? policyName, true);
+      const projName = next.project ?? projectName;
+      const proj = catalog?.projects.find((p) => p.name === projName);
+      setOrDelete('project', proj?.id ?? null, (catalog?.projects.length ?? 0) > 1);
+      const sceneId = idOf(proj?.scenes, next.scene ?? sceneName);
+      setOrDelete('scene', sceneId, true);
+      const sceneOfPolicy = proj?.scenes.find((s) => s.id === sceneId);
+      setOrDelete('policy', idOf(sceneOfPolicy?.policies, next.policy ?? policyName), true);
       params.delete(PANEL_QUERY_PARAM);
       if (!(next.panel ?? panelVisible)) params.set(PANEL_QUERY_PARAM, '0');
       params.delete(REF_QUERY_PARAM);
@@ -213,15 +224,17 @@ function AppContent() {
     if (!engine) return;
     const policy = scene.policies.find((p) => p.default) ?? scene.policies[0];
     const motion = policy?.motions.find((m) => m.default) ?? policy?.motions[0];
-    const splat = scene.splats[0]?.name ?? null;
+    const splat = scene.splats[0] ?? null;
     setSceneName(scene.name);
     setPolicyName(policy?.name ?? null);
     setMotionName(motion?.name ?? null);
-    setSplatName(splat);
+    setSplatName(splat?.name ?? null);
     syncUrl({ scene: scene.name, policy: policy?.name ?? null });
     showLoading(`Loading scene "${scene.name}"…`);
     try {
-      await engine.loadScene(withPlugins(await scene.buildScene({ policy: policy?.name, splat })));
+      await engine.loadScene(
+        withPlugins(await scene.buildScene({ policy: policy?.id, splat: splat?.id ?? null })),
+      );
       if (motion) await engine.setMotion(motion.name);
       engine.setReferenceVisible(showReference);
     } catch (err) {

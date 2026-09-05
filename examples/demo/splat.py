@@ -65,25 +65,23 @@ def setup_builder() -> mjswan.Builder:
         policy=onnx.load("assets/unitree_g1/balance.onnx"),
         config_path="assets/unitree_g1/balance.json",
         terminations=g1_terminations,
-        observations={
-            "observation": ObservationGroupCfg(
-                terms={
-                    "base_ang_vel": ObservationTermCfg(
-                        func=obs_fns.base_ang_vel, history_length=1
-                    ),
-                    "projected_gravity": ObservationTermCfg(
-                        func=obs_fns.projected_gravity, history_length=1
-                    ),
-                    "joint_pos": ObservationTermCfg(
-                        func=obs_fns.joint_pos_rel, history_length=1
-                    ),
-                    "joint_vel": ObservationTermCfg(
-                        func=obs_fns.joint_vel_rel, history_length=1
-                    ),
-                    "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
-                }
-            )
-        },
+        observations=ObservationGroupCfg(
+            terms={
+                "base_ang_vel": ObservationTermCfg(
+                    func=obs_fns.base_ang_vel, history_length=1
+                ),
+                "projected_gravity": ObservationTermCfg(
+                    func=obs_fns.projected_gravity, history_length=1
+                ),
+                "joint_pos": ObservationTermCfg(
+                    func=obs_fns.joint_pos_rel, history_length=1
+                ),
+                "joint_vel": ObservationTermCfg(
+                    func=obs_fns.joint_vel_rel, history_length=1
+                ),
+                "prev_actions": ObservationTermCfg(func=obs_fns.last_action),
+            }
+        ),
     )
 
     scene.add_policy(

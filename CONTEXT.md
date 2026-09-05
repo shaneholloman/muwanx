@@ -23,15 +23,19 @@ src/mjswan/          Python package source
   command.py           Command terms (Slider, Button, Checkbox, velocity_command, ui_command)
   viewer.py            ViewerConfig
   trace_env.py         Minimal live envs for tracing (build_single_entity_trace_env)
-  utils.py             ZIP-DEFLATE bundling, XML path rewriting, name2id slug helper
+  utils.py             ZIP-DEFLATE bundling, XML path rewriting, name2id slug + scoped unique ids
+  mdp.py               MdpConfig: the five term sets a policy runs against, as one shared unit
+  document.py          The .swn simulation document: list / pack / unpack the built tree,
+                       and DOCUMENT_FORMAT, the layout version the manifest stamps
   wandb_io.py          W&B checkpoint / motion artifact downloads
   _onnx_build.py       Bridges term cfg dataclasses → compile/ tracer; writes .onnx + JSON
+  _graph_io.py         Bundle path a traced graph gets, and the guarded write to it
   _cli.py              Typer-based `mjswan` CLI + legacy entry points
   _build_client.py     Frontend build orchestration (npm/vite, managed nodeenv)
   _compat.py           Deprecated pre-0.8 aliases (methods, classes, modules). Remove in 0.9
   compile/             ONNX tracing + numeric parity (ADR 0005)
     tracer.py            trace_term / trace_event_term / trace_command_term
-    serialize.py         traced command → policy.json entry + JSON schema
+    serialize.py         traced command → manifest entry + JSON schema
     parity.py            live mjlab env vs exported graphs, term by term, step by step
     rng.py               build-time RNG spy/replay (DrawRecorder / ReplayRng)
   adapters/            mjlab soft-dependency adapter + compat helpers
@@ -62,21 +66,25 @@ assets/              Demo GIF and banner SVG
 Builder(base_path, gtm_id, mt, debug)
   ├── Builder.from_mjlab(task_id, run_path=..., play=...) → Builder  # classmethod factory
   ├── .add_project_mjlab(task_id, run_path=..., play=...) → ProjectHandle
-  └── .add_project(name, id) → ProjectHandle
+  └── .add_project(name, default=False) → ProjectHandle      # id = name2id(name)
         ├── .add_scene_mjlab(task_id, play=..., env_cfg=..., events=...) → SceneHandle
         └── .add_scene(name, model|spec, metadata, control_dt, events) → SceneHandle
-              ├── .add_policy(name, policy, ...) → PolicyHandle
+              ├── .add_policy(name, policy, mdp=MdpConfig | the five term sets,
+              │               in_keys=, out_keys=, ...) → PolicyHandle
               │     └── .add_motion(...) / .add_motion_wandb(...) → MotionHandle
-              ├── .add_policy_wandb(run_path, ...) → list[PolicyHandle]
+              ├── .add_policy_wandb(run_path, ...) → list[PolicyHandle]   # one MdpConfig per call
               ├── .add_splat(name, source|url, ...) → SplatHandle
               ├── .set_viewer(ViewerConfig)
-              ├── .set_events(events)
-              └── .set_trace_env(env)          # required for a non-mjlab policy scene
+              ├── .set_events(events)             # the scene's default events for its policies
+              └── .set_trace_env(env)             # required for a non-mjlab policy scene
 
 builder.build(output_dir) → MjswanApp
 MjswanApp.launch(host, port, open_browser)   # blocking; Colab-aware
-MjswanApp.publish(title=..., tags=...)       # → mjswan Cloud
+MjswanApp.save_document(path=None) → Path    # the data as one .swn (ZIP of the tree)
+MjswanApp.publish(title=..., tags=...)       # → mjswan Cloud; a .swn publishes too
 ```
+
+Every project / scene / MDP / policy / splat has an `id = name2id(name)`, unique within its parent (collision → `<id>_1` + RuntimeWarning); ids are the directories in the build and the `?project=` / `?scene=` / `?policy=` values (ADR 0006 §4).
 
 `Builder.from_mjlab(task_id, run_path=...)` is the one-liner shortcut for the common "visualize a single mjlab task" pattern; it delegates to the instance method `Builder.add_project_mjlab`, which creates a project, adds an mjlab scene, and optionally attaches all `model_*.pt` checkpoints from one or more W&B runs (converted to ONNX via mjlab+torch). For finer control, build manually: `add_project` → `ProjectHandle.add_scene_mjlab` → `SceneHandle.add_policy_wandb(...)`.
 
@@ -93,22 +101,28 @@ The package's `__init__.py` is the canonical public API. Re-exports cover: `Buil
 ## Key modules
 
 ### `builder.py` — `Builder`
-Main entry point. Accumulates `ProjectConfig` objects, calls `ClientBuilder` to invoke the Vite frontend build, then per scene: builds or reuses the trace env, traces every term via `_onnx_build`, and writes `config.json` + per-scene DEFLATE-compressed ZIPs (via `utils.to_zip_deflated`, since `mujoco.to_zip` stores entries uncompressed) plus policy/motion/splat assets and traced `.onnx` graphs into the output directory.
+Main entry point. Accumulates `ProjectConfig` objects, calls `ClientBuilder` to invoke the Vite frontend build, then per scene: builds or reuses the trace env, traces each `MdpConfig` once via `_onnx_build` into `<project-id>/<scene-id>/mdp/<mdp-id>/`, writes the scene's DEFLATE-compressed ZIP (via `utils.to_zip_deflated`, since `mujoco.to_zip` stores entries uncompressed), `policy/<policy-id>.onnx` and `assets/` (motions, splats), and finally the one `manifest.json` at the output root — `{format, version, uses_custom_js, plugins?, projects}` (ADR 0006). A `config_path` sidecar contributes a checkpoint's own defaults to its policy entry; its slot tables are ignored with a warning, since `in_keys`/`out_keys` are declared on `add_policy` and checked against the network there and against the MDP's observation groups at build time.
 
 ### `app.py` — `MjswanApp`
-Wraps a built `dist/` directory. `launch()` starts a stdlib HTTP server (COOP/COEP headers required for SharedArrayBuffer / MuJoCo WASM threading); detects Google Colab and displays an inline iframe instead. `publish()` delegates to `publish.py`.
+Wraps a built `dist/` directory: the engine plus the expanded simulation document. `from_document()` takes either form — a directory is served where it sits, a `.swn` is unpacked to a temporary directory with the packaged engine (`_build_client.install_spa`) laid over it, refusing a custom-JS document whose plugin module ships with the engine. `launch()` starts a stdlib HTTP server (COOP/COEP headers required for SharedArrayBuffer / MuJoCo WASM threading); detects Google Colab and displays an inline iframe instead. `save_document()` writes the document as one `.swn` via `document.py`; `publish()` delegates to `publish.py`.
+
+### `document.py` — the `.swn` simulation document
+The built tree — `manifest.json` over `<project-id>/<scene-id>/` — *is* the document; `.swn` is that tree as a ZIP (manifest first, `.mjz`/`.npz`/`.spz` stored, the rest deflated). `document_files()` lists it off the manifest, never off what else is on disk, so the SPA's `assets/` is never mistaken for data; `unpack_document()` confines entries to the target; `as_directory()` gives `publish` and `mjswan info` one code path for either form (ADR 0006 §8).
 
 ### `publish.py` / `auth.py` — mjswan Cloud
-`publish_dist()` uploads only *data* files (`.json`, `.mjz`, `.onnx`, `.npz`, `.ply`, `.spz`; 50 MB/file, 200 MB total, 64 files) via a presigned-upload protocol — never the compiled JS, since Cloud loads a pinned engine from its own CDN. It refuses a build with `uses_custom_js: true`, which Cloud cannot render. `auth.py` is a `gh`-style loopback PKCE OAuth flow against Supabase's GitHub OAuth, persisting a rotating refresh token locally; `MJSWAN_TOKEN` bypasses it for CI.
+`publish_dist()` takes a built directory or a `.swn` and uploads only *data* files (`.json`, `.mjz`, `.onnx`, `.npz`, `.ply`, `.spz`; 50 MB/file, 200 MB total, 64 files) via a presigned-upload protocol — never the compiled JS, since Cloud loads a pinned engine from its own CDN. It refuses a build with `uses_custom_js: true`, which Cloud cannot render. `auth.py` is a `gh`-style loopback PKCE OAuth flow against Supabase's GitHub OAuth, persisting a rotating refresh token locally; `MJSWAN_TOKEN` bypasses it for CI.
+
+### `mdp.py` — `MdpConfig`
+The five term sets (observations, actions, terminations, commands, events) as one unit, shared by identity: policies handed the same object share one MDP, traced once into `mdp/<mdp-id>/`. A named MDP is `name2id(name)`; one the `add_policy` term-set kwargs built for a single policy takes that policy's id (`mdp/locomotion/` beside `policy/locomotion.onnx`); one shared by hand, as `add_policy_wandb` does for a run's checkpoints, is `mdp_<n>` per scene in first-use order. The first policy to use one fills its unset fields from the scene's env config and adapts mjlab types in place (ADR 0006 §3).
 
 ### `policy.py` — `PolicyConfig` / `PolicyHandle`
-Holds an `onnx.ModelProto` plus observation groups, action terms, termination terms, commands, and motion references. Compatible with mjlab config classes via the adapter layer. Serialized to a per-policy `<name>.json` at build time, alongside the traced `obs/`, `term/` and `command/` graphs it references.
+Holds an `onnx.ModelProto`, its `MdpConfig`, the checkpoint's own metadata (`policy_joint_names`, `default_joint_pos`, `encoder_bias`, `clip_actions`), motion references, and the slot tables `in_keys` / `out_keys` — positional maps onto the network's inputs and outputs (`RUNTIME_INPUT_SLOTS` names the tensors the runtime synthesizes: `is_init`, `adapt_hx`, `time_step`). Serialized as one entry of the scene's `policies` list in `manifest.json`, pointing at `policy/<id>.onnx` and at its MDP by id; a table equal to the default (`["actor"]`, `["action"]`) is omitted.
 
 ### `command.py`
 Defines command terms consumed by policies: `SliderConfig` (with `enabled_when` and an `adjustable_range` → `SliderRangeConfig` companion slider), `CheckboxConfig`, `ButtonConfig`, `CommandUiConfig`, `CommandTermConfig`, `CommandBinding`, and the `CommandInput` union. `velocity_command()` builds the standard locomotion 3-DoF velocity command; `ui_command()` builds a generic UI-driven term. A real mjlab command class (velocity, lifting, tracking RSI jitter) is traced like any other term — its hidden state is promoted to explicit graph I/O — and registered with `register_command`. `default_viz()` restates what mjlab's `_debug_vis_impl` draws for mjlab's own command classes as data (`core/command/debugViz.ts` evaluates it), so a `debug_vis=True` task gets its arrows and markers without the author declaring any; one mjswan has no drawing for warns at build time. The panel lists each drawing term in its **Debug Viz** section (`engine.debugVis.set`), on by default as mjlab's viewers are.
 
 ### `scene.py` — `SceneConfig` / `SceneHandle`
-A scene owns one MuJoCo model (as `MjModel` → binary `.mjb` or `MjSpec` → XML), its `control_dt`, its scene-scoped events, its trace env, zero or more policies, and zero or more Gaussian splat backgrounds.
+A scene owns one MuJoCo model (as `MjModel` → binary `.mjb` or `MjSpec` → XML), its `control_dt`, its default events (what a policy's MDP gets when it declares none), its trace env, the `MdpConfig`s its policies use (registered on first use, which fixes their ids), zero or more policies, and zero or more Gaussian splat backgrounds. `add_policy` checks a policy's slot tables against its network: a multi-input network without `in_keys` is refused there.
 
 ### `splat.py` — `SplatConfig` / `SplatHandle`
 Configures a 3D Gaussian Splat (`.spz` format) background: scale, position offsets, Euler rotations, optional collider mesh URL, and a `control` flag exposing live calibration sliders.
@@ -121,15 +135,18 @@ Camera parameters (lookat, distance, fovy, elevation, azimuth) + tracking mode (
 
 ### `compile/` — the tracer (ADR 0005)
 - `tracer.py`: runs each `func(env, **params)` once against a recording proxy to discover its reads, classifies each as time-varying state (a graph input, or "slot") or a model-derived constant (baked in), then exports an `nn.Module` via `torch.onnx.export`. Three slot namespaces: an entity `data` field, a named sensor's `sensordata` window, and a live command's state field. Structured sensors (`RayCastSensor`) contribute one slot per field read. Only `_STATIC_DATA_FIELDS` are treated as constant — anything unrecognized errs toward a graph input, so a missing runtime input fails loudly instead of returning stale values.
-- `serialize.py`: a traced command's `policy.json` entry. One generic browser-side `OnnxCommand` handler interprets every command from this data, so the entry declares state fields (names, shapes, **and initial values**), `rand_dim`, dynamic reads, and any `entity_write`.
+- `serialize.py`: a traced command's manifest entry. One generic browser-side `OnnxCommand` handler interprets every command from this data, so the entry declares state fields (names, shapes, **and initial values**), `rand_dim`, dynamic reads, and any `entity_write`.
 - `rng.py`: build-time RNG spy/replay. Patches the term function's *own* module globals (mjlab binds the name at import time), records mjlab's real draws, replays those exact values into the graph's `rand` input so parity does not diverge on randomness alone. Unrelated to the runtime's seeded PRNG.
 - `parity.py`: steps a live env with a seeded action sequence and feeds the same raw state through each exported graph via `onnxruntime` (not torch), asserting `allclose` for every term at every step.
 
 ### `_onnx_build.py`
-Bridges the term config dataclasses to `compile/`. Traces each plain-callable body against the scene's live env, writes `.onnx` bytes under `<scene_dir>/{obs,term,command,event}/`, and returns the manifest-shaped JSON entry. Emits **fused** graphs: one per observation group (clip-then-scale folded in, mjlab's order) and one per termination group (a bool lane per term, so per-term reset reasons survive). A group with a legacy `*Binding` term or per-term history does not fuse; a lone traced termination is deliberately left unfused. Startup DR that perturbs `mjModel` rather than `mjData` (`geom_friction`, `body_com_offset`, `geom_rgba`) carries no graph — it emits a descriptor the browser applies once from the seeded PRNG, keyed by entity *names* since the browser compiles its own model.
+Bridges the term config dataclasses to `compile/`. Traces each plain-callable body against the scene's live env, writes `.onnx` bytes under `<scene_dir>/mdp/<mdp-id>/{obs,term,command,event}/`, and returns the manifest-shaped JSON entry. Emits **fused** graphs: one per observation group (clip-then-scale folded in, mjlab's order) and one per termination group (a bool lane per term, so per-term reset reasons survive). A group with a legacy `*Binding` term or per-term history does not fuse; a lone traced termination is deliberately left unfused. Startup DR that perturbs `mjModel` rather than `mjData` (`geom_friction`, `body_com_offset`, `geom_rgba`) carries no graph — it emits a descriptor the browser applies once from the seeded PRNG, keyed by entity *names* since the browser compiles its own model.
+
+### `_graph_io.py`
+The one place that names a traced graph's file and writes it. A ref is the path the manifest carries, resolved by the browser against the scene directory, so the string and the location on disk are the same thing. Graphs are scoped `mdp/<mdp-id>/`: a group or term name is unique within an MDP but not within a scene, and nearly every MDP names its one observation group `actor` — the default slot (`mjlab_adapter.DEFAULT_OBS_GROUP_KEY`). The write refuses to replace a *different* graph already at one path, so a serializer that ever loses its scope fails the build instead of shipping a document where one MDP loads another's graph.
 
 ### `adapters/`
-- `mjlab_adapter.py`: Converts mjlab types to mjswan equivalents. Obs/term/event bodies are *not* name-resolved to mirrors any more — mjlab's own functions are traced directly. What remains is config-shape adaptation, observation-group key resolution via the task's runner config (`rl_cfg.obs_groups["actor"]`), `clip_actions`, and action-scale resolution.
+- `mjlab_adapter.py`: Converts mjlab types to mjswan equivalents. Obs/term/event bodies are *not* name-resolved to mirrors any more — mjlab's own functions are traced directly. What remains is config-shape adaptation, reducing mjlab's network-keyed observation dict to the actor's group via the task's runner config (`rl_cfg.obs_groups`: only groups it attributes to a network are renamed or dropped, so an author's extra slots survive), `clip_actions`, and action-scale resolution.
 - `gui_spy.py`: runs mjlab's own `CommandTerm.create_gui` against a recording stand-in, so the browser control panel's slider ranges come from mjlab's declaration instead of a hand-copied duplicate that drifts.
 - `mjlab_compat.py`: Monkey-patches `MujocoCfg.apply_to_spec()` onto mjlab when needed.
 
@@ -164,7 +181,7 @@ TypeScript + React + Vite + three.js. Built by `Builder.build()` via `_build_cli
 - Runs the policy **and every traced MDP term body** via onnxruntime-web.
 - Renders via three.js (reflections, shadows, Gaussian Splat background).
 - Supports WebXR (VR), including tracked hands as bodies inside the sim (opt-in).
-- Reads `config.json` to discover projects/scenes/policies at runtime.
+- Reads `manifest.json` to discover projects/scenes/MDPs/policies at runtime; `?project=` / `?scene=` / `?policy=` take ids (`sanitizeName` = `name2id`, pinned by a shared case table).
 
 `src/core/` mirrors mjlab's layout — `observation/`, `termination/`, `action/`, `event/`, `command/` — plus `onnx/` (`session.ts` caches split by lifetime, `runQueue.ts`, `slotReader.ts` serving graph inputs from `mjModel`/`mjData`, `raycast.ts` casting height-scan rays with `mj_ray`, `contact.ts`, `graphRefs.ts`), `rng.ts` (xoshiro128\*\*, snapshot-able), `policy/`, `scene/`, `xr/` (`handMocap.ts` injects a capsule per hand bone and writes `mocap_pos`/`mocap_quat`), and `engine/` (`runtime.ts` step loop, `resetChain.ts`, `viewer_config.ts`). Each manager is native orchestration around ONNX term bodies: `FusedObservation`/`OnnxObservation`/`NativeObservation`/`HistoryObservation`, `FusedTermination`/`OnnxTermination`/`TimeOutTermination`, `OnnxEvent` + `triggers.ts` + `entityWrite.ts` + `modelFieldDr.ts`, `OnnxCommand`. Action is fully native (`action/applyAction.ts`).
 
@@ -177,7 +194,7 @@ The template has three Vite build outputs (all written to `template/dist/`):
 - **Library** (`vite.lib.config.ts`, `npm run build:lib`) — a single self-contained ESM `dist/mjswan.js` exposing `createEngine(element, options?)` (entry `src/engine/index.ts`), consumed by mjswan Cloud from a CDN. Every dependency is bundled (no bare imports) and the MuJoCo/ONNX WASM is emitted as co-located files referenced via `new URL('./x.wasm', import.meta.url)`. Vite lib mode force-inlines those WASM as base64; a `generateBundle` plugin extracts them back into co-located files. See mjswan-cloud ADR 0001.
 - **Manifest** (`vite.manifest.config.ts`) — `dist/manifest.js`, the `mjswan/manifest` catalog parser as a standalone CDN-loadable ESM.
 
-`npm run build` runs all of them. The public engine API (ADR 0004) is bytes-in / snapshot-out: `loadScene` / `setPolicy` / `setSplat` / `setMotion`, `camera` / `commands` verbs, `subscribe`, `captureThumbnail`, `dispose`, with `termSeed` in and out for session replay. It never fetches — `mjswan/manifest` (`parseManifest(config, byteSource)`) turns a `config.json` into a lazy catalog and the app owns the fetching.
+`npm run build` runs all of them. The public engine API (ADR 0004) is bytes-in / snapshot-out: `loadScene` / `setPolicy` / `setSplat` / `setMotion`, `camera` / `commands` verbs, `subscribe`, `captureThumbnail`, `dispose`, with `termSeed` in and out for session replay. It never fetches — `mjswan/manifest` (`parseManifest(manifest, byteSource)`) turns a `manifest.json` into a lazy catalog (refusing a `format` newer than it knows) and the app owns the fetching. A policy switch is an MDP switch: the runtime restores the model fields the previous MDP's startup randomization changed, reseeds the term PRNG, builds the new MDP's `EventManager` and runs its startup events (ADR 0006 §9).
 
 
 ## CLI entry points
@@ -187,10 +204,10 @@ The primary CLI is `mjswan` (Typer-based, defined in `_cli.py:app`). Subcommands
 | Subcommand | Description |
 |------------|-------------|
 | `mjswan view <model.xml>` | Build and launch a viewer for a MuJoCo XML/MJCF file |
-| `mjswan serve <dist-dir>` | Serve a pre-built `dist/` directory |
+| `mjswan serve <dist-dir \| document.swn>` | Serve a pre-built `dist/` directory, or a `.swn` document |
 | `mjswan new <name> [--template hello-world\|policy\|mjlab]` | Scaffold a new project from a template |
 | `mjswan demo [name]` / `--list` | Run a built-in demo (`simple`, `main`, `mjlab`) |
-| `mjswan info <dist-dir>` | Show a tree of projects/scenes/policies and asset sizes |
+| `mjswan info <dist-dir \| document.swn>` | Show a tree of projects/scenes/policies and asset sizes |
 | `mjswan publish <dist-dir>` | Upload a built dist's data files to mjswan Cloud (rejects custom-JS builds) |
 | `mjswan login` / `whoami` / `logout` | mjswan Cloud session (loopback GitHub OAuth) |
 
@@ -204,7 +221,7 @@ Legacy entry points (kept for backward compatibility): `main`, `simple`, `mjlab`
 | `uv` | Dependency management and script runner — use instead of bare `python`/`pip` |
 | `hatchling` | Build backend |
 | `ruff` | Linting and formatting (pinned exactly, not floored — see pyproject comment) |
-| `pyright` / `ty` | Type checking |
+| `pyright` / `ty` | Type checking (`make type` runs both over `src/mjswan`; `examples/` and `typings/` are out of scope, the latter a search path for ty) |
 | `pytest` | Tests (`make test`) |
 | `pre-commit` | Hooks: trailing-whitespace, end-of-file-fixer, ruff, ruff-format, npmrc secret scan, pytest (not slow), eslint |
 | `zensical` | Docs site builder (MkDocs-based) — `make docs-build` / `make docs-serve` |
@@ -251,4 +268,4 @@ The demo app is built by `examples/demo/main.py` and deployed to GitHub Pages vi
 
 ## Design records
 
-`docs/adr/` holds the ADRs, deliberately outside the published site (contributor documentation citing files and line numbers). ADR 0005 and its companion implementation brief are the ones to read before touching `compile/`, `_onnx_build.py`, or the frontend's manager layer — the brief carries a per-item status table including the things measured and **declined** (event fusion, input-tensor pre-allocation, `source_url` provenance, bit-for-bit replay), each with the reasoning. Do not re-add those as unfinished requirements.
+`docs/adr/` holds the ADRs, deliberately outside the published site (contributor documentation citing files and line numbers). ADR 0005 and its companion implementation brief are the ones to read before touching `compile/`, `_onnx_build.py`, or the frontend's manager layer — the brief carries a per-item status table including the things measured and **declined** (event fusion, input-tensor pre-allocation, `source_url` provenance, bit-for-bit replay), each with the reasoning. Do not re-add those as unfinished requirements. [ADR 0006](./docs/adr/0006-swn-simulation-document.md) supersedes ADR 0005 §1: the build output becomes a `.swn` document with a single root `manifest.json`, an `MdpConfig` unit that owns all five managers (events included), and a `<project-id>/<scene-id>/` layout. It is design-stage — the code still writes `assets/config.json`.

@@ -9,13 +9,17 @@ with the same attributes that the adapter inspects, placed in a fake
 
 from __future__ import annotations
 
+import json
 import sys
+import warnings
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
 
 from mjswan.adapters.mjlab_adapter import (
+    DEFAULT_OBS_GROUP_KEY,
     adapt_actions,
     adapt_commands,
     adapt_observations,
@@ -28,6 +32,7 @@ from mjswan.envs.mdp.observations import ObservationBinding
 from mjswan.envs.mdp.terminations import TerminationBinding
 from mjswan.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjswan.managers.termination_manager import TerminationTermCfg
+from mjswan.policy import DEFAULT_IN_KEYS, DEFAULT_OUT_KEYS
 
 # ---------------------------------------------------------------------------
 # Fake mjlab types — classes whose __module__ starts with "mjlab"
@@ -272,26 +277,52 @@ class TestAdaptObservations:
         assert callable(result["adapt_hx"].terms["grav"].func)
 
 
-class TestObservationGroupKey:
-    """The dict key is the ONNX input name, so the adapter — not the caller — owns it.
+class TestDefaultSlotTables:
+    """The default slot table is one fact; three places would have to agree on it.
 
-    `OnnxModule` defaults `in_keys` to `["policy"]` and warns-and-returns on an input it
-    cannot find, so a group under mjlab's own name (`"actor"`) yields a policy that never
-    acts, with no build-time error. Hence: hand in the group, not a key for it.
+    The builder writes no ``in_keys`` when a policy's table equals the default, so the
+    runtime supplies it instead. Should the two sides disagree, every such policy looks
+    for an input nothing feeds and goes inert at playback, with nothing raised at build
+    time. ``DEFAULT_OBS_GROUP_KEY`` is derived from ``DEFAULT_IN_KEYS``; the TypeScript
+    runtime reads ``default_slots.json``, which these pin the Python side to.
     """
 
-    def test_single_mjlab_group_lands_under_policy_key(self):
+    SHARED = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "src/mjswan/template/src/core/policy/default_slots.json"
+        ).read_text()
+    )
+
+    def test_python_defaults_match_the_shared_table(self):
+        assert list(DEFAULT_IN_KEYS) == self.SHARED["in_keys"]
+        assert list(DEFAULT_OUT_KEYS) == self.SHARED["out_keys"]
+
+    def test_the_lone_group_slot_is_the_first_default_input(self):
+        assert DEFAULT_OBS_GROUP_KEY == DEFAULT_IN_KEYS[0]
+
+
+class TestObservationGroupKey:
+    """A lone group lands under the default slot, ``actor`` (ADR 0006 §5).
+
+    The dict key is a *slot* name (what the policy's ``in_keys`` table calls the tensor
+    that fills an input), and the default table is ``["actor"]``, mjlab's own name for
+    the group its actor network reads. So a single group needs no key from the caller,
+    and a dict keyed any other way is the caller's own slot table, passed through.
+    """
+
+    def test_single_mjlab_group_lands_under_the_actor_slot(self):
         func = _make_mjlab_obs_func("base_ang_vel")
         group = FakeMjlabObsGroupCfg(terms={"ang": FakeMjlabObsTermCfg(func=func)})
 
         result = adapt_observations(group)
 
         assert result is not None
-        assert list(result) == ["policy"]
-        assert isinstance(result["policy"], ObservationGroupCfg)
-        assert callable(result["policy"].terms["ang"].func)
+        assert list(result) == ["actor"]
+        assert isinstance(result["actor"], ObservationGroupCfg)
+        assert callable(result["actor"].terms["ang"].func)
 
-    def test_single_mjswan_group_lands_under_policy_key(self):
+    def test_single_mjswan_group_lands_under_the_actor_slot(self):
         group = ObservationGroupCfg(
             terms={"ang": ObservationTermCfg(func=ObservationBinding(ts_name="X"))}
         )
@@ -299,9 +330,9 @@ class TestObservationGroupKey:
         result = adapt_observations(group)
 
         assert result is not None
-        # The same object: an mjswan group needs no conversion, only a key.
-        assert result == {"policy": group}
-        assert result["policy"] is group
+        # The same object: an mjswan group needs no conversion, only a slot.
+        assert result == {"actor": group}
+        assert result["actor"] is group
 
     def test_dict_form_still_passes_keys_through(self):
         group = ObservationGroupCfg(terms={})
@@ -318,6 +349,16 @@ class TestObservationGroupKey:
         # it in would trace it, bundle it, and evaluate it every control step for nothing.
         assert result == {"policy": actor}
 
+    def test_the_critic_beside_an_actor_group_is_dropped_silently(self):
+        # mjlab's own dict, handed over whole: the pair is unmistakable, so no warning.
+        actor = ObservationGroupCfg(terms={})
+        critic = ObservationGroupCfg(terms={})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert adapt_observations({"actor": actor, "critic": critic}) == {
+                "actor": actor
+            }
+
     def test_a_group_of_only_training_terms_leaves_nothing(self):
         with pytest.warns(RuntimeWarning, match="critic"):
             assert adapt_observations({"critic": ObservationGroupCfg(terms={})}) == {}
@@ -327,7 +368,7 @@ class TestObservationGroupKey:
         body_pos = _make_mjlab_obs_func("robot_body_pos_b")
         result = adapt_observations(
             {
-                "policy": FakeMjlabObsGroupCfg(
+                "actor": FakeMjlabObsGroupCfg(
                     terms={
                         "anchor": FakeMjlabObsTermCfg(func=motion_anchor),
                         "body": FakeMjlabObsTermCfg(func=body_pos),
@@ -337,47 +378,62 @@ class TestObservationGroupKey:
         )
         # The adapter resolves these to callables, not ObservationBinding sentinels.
         assert result is not None
-        assert callable(result["policy"].terms["anchor"].func)
-        assert callable(result["policy"].terms["body"].func)
+        assert callable(result["actor"].terms["anchor"].func)
+        assert callable(result["actor"].terms["body"].func)
 
 
 class TestMjlabGroupDictSelection:
-    """An mjlab `env_cfg.observations` is keyed by *network*; mjswan's by *ONNX input*.
+    """An mjlab ``env_cfg.observations`` is keyed by *network*; mjswan's by *slot*.
 
-    Two namespaces that look alike, so the adapter remaps the one it can recognise and
-    keeps its hands off the one it cannot. Getting that boundary wrong in either
-    direction is silent at build time: an unrecognised key means no ONNX input to feed,
-    and a wrongly-remapped one means the wrong vector on the right input.
+    Two namespaces that look alike; since the default slot is called ``actor`` too,
+    mjlab's own dict needs no renaming, only the other networks' groups dropped. The
+    runner's ``obs_groups`` says which keys belong to which network; the adapter touches
+    only those and keeps its hands off everything else. Getting that boundary wrong is
+    silent at build time: a dropped slot is an input nothing feeds, and a wrongly renamed
+    one is the wrong vector on the right input.
     """
+
+    ACTOR_CRITIC = {"actor": ("actor",), "critic": ("critic",)}
 
     def test_whole_mjlab_dict_reduces_to_the_actor_group(self):
         actor = ObservationGroupCfg(terms={})
         critic = ObservationGroupCfg(terms={})
 
-        result = adapt_observations({"actor": actor, "critic": critic})
+        result = adapt_observations(
+            {"actor": actor, "critic": critic}, obs_groups=self.ACTOR_CRITIC
+        )
 
-        assert result == {"policy": actor}
+        assert result == {"actor": actor}
 
-    def test_actor_only_dict_is_renamed(self):
+    def test_actor_only_dict_is_left_as_it_is(self):
         actor = ObservationGroupCfg(terms={})
-        assert adapt_observations({"actor": actor}) == {"policy": actor}
+        assert adapt_observations({"actor": actor}, obs_groups=self.ACTOR_CRITIC) == {
+            "actor": actor
+        }
 
     def test_a_dict_without_an_actor_is_left_alone(self):
-        # `examples/demo` relies on this: `balance.json` declares `in_keys: ["observation"]`,
-        # `decap.json` `["obs_history"]`, ANYmal's `["obs"]`. Remapping any of them to
-        # "policy" would leave the runtime looking for an input nothing supplies.
+        # A policy whose author keyed its one group some other way: that key is the
+        # policy's own slot table, and the runner has no say over it.
         for key in ("observation", "obs", "obs_history"):
             group = ObservationGroupCfg(terms={})
-            assert adapt_observations({key: group}) == {key: group}
+            assert adapt_observations({key: group}, obs_groups=self.ACTOR_CRITIC) == {
+                key: group
+            }
 
-    def test_a_multi_input_dict_is_left_alone(self):
-        # Facet: `in_keys: ["command", "policy", ...]` — two real inputs, both ours.
-        policy = ObservationGroupCfg(terms={})
+    def test_slots_the_runner_does_not_know_stay_beside_the_actor_group(self):
+        # Facet: `in_keys=["command", "actor", ...]`, two real inputs, both ours. The
+        # runner knows `actor` and `critic`; `command` is the author's slot, and dropping
+        # it would leave the network an input short.
+        actor = ObservationGroupCfg(terms={})
         command = ObservationGroupCfg(terms={})
-        result = adapt_observations({"policy": policy, "command": command})
-        assert result == {"policy": policy, "command": command}
+        observations = {"actor": actor, "command": command}
+        assert adapt_observations(observations, obs_groups=self.ACTOR_CRITIC) == {
+            "actor": actor,
+            "command": command,
+        }
+        assert adapt_observations(observations) == {"actor": actor, "command": command}
 
-    def test_runner_obs_groups_win_over_the_actor_name(self):
+    def test_runner_obs_groups_move_the_actors_group_to_the_default_slot(self):
         # A task free to name its groups anything; `obs_groups["actor"]` is the only thing
         # that actually knows which one the exported network reads.
         proprio = ObservationGroupCfg(terms={})
@@ -385,18 +441,19 @@ class TestMjlabGroupDictSelection:
 
         result = adapt_observations(
             {"proprio": proprio, "privileged": privileged},
-            policy_groups=("proprio",),
+            obs_groups={"actor": ("proprio",), "critic": ("privileged",)},
         )
 
-        assert result == {"policy": proprio}
+        assert result == {"actor": proprio}
 
     def test_runner_obs_groups_beat_a_literal_actor_key(self):
         actor = ObservationGroupCfg(terms={})
         other = ObservationGroupCfg(terms={})
         result = adapt_observations(
-            {"actor": actor, "other": other}, policy_groups=("other",)
+            {"actor": actor, "other": other},
+            obs_groups={"actor": ("other",), "critic": ("actor",)},
         )
-        assert result == {"policy": other}
+        assert result == {"actor": other}
 
     def test_concatenated_groups_are_refused_not_truncated(self):
         # rsl-rl lets one network read several groups concatenated. mjswan feeds one vector
@@ -408,42 +465,37 @@ class TestMjlabGroupDictSelection:
                     "a": ObservationGroupCfg(terms={}),
                     "b": ObservationGroupCfg(terms={}),
                 },
-                policy_groups=("a", "b"),
+                obs_groups={"actor": ("a", "b")},
             )
 
     def test_a_dict_sharing_no_key_with_the_task_is_left_alone(self):
         # A task id is not evidence that *this* dict is the task's. On an mjlab scene a
-        # policy may still carry a config declaring `in_keys: ["observation"]`, and
-        # remapping it because the task calls its group "proprio" would break it.
+        # policy may still key its group `observation`, or `actor` when the task calls
+        # its own `proprio`; either way it is the policy's slot table, not the task's dict.
         group = ObservationGroupCfg(terms={})
-        assert adapt_observations(
-            {"observation": group}, policy_groups=("proprio",)
-        ) == {"observation": group}
-
-    def test_a_literal_actor_key_still_wins_when_the_task_names_another(self):
-        actor = ObservationGroupCfg(terms={})
-        assert adapt_observations({"actor": actor}, policy_groups=("proprio",)) == {
-            "policy": actor
-        }
+        for key in ("observation", "actor"):
+            assert adapt_observations(
+                {key: group}, obs_groups={"actor": ("proprio",)}
+            ) == {key: group}
 
     def test_an_empty_dict_selects_nothing_rather_than_failing(self):
-        # `observations={}` is how a policy says it has none; a task id must not turn
-        # that into an error.
-        assert adapt_observations({}, policy_groups=("actor",)) == {}
+        # `observations={}` is how a policy says it has none; a task must not turn that
+        # into an error.
+        assert adapt_observations({}, obs_groups=self.ACTOR_CRITIC) == {}
 
     def test_concatenated_groups_only_raise_for_the_tasks_own_dict(self):
         # No overlap with the task's group names, so this is somebody else's dict and the
         # concatenation the task does is none of its business.
         group = ObservationGroupCfg(terms={})
-        assert adapt_observations({"policy": group}, policy_groups=("a", "b")) == {
-            "policy": group
-        }
+        assert adapt_observations(
+            {"policy": group}, obs_groups={"actor": ("a", "b")}
+        ) == {"policy": group}
 
-    def test_a_single_group_ignores_policy_groups(self):
+    def test_a_single_group_ignores_obs_groups(self):
         # Already unambiguous: there is one group, and it is the policy's.
         group = ObservationGroupCfg(terms={})
-        assert adapt_observations(group, policy_groups=("anything",)) == {
-            "policy": group
+        assert adapt_observations(group, obs_groups={"actor": ("anything",)}) == {
+            "actor": group
         }
 
     def test_mjlab_groups_in_the_dict_are_still_converted(self):
@@ -453,8 +505,8 @@ class TestMjlabGroupDictSelection:
         result = adapt_observations({"actor": actor, "critic": actor})
 
         assert result is not None
-        assert list(result) == ["policy"]
-        assert isinstance(result["policy"], ObservationGroupCfg)
+        assert list(result) == ["actor"]
+        assert isinstance(result["actor"], ObservationGroupCfg)
 
 
 # ===================================================================
@@ -962,7 +1014,7 @@ class TestResolveRunnerDefaults:
 
         result = resolve_runner_defaults("some-task")
 
-        assert result.policy_obs_groups == ("actor",)
+        assert result.obs_groups["actor"] == ("actor",)
         assert result.clip_actions == 100.0
 
     def test_clip_actions_zero_survives(self, monkeypatch):
@@ -978,11 +1030,11 @@ class TestResolveRunnerDefaults:
             monkeypatch,
             SimpleNamespace(obs_groups={"actor": ("proprio",)}, clip_actions=None),
         )
-        assert resolve_runner_defaults("t").policy_obs_groups == ("proprio",)
+        assert resolve_runner_defaults("t").obs_groups["actor"] == ("proprio",)
 
     def test_no_task_id_means_no_defaults(self):
         result = resolve_runner_defaults(None)
-        assert result.policy_obs_groups is None
+        assert result.obs_groups is None
         assert result.clip_actions is None
 
     def test_an_unknown_task_is_not_fatal(self, monkeypatch):
@@ -997,7 +1049,7 @@ class TestResolveRunnerDefaults:
         monkeypatch.setitem(sys.modules, "mjlab.tasks.registry", module)
 
         # A hand-built env_cfg has no registered task; that is a fallback, not an error.
-        assert resolve_runner_defaults("nope").policy_obs_groups is None
+        assert resolve_runner_defaults("nope").obs_groups is None
 
     @pytest.mark.slow
     @pytest.mark.mjlab
@@ -1009,4 +1061,4 @@ class TestResolveRunnerDefaults:
         result = resolve_runner_defaults("Mjlab-Velocity-Flat-Unitree-G1")
         # mjlab's default is `{"actor": ("actor",), "critic": ("critic",)}`; if upstream
         # renames or restructures it, this fails and says so.
-        assert result.policy_obs_groups == ("actor",)
+        assert result.obs_groups["actor"] == ("actor",)

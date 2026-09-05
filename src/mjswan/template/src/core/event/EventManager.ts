@@ -125,16 +125,19 @@ export class EventManager {
   /**
    * Fire every `mode="startup"` term once, in config order and after the model-field
    * randomizations, so `add`/`scale` see the compiled default.
+   *
+   * `defaults` is the model-lifetime snapshot the runtime restores before an MDP switch.
+   * Omitted, a fresh one is taken, which is right for a single startup pass.
    */
-  async startup(context: EventContext): Promise<void> {
-    this.applyModelFieldTerms(context);
+  async startup(context: EventContext, defaults?: ModelFieldDefaults): Promise<void> {
+    this.applyModelFieldTerms(context, defaults);
     for (const { term, trigger } of this.startupTerms) {
       if (trigger.take()) await term.fire(context);
     }
   }
 
   /** Once, before the startup terms: `add`/`scale` are relative to the compiled default. */
-  private applyModelFieldTerms(context: EventContext): void {
+  private applyModelFieldTerms(context: EventContext, defaults?: ModelFieldDefaults): void {
     if (this.modelFieldTerms.length === 0) return;
     const { mujoco, mjModel, mjData } = context;
     if (!mujoco || !mjModel || !mjData) {
@@ -145,11 +148,11 @@ export class EventManager {
       console.warn('[EventManager] model-field randomization needs the seeded rng; skipping.');
       return;
     }
-    // One `defaults` per pass, so events on one field share a base.
-    const defaults = new ModelFieldDefaults(mjModel);
+    // One `defaults` per model, so events on one field share a base across passes.
+    const base = defaults ?? new ModelFieldDefaults(mjModel);
     for (const { config, trigger } of this.modelFieldTerms) {
       if (!trigger.take()) continue;
-      applyModelFieldDr(mujoco, mjModel, mjData, config, this.deps.rng, defaults);
+      applyModelFieldDr(mujoco, mjModel, mjData, config, this.deps.rng, base);
     }
   }
 

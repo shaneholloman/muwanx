@@ -1,13 +1,32 @@
 """Shared pytest fixtures for the mjswan test suite."""
 
 import gzip
+import json
 import struct
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import mujoco
 import onnx
 import pytest
 from onnx import TensorProto, helper
+
+
+@pytest.fixture
+def build_manifest(monkeypatch):
+    """Run `_save_web` into ``out`` and return the manifest it wrote.
+
+    Only the Node build and the SPA copy are mocked, so assertions still go through the
+    real writer rather than a test-only one.
+    """
+
+    def build(builder, out: Path) -> dict:
+        monkeypatch.setattr("mjswan.builder.ClientBuilder", MagicMock())
+        monkeypatch.setattr("mjswan.builder.install_spa", MagicMock(return_value=True))
+        builder._save_web(out)
+        return json.loads((out / "manifest.json").read_text())
+
+    return build
 
 
 @pytest.fixture
