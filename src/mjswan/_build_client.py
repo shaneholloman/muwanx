@@ -35,8 +35,8 @@ _SPA_EXCLUDES = frozenset({"fixtures", ".mjswan-build-meta.json"})
 def install_spa(dest: Path, template_dir: Path | None = None) -> bool:
     """Copy the built SPA, the engine, into ``dest``; False when none is built yet.
 
-    An app is the engine plus an expanded document (ADR 0006 §8) and this is the engine
-    half, so both the builder and ``MjswanApp.from_document`` lay it down the same way.
+    An app is the engine plus an expanded document (ADR 0006 §8); this lays down the
+    engine half, for both the builder and ``MjswanApp.from_document``.
     """
     root = template_dir or TEMPLATE_DIR
     built = root / "dist"

@@ -380,11 +380,10 @@ def name2id(name: str) -> str:
 def unique_id(base: str, taken: Collection[str]) -> str:
     """``base`` if free, else the first of ``base_1``, ``base_2``, … not in ``taken``.
 
-    Identity is scoped to the level that owns the directory (ADR 0006 §4): a project id
-    is unique in the document, a scene id in its project, a policy/mdp/asset id in its
-    scene. Two siblings that sanitize to one id are both kept; the second is renamed
-    rather than refused, because two scenes called "Flat Terrain" is a reasonable thing
-    to write.
+    ``taken`` is the level that owns the directory (ADR 0006 §4): a project id is unique
+    in the document, a scene id in its project, a policy/mdp/asset id in its scene. Two
+    siblings that sanitize to one id are both kept, the second renamed rather than
+    refused, since two scenes called "Flat Terrain" is a reasonable thing to write.
     """
     if base not in taken:
         return base
@@ -399,9 +398,8 @@ def assign_id(
 ) -> str:
     """``name2id(name)``, made unique among ``taken``; warns when it had to be renamed.
 
-    ``kind`` names the level in the warning ("scene", "policy", …). An empty result
-    (a name with no ASCII letter or digit in it) is refused, since it would have no
-    directory and no URL.
+    ``kind`` names the level in the warning ("scene", "policy", …). An empty result, from
+    a name with no ASCII letter or digit, is refused: it would have no directory and no URL.
     """
     base = name2id(name)
     if not base:

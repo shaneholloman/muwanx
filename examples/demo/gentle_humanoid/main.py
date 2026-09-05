@@ -276,8 +276,8 @@ def setup_builder() -> mjswan.Builder:
         policy=onnx.load(str(policy_path), load_external_data=True),
         config_path=str(policy_json),
         # Without this the runtime drives the robot from output 0 instead of `action`
-        # (ADR 0006 §5). The sidecar still carries the table, so the build's
-        # ignored-slot-table warning is expected here.
+        # (ADR 0006 §5). The sidecar still carries a table, so the build warns that it
+        # is ignoring it.
         out_keys=[
             "policy",
             "priv_pred",

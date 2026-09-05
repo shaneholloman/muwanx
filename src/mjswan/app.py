@@ -36,11 +36,10 @@ class MjswanApp:
     def from_document(cls, source: str | Path) -> "MjswanApp":
         """The app for a built directory, or for a ``.swn`` document.
 
-        A directory is already an app (the engine beside the expanded tree) and is
-        served where it sits. A document is only the tree (ADR 0006 §8), so the app is
-        assembled: it is unpacked into a temporary directory, the packaged engine is laid
-        over it, and that directory is removed when the process exits. The engine is
-        built once if no matching SPA is cached, exactly as a build would.
+        A directory is already an app and is served where it sits. A document is only
+        the tree (ADR 0006 §8), so one is assembled: unpacked into a temporary directory
+        with the packaged engine laid over it, removed when the process exits. The engine
+        is built first if no matching SPA is cached, exactly as a build would.
         """
         import atexit
         import shutil
@@ -55,9 +54,8 @@ class MjswanApp:
         if not is_document(source):
             return cls(source.resolve())
 
-        # Custom-JS terms compile to a `plugins.js` that lives with the engine, not in
-        # the document, so it cannot be served from one: the manifest would point at a
-        # module that is not there and the scene would fail to load.
+        # Custom-JS terms compile to a `plugins.js` that ships with the engine, not in
+        # the document, so the manifest would point at a module that is not there.
         if read_manifest(source).get("uses_custom_js") is True:
             raise DocumentError(
                 f"{source.name} was built with custom-JS MDP terms, whose runtime module "
@@ -86,9 +84,8 @@ class MjswanApp:
         """Write the simulation as one ``.swn`` file and return its path (ADR 0006 §8).
 
         The document is the build's data (``manifest.json`` and every project directory)
-        packaged as a ZIP of the same tree. It carries no engine: hand it to someone,
-        open it in a viewer, or ``publish()`` it. ``path`` defaults to the build
-        directory's name with ``.swn``, beside it.
+        packaged as a ZIP of the same tree, carrying no engine. ``path`` defaults to the
+        build directory's name with ``.swn``, beside it.
         """
         from .document import write_document
 

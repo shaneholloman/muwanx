@@ -126,9 +126,8 @@ export class EventManager {
    * Fire every `mode="startup"` term once, in config order and after the model-field
    * randomizations, so `add`/`scale` see the compiled default.
    *
-   * `defaults` is the model-lifetime snapshot the runtime restores before an MDP switch
-   * (see {@link ModelFieldDefaults}); omitted, a fresh one is taken, which is right for
-   * a single startup pass.
+   * `defaults` is the model-lifetime snapshot the runtime restores before an MDP switch.
+   * Omitted, a fresh one is taken, which is right for a single startup pass.
    */
   async startup(context: EventContext, defaults?: ModelFieldDefaults): Promise<void> {
     this.applyModelFieldTerms(context, defaults);

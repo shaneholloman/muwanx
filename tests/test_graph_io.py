@@ -1,7 +1,4 @@
-"""Where a traced graph lands, and what happens when two of them want one path.
-
-The scoping is the fix; the guard is what says so out loud if it ever stops holding.
-"""
+"""Where a traced graph lands, and what happens when two of them want one path."""
 
 from __future__ import annotations
 
@@ -18,8 +15,8 @@ class TestOnnxRef:
         assert onnx_ref("obs", "policy", "walk") == "walk/obs/policy.onnx"
 
     def test_two_policies_naming_one_group_get_two_paths(self):
-        # The whole point: "policy" is the ONNX input name both networks read, so the
-        # group name alone cannot separate them.
+        # Both networks read a group of the same name, so the name alone cannot separate
+        # them.
         assert onnx_ref("obs", "policy", "walk") != onnx_ref("obs", "policy", "crawl")
 
 

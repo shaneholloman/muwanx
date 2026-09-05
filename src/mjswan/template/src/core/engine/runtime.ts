@@ -234,9 +234,9 @@ export class mjswanRuntime {
    */
   private modelFieldDefaults: ModelFieldDefaults | null;
   /**
-   * Shared by every ONNX term's `rand` input. Reseeded to the session seed at every scene
-   * load *and* every policy load: an MDP switch draws from the same point a scene load
-   * does, so randomization is a function of (seed, MDP) and not of playback so far.
+   * Shared by every ONNX term's `rand` input. Reseeded at every scene load *and* every
+   * policy load, so randomization is a function of (seed, MDP) rather than of playback
+   * so far.
    */
   private termRng: SeededRng;
   /** Held so an app recording a session can persist the seed the run used. */
@@ -400,7 +400,7 @@ export class mjswanRuntime {
     this.controlDt = scene.controlDt && scene.controlDt > 0 ? scene.controlDt : null;
     // Reseed so two loads of the same scene draw the same randomness.
     this.termRng = new SeededRng(this.termSeed);
-    // Events belong to the policy's MDP now; `loadPolicyConfig` builds their manager.
+    // Events belong to the policy's MDP; `loadPolicyConfig` builds their manager.
     this.eventManager = null;
     this.modelFieldDefaults = null;
 
@@ -852,9 +852,9 @@ export class mjswanRuntime {
     this.contactSensors = new ContactSensorSet();
 
     // An MDP switch, in order (ADR 0006 §9): restore every model field the previous
-    // startup pass touched, reseed, then apply the incoming MDP's startup events over
-    // the compiled values. Restoring happens even when no policy follows, so clearing
-    // the policy leaves the scene as compiled.
+    // startup pass touched, reseed, then apply the incoming MDP's startup events over the
+    // compiled values. Restoring runs even with no policy following, so clearing the
+    // policy leaves the scene as compiled.
     const restored = this.modelFieldDefaults?.restore() ?? false;
     if (restored && this.mjModel && this.mjData) {
       this.mujoco.mj_setConst(this.mjModel, this.mjData);
@@ -892,9 +892,8 @@ export class mjswanRuntime {
           `[EventManager] ${this.eventManager.size} event term(s) loaded ` +
             `(${this.policyGraphs.size} traced graph(s) in this MDP)`,
         );
-        // `mode="startup"` fires once per MDP, before its first reset, as mjlab fires it
-        // at env construction, and over the compiled model, which `restore()` just made
-        // true again.
+        // `mode="startup"` fires once per MDP before its first reset, as mjlab fires it
+        // at env construction, over the model `restore()` just put back to compiled.
         await this.eventManager.startup(this.eventContext(), this.modelFieldDefaults ?? undefined);
         this.mujoco.mj_forward(this.mjModel, this.mjData);
       }

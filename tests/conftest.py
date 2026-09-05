@@ -16,9 +16,8 @@ from onnx import TensorProto, helper
 def build_manifest(monkeypatch):
     """Run `_save_web` into ``out`` and return the manifest it wrote.
 
-    The Node build and the SPA copy are mocked, so a structural assertion still goes
-    through the real writer: there is one code path producing `manifest.json`, never a
-    test-only one.
+    Only the Node build and the SPA copy are mocked, so assertions still go through the
+    real writer rather than a test-only one.
     """
 
     def build(builder, out: Path) -> dict:

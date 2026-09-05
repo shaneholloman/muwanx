@@ -49,9 +49,9 @@ const GEOM_BOX = 6;
  * The compiled field values, snapshotted on first touch, so a second `add`/`scale` event
  * on one axis offsets the compiled value rather than the first event's output.
  *
- * One per scene, living as long as its model (ADR 0006 §9): an MDP switch re-runs
- * `mode="startup"` randomization, and it must start from the compiled values, not from
- * what the previous MDP left behind. `restore()` puts every touched field back first.
+ * One per model, not per pass (ADR 0006 §9): an MDP switch re-runs `mode="startup"`
+ * randomization, which must start from the compiled values rather than from what the
+ * previous MDP left behind, so `restore()` puts every touched field back first.
  */
 export class ModelFieldDefaults {
   private readonly snapshots = new Map<string, Float64Array>();
@@ -72,9 +72,8 @@ export class ModelFieldDefaults {
   }
 
   /**
-   * Write every snapshotted field back to its compiled value, and report whether there
-   * was anything to write. The caller owes an `mj_setConst` afterwards when it returns
-   * true, for the same reason a write does.
+   * Write every snapshotted field back to its compiled value; false when there was
+   * nothing to write. A true return leaves the caller owing an `mj_setConst`.
    */
   restore(): boolean {
     if (this.snapshots.size === 0) return false;
@@ -226,7 +225,7 @@ function recomputeGeomBounds(
   const size = mjModel.geom_size as ArrayLike<number> | undefined;
   const types = mjModel.geom_type as ArrayLike<number> | undefined;
   // Snapshotted before they are written, so `restore()` covers the bounds as well as the
-  // sizes they follow from; otherwise a switch would restore a size to a stale bound.
+  // sizes they follow from; otherwise a size would be restored against a stale bound.
   defaults.base('geom_rbound');
   defaults.base('geom_aabb');
   const rbound = mjModel.geom_rbound as unknown as { [index: number]: number } | undefined;

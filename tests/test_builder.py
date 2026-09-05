@@ -1230,11 +1230,10 @@ class TestSaveWebPolicyJson:
     ):
         """A graph's path is scoped to its MDP, so a sibling cannot overwrite it.
 
-        Both policies key their one observation group the same way (as every
-        single-input policy does, there being one slot to fill), so an unscoped path
-        gave them one file. The build never noticed, and neither did playback: the
-        loser's config still declared its own `size`, and `conformToSize` pads or
-        truncates the winner's vector to it without an error.
+        Both policies key their one observation group the same way, as every single-input
+        policy does, so unscoped they would share one file. Nothing would raise: the
+        loser's config still declares its own `size`, and `conformToSize` pads or
+        truncates the winner's vector to it silently.
         """
         pytest.importorskip("torch")
         builder = Builder()
@@ -1697,8 +1696,8 @@ class TestSaveWebPolicyJson:
     def test_a_multi_output_policy_without_out_keys_is_warned_about(
         self, minimal_model
     ):
-        # Which output is the action is unknowable from the network, and the runtime
-        # falls back to the first; silence there put the gentle_humanoid demo on the floor.
+        # Which output is the action is unknowable from the network, so the runtime falls
+        # back to the first: a wrong guess drives the actuators from the wrong tensor.
         scene = (
             Builder()
             .add_project(name="P")
@@ -1913,8 +1912,8 @@ class TestFullBuild:
         assert not (tmp_path / "out" / "main").exists()
 
     def test_build_writes_no_per_project_index_or_logo(self, tmp_path, minimal_model):
-        # Sub-directory routing is gone: the SPA selects a project from `?project=`
-        # against the build-time base URL, so `<project-id>/index.html` had no reader.
+        # The SPA selects a project from `?project=` against the build-time base URL, so
+        # nothing would ever request `<project-id>/index.html`.
         builder = Builder()
         builder.add_project(name="Test").add_scene(
             control_dt=0.02, name="S", model=minimal_model

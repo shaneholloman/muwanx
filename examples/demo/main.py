@@ -56,7 +56,7 @@ GO2_VELOCITY_IN_KEYS = ["actor", "is_init", "adapt_hx", "command_"]
 
 #: One label per network output, in order. The runtime reads `action` and the
 #: `["next", "adapt_hx"]` carry; the rest are the exporter's tensordict keys, kept as the
-#: record of which output is which.
+#: record of which output is which (ADR 0006 §5).
 GO2_OUT_KEYS = [
     "policy",
     "priv_pred",
@@ -216,8 +216,7 @@ def _add_g1_scene(project) -> None:
         name="Balance",
         config_path="assets/unitree_g1/balance.json",
         terminations=g1_terminations,
-        # One ONNX input, one group: handed over bare, it lands under the default slot
-        # (ADR 0006 §5).
+        # One ONNX input, one group: handed over bare it lands under the default slot.
         observations=ObservationGroupCfg(
             terms={
                 "base_ang_vel": ObservationTermCfg(func=obs_fns.base_ang_vel),
@@ -258,8 +257,7 @@ def _add_go2_scene(project) -> None:
             damping=0.5,
         )
     }
-    # Keyed by slot name (see GO2_VELOCITY_IN_KEYS); the networks' own tensor names
-    # never appear (ADR 0006 §5).
+    # Keyed by slot name (see GO2_VELOCITY_IN_KEYS), never by the networks' tensor names.
     go2_velocity_obs = {
         "actor": ObservationGroupCfg(
             terms={
@@ -434,7 +432,7 @@ def _add_anymal_c_scene(project) -> None:
                 damping=1.257,
             )
         },
-        # mjlab's export names its one input `obs`; irrelevant here, the mapping being
+        # mjlab's export names its one input `obs`, which does not matter: the mapping is
         # positional, so the group goes over bare like any single-input policy's.
         observations=ObservationGroupCfg(
             terms={

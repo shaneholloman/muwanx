@@ -208,8 +208,8 @@ class TestPlanPublish:
         assert manifest.source == tmp_path / "dist" / "manifest.json"
 
     def test_the_spa_bundles_own_json_is_not_document_data(self, tmp_path: Path):
-        # `assets/` at the root is the SPA's directory; a build-cache key there is not
-        # part of the simulation and must not be uploaded as if it were.
+        # `assets/` at the root is the SPA's directory, so a build-cache key there is
+        # engine bookkeeping rather than simulation data.
         plan = plan_publish(_make_dist(tmp_path))
         assert not any(f.upload_path.startswith("assets/") for f in plan.files)
 

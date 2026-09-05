@@ -48,10 +48,9 @@ async function loadCatalog(base: string): Promise<Catalog> {
 }
 
 /**
- * Resolve a `?project=` / `?scene=` / `?policy=` value against the entries' ids, the
- * form `syncUrl` writes and the build names its directories by. The query is sanitized
- * too, so a hand-typed display name still lands; nothing matches on the raw name
- * (ADR 0006 §4).
+ * Resolve a `?project=` / `?scene=` / `?policy=` value against the entries' ids. The
+ * query is sanitized too, so a hand-typed display name still lands, but nothing matches
+ * on the raw name (ADR 0006 §4).
  */
 function pickById<T extends { id: string }>(
   items: T[],
@@ -197,8 +196,7 @@ function AppContent() {
   const syncUrl = useCallback(
     (next: { project?: string | null; scene?: string | null; policy?: string | null; panel?: boolean; ref?: boolean }) => {
       const params = new URLSearchParams(window.location.search);
-      // URL values are ids: what the build names its directories, and what `pickById`
-      // resolves against. The UI state holds display names, so look each id up.
+      // URL values are ids, but the UI state holds display names, so look each id up.
       const idOf = <T extends { id: string; name: string }>(items: T[] | undefined, name: string | null | undefined) =>
         items?.find((i) => i.name === name)?.id ?? null;
       const setOrDelete = (key: string, value: string | null | undefined, keep: boolean) =>

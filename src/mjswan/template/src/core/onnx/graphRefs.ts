@@ -17,8 +17,8 @@ function collectFrom(value: unknown, into: Set<string>): void {
   }
   if (typeof value !== 'object' || value === null) return;
   const record = value as Record<string, unknown>;
-  // `onnx` is a per-term graph, `fused` a group's. Only the term-bearing sections are
-  // scanned, so a policy entry's own `onnx` (the network's path) never lands here.
+  // `onnx` is a per-term graph, `fused` a group's. Only term-bearing sections are
+  // scanned, so a policy entry's own `onnx`, the network's path, never lands here.
   for (const key of ['onnx', 'fused'] as const) {
     const ref = record[key];
     if (typeof ref === 'string') into.add(ref);

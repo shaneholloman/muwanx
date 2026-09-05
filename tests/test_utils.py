@@ -28,9 +28,9 @@ from mjswan.utils import (
     unique_id,
 )
 
-# The frontend's `sanitizeName` reads the same table (src/manifest/index.test.ts): a
-# URL is resolved by that function and a directory named by this one, so any case the
-# two disagree on is a link that opens the wrong scene (ADR 0006 §4).
+# The frontend's `sanitizeName` reads the same table (src/manifest/index.test.ts): a URL
+# is resolved by that function and a directory named by this one, so a case they disagree
+# on is a link that opens the wrong scene (ADR 0006 §4).
 NAME2ID_CASES = json.loads(
     (
         Path(__file__).resolve().parents[1]

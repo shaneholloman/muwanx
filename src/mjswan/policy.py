@@ -96,11 +96,9 @@ class PolicyConfig:
     in_keys: list[str] | None = None
     """The ONNX input slot table: ``in_keys[i]`` names the tensor that fills the
     network's *i*-th input, an observation group or one the runtime synthesizes
-    (:data:`RUNTIME_INPUT_SLOTS`). The network's own input names never matter; the
-    mapping is positional. ``None`` for a single-input policy, whose one input takes its
-    one observation group whatever that is called; required when the network has more
-    than one input (ADR 0006 §5). Written to the manifest unless it is the default
-    ``["actor"]``."""
+    (:data:`RUNTIME_INPUT_SLOTS`). The mapping is positional, so the network's own input
+    names never matter. ``None`` for a single-input policy, whose one input takes its one
+    observation group; required beyond one input (ADR 0006 §5)."""
 
     out_keys: list[str | list[str]] | None = None
     """The ONNX output slot table, positional like ``in_keys``: ``out_keys[i]`` names the
@@ -135,8 +133,7 @@ class PolicyConfig:
     default: bool = False
     """Whether this policy should be the initially selected one in the viewer.
 
-    At most one policy in a scene may set it (two fail the build); when none does,
-    the first added is the default.
+    At most one policy in a scene may set it; when none does, the first added wins.
     """
 
     def __post_init__(self) -> None:

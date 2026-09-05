@@ -226,9 +226,9 @@ describe('sanitizeName', () => {
     expect(sanitizeName('Foo Bar-Baz')).toBe('foo_bar_baz');
   });
 
-  // The same table pins Python's `name2id` (tests/test_utils.py). A URL is resolved
-  // against this form and a directory is named by the Python one, so a case that
-  // passes here and fails there is a link that opens the wrong scene.
+  // The same table pins Python's `name2id` (tests/test_utils.py): a URL is resolved by
+  // this function and a directory named by that one, so a case they disagree on is a
+  // link that opens the wrong scene.
   it.each(NAME2ID_CASES as Array<[string, string]>)('mirrors name2id: %j → %j', (name, id) => {
     expect(sanitizeName(name)).toBe(id);
   });

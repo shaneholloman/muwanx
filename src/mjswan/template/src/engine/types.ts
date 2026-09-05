@@ -32,10 +32,9 @@ export interface PolicyInput {
   onnx: Bytes;
   /**
    * Traced term-body graphs of the whole MDP, events included, keyed by the path the
-   * config refers to them by (`"mdp/locomotion/obs/actor.onnx"`). The engine never fetches,
-   * so the app delivers the bytes: `mjswan/manifest` fills this in,
-   * `policyGraphRefs(config)` enumerates what to load. A missing entry warns and skips
-   * that term.
+   * config refers to them by (`"mdp/locomotion/obs/actor.onnx"`). The engine never
+   * fetches, so the app delivers the bytes; `policyGraphRefs(config)` enumerates what to
+   * load. A missing entry warns and skips that term.
    */
   graphs?: Record<string, Bytes>;
   motions?: MotionInput[];
@@ -49,8 +48,8 @@ export interface SceneInput {
   splat?: SplatInput | null;
   viewer?: ViewerConfig;
   /**
-   * Spawn positions (flat patches) the event terms of any policy on this scene may draw
-   * from. Events themselves travel with the policy (ADR 0006 §3).
+   * Spawn positions (flat patches) any policy's event terms may draw from. The events
+   * themselves travel with the policy (ADR 0006 §3).
    */
   terrainData?: TerrainData;
   /** mjlab's `timestep * decimation`; the model carries only the physics timestep. */

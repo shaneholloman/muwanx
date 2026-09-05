@@ -1,16 +1,13 @@
 """The MDP a policy runs against, as one unit.
 
 mjlab keeps observations, actions, terminations, commands and events side by side on
-``ManagerBasedRlEnvCfg``; a checkpoint is trained against all five at once. mjswan
-had spread them over the policy (four of them) and the scene (events), so a scene
-hosting several checkpoints of one task traced the same MDP once per checkpoint and
-could not switch its events with the policy. :class:`MdpConfig` puts the five back
-together (ADR 0006 §3).
+``ManagerBasedRlEnvCfg`` and trains a checkpoint against all five at once, so
+:class:`MdpConfig` holds them together (ADR 0006 §3).
 
-Identity is by object: two policies handed the *same* ``MdpConfig`` share one MDP
-(one ``mdp/<id>/`` directory in the build, one set of traced graphs), while two equal
-but separate configs are two MDPs. The per-manager keyword arguments on
-:meth:`~mjswan.scene.SceneHandle.add_policy` remain and construct an anonymous one.
+Identity is by object: two policies handed the *same* config share one MDP, meaning one
+``mdp/<id>/`` directory and one set of traced graphs, while two equal but separate
+configs are two MDPs. The per-manager keyword arguments on
+:meth:`~mjswan.scene.SceneHandle.add_policy` construct an anonymous one.
 """
 
 from __future__ import annotations
@@ -32,10 +29,9 @@ class MdpConfig:
     """The five term sets a policy is run against, held as one unit.
 
     Each field means what the matching :meth:`~mjswan.scene.SceneHandle.add_policy`
-    argument means: ``None`` is "take it from the scene's env config" (or from the scene's
-    own events), ``{}`` is "this MDP genuinely has none". The first policy to use a config
-    on a scene fills its ``None`` fields in and adapts mjlab types in place, so what the
-    build writes is what the object then holds.
+    argument means: ``None`` is "take it from the scene's env config" (or from the
+    scene's own events), ``{}`` is "this MDP genuinely has none". Mutated in place by the
+    first policy to use it, which fills the ``None`` fields and adapts mjlab types.
 
     Example:
         mdp = mjswan.MdpConfig(observations=..., actions=..., terminations=...)
@@ -58,8 +54,7 @@ class MdpConfig:
 
     events: dict[str, EventTermCfg] | Mapping[str, Any] | None = None
     """Event terms, keyed by name, in any of the four modes. ``None`` takes the scene's
-    events (a task's own, for an :meth:`~mjswan.project.ProjectHandle.add_scene_mjlab`
-    scene), so a policy that says nothing about events gets the ones it was trained with."""
+    events, so a policy that says nothing gets the ones it was trained with."""
 
     name: str | None = None
     """Optional name; its ``name2id`` is the MDP's id, its ``mdp/<id>/`` directory in the
