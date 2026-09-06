@@ -3,8 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { yieldToBrowser } from '../yieldToBrowser';
 
 describe('yieldToBrowser', () => {
-  // The bug it guards (issue #103): a microtask-only "yield" — `await Promise.resolve()`,
-  // `queueMicrotask` — never returns to the event loop, so rendering never runs.
+  // Guards issue #103: `await Promise.resolve()` looks like a yield but never reaches the event loop.
   it('resolves on a later task, after the microtask queue drains', async () => {
     const order: string[] = [];
     const yielded = yieldToBrowser().then(() => order.push('task'));

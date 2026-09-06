@@ -872,9 +872,8 @@ export class mjswanRuntime {
       if (sleepTime > 0) {
         await new Promise((resolve) => setTimeout(resolve, sleepTime * 1000));
       } else {
-        // Behind schedule. Yield anyway, or the loop never returns to the event loop: rAF
-        // stops firing and the tab is unresponsive at 100% CPU (issue #103). Yielding costs
-        // real-time factor, not responsiveness — the scene degrades to slow motion instead.
+        // Behind schedule: yield anyway, or rAF stops firing and the tab hangs at 100% CPU
+        // (issue #103).
         await yieldToBrowser();
       }
     }
