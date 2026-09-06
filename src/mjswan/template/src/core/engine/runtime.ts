@@ -38,6 +38,7 @@ import {
   type ResolvedActionTerm,
 } from '../action/applyAction';
 import { applyResetTerms } from './resetChain';
+import { yieldToBrowser } from './yieldToBrowser';
 import { TerminationManager } from '../termination/TerminationManager';
 import * as ort from 'onnxruntime-web';
 import { PolicyRunner } from '../policy/PolicyRunner';
@@ -870,6 +871,10 @@ export class mjswanRuntime {
       const sleepTime = Math.max(0, target - elapsed);
       if (sleepTime > 0) {
         await new Promise((resolve) => setTimeout(resolve, sleepTime * 1000));
+      } else {
+        // Behind schedule: yield anyway, or rAF stops firing and the tab hangs at 100% CPU
+        // (issue #103).
+        await yieldToBrowser();
       }
     }
   }
