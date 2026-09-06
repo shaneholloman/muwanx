@@ -177,7 +177,7 @@ Deprecated pre-0.8 aliases, imported for its side effects by `__init__.py`. Meth
 ## Frontend (`src/mjswan/template/`)
 
 TypeScript + React + Vite + three.js. Built by `Builder.build()` via `_build_client.py`. The browser client:
-- Loads the MuJoCo WASM module and runs physics in a Web Worker.
+- Loads the MuJoCo WASM module and steps physics on the main thread, yielding to the browser every control step (`engine/yieldToBrowser.ts`) so rendering and input keep their turn.
 - Runs the policy **and every traced MDP term body** via onnxruntime-web.
 - Renders via three.js (reflections, shadows, Gaussian Splat background).
 - Supports WebXR (VR), including tracked hands as bodies inside the sim (opt-in).
